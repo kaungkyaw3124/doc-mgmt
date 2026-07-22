@@ -1,0 +1,32 @@
+import httpx
+
+from app.core.config import settings
+
+
+def get_visible_product_ids(x_allowed_projects: str | None):
+    """
+    Asks document-service which products are visible to the current caller
+    (based on their project access), forwarding the same X-Allowed-Projects
+    header value Nginx already resolved for us. Returns None if unrestricted
+    (see everything), or a set of allowed product_id strings.
+
+    If document-service can't be reached, fails open (returns None /
+    unrestricted) rather than blocking the whole product list — a
+    dependency hiccup here shouldn't take down browsing the catalogue.
+    """
+    if not x_allowed_projects or x_allowed_projects == "ALL":
+        return None
+
+    url = f"{settings.document_service_url}/documents/visible-product-ids"
+    try:
+        response = httpx.get(url, headers={"X-Allowed-Projects": x_allowed_projects}, timeout=5.0)
+        response.raise_for_status()
+        data = response.json()
+    except httpx.RequestError:
+        return None
+    except httpx.HTTPStatusError:
+        return None
+
+    if data.get("all"):
+        return None
+    return set(data.get("product_ids", []))

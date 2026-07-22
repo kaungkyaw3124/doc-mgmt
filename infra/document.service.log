@@ -1,0 +1,864 @@
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)
+document-service-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+document-service-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+document-service-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial schema: customers, documents, document_items
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | psycopg2.errors.DuplicateTable: relation "customers" already exists
+document-service-1  | 
+document-service-1  | 
+document-service-1  | The above exception was the direct cause of the following exception:
+document-service-1  | 
+document-service-1  | Traceback (most recent call last):
+document-service-1  |   File "/usr/local/bin/alembic", line 8, in <module>
+document-service-1  |     sys.exit(main())
+document-service-1  |              ^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+document-service-1  |     CommandLine(prog=prog).main(argv=argv)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+document-service-1  |     self.run_cmd(cfg, options)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+document-service-1  |     fn(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+document-service-1  |     script.run_env()
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+document-service-1  |     util.load_python_file(self.dir, "env.py")
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+document-service-1  |     module = load_module_py(module_id, path)
+document-service-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+document-service-1  |     spec.loader.exec_module(module)  # type: ignore
+document-service-1  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+document-service-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+document-service-1  |   File "/app/alembic/env.py", line 54, in <module>
+document-service-1  |     run_migrations_online()
+document-service-1  |   File "/app/alembic/env.py", line 48, in run_migrations_online
+document-service-1  |     context.run_migrations()
+document-service-1  |   File "<string>", line 8, in run_migrations
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py", line 946, in run_migrations
+document-service-1  |     self.get_context().run_migrations(**kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py", line 628, in run_migrations
+document-service-1  |     step.migration_fn(**kw)
+document-service-1  |   File "/app/alembic/versions/0001_initial.py", line 21, in upgrade
+document-service-1  |     op.create_table(
+document-service-1  |   File "<string>", line 8, in create_table
+document-service-1  |   File "<string>", line 3, in create_table
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/ops.py", line 1318, in create_table
+document-service-1  |     return operations.invoke(op)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/base.py", line 442, in invoke
+document-service-1  |     return fn(self, operation)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/operations/toimpl.py", line 143, in create_table
+document-service-1  |     operations.impl.create_table(table, **kw)
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 369, in create_table
+document-service-1  |     self._exec(schema.CreateTable(table, **kw))
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/alembic/ddl/impl.py", line 210, in _exec
+document-service-1  |     return conn.execute(construct, params)
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+document-service-1  |     return meth(
+document-service-1  |            ^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/ddl.py", line 180, in _execute_on_connection
+document-service-1  |     return connection._execute_ddl(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1529, in _execute_ddl
+document-service-1  |     ret = self._execute_context(
+document-service-1  |           ^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+document-service-1  |     return self._exec_single_context(
+document-service-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+document-service-1  |     self._handle_dbapi_exception(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+document-service-1  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+document-service-1  |     self.dialect.do_execute(
+document-service-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+document-service-1  |     cursor.execute(statement, parameters)
+document-service-1  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.DuplicateTable) relation "customers" already exists
+document-service-1  | 
+document-service-1  | [SQL: 
+document-service-1  | CREATE TABLE customers (
+document-service-1  | 	id UUID NOT NULL, 
+document-service-1  | 	name VARCHAR(255) NOT NULL, 
+document-service-1  | 	email VARCHAR(255), 
+document-service-1  | 	phone VARCHAR(50), 
+document-service-1  | 	billing_address JSONB, 
+document-service-1  | 	created_at TIMESTAMP WITH TIME ZONE, 
+document-service-1  | 	PRIMARY KEY (id)
+document-service-1  | )
+document-service-1  | 
+document-service-1  | ]
+document-service-1  | (Background on this error at: https://sqlalche.me/e/20/f405)

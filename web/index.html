@@ -1,0 +1,2971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger — Document Management</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1B2A4A;
+    --ink-soft: #2E4066;
+    --paper: #FAF7F0;
+    --paper-dim: #F0EBDD;
+    --rust: #C1682F;
+    --rust-dark: #A5541F;
+    --hairline: #D8D2C4;
+    --success: #3F7857;
+    --warn: #B8862E;
+    --danger: #A13D3D;
+    --text-dim: #6B6455;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: 'Inter', sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3 { font-family: 'Zilla Slab', serif; font-weight: 600; margin: 0; }
+
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+
+  /* ---------- Login screen ---------- */
+  #login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(193,104,47,0.06), transparent 40%),
+      var(--paper);
+  }
+
+  .login-card {
+    background: #fff;
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 48px 44px;
+    width: 380px;
+    box-shadow: 0 1px 3px rgba(27,42,74,0.06);
+  }
+
+  .login-mark {
+    width: 52px; height: 52px;
+    border: 2px dashed var(--rust);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    transform: rotate(-8deg);
+    margin-bottom: 20px;
+  }
+  .login-mark span {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px; font-weight: 500;
+    letter-spacing: 0.05em;
+    color: var(--rust);
+  }
+
+  .login-card h1 { font-size: 26px; margin-bottom: 6px; }
+  .login-card p.sub { color: var(--text-dim); font-size: 14px; margin: 0 0 28px; }
+
+  label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: var(--ink-soft); }
+  input[type=text], input[type=password], select, textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    background: #fff;
+    color: var(--ink);
+    margin-bottom: 16px;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--rust);
+    box-shadow: 0 0 0 3px rgba(193,104,47,0.12);
+  }
+
+  input[type=file] {
+    width: 100%;
+    padding: 8px 0;
+    font-size: 13px;
+    margin-bottom: 16px;
+    color: var(--text-dim);
+  }
+
+  button {
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    border: none;
+    border-radius: 3px;
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  .btn-primary { background: var(--rust); color: #fff; }
+  .btn-primary:hover { background: var(--rust-dark); }
+  .login-card .btn-primary { width: 100%; }
+  .btn-secondary { background: var(--paper-dim); color: var(--ink); border: 1px solid var(--hairline); }
+  .btn-secondary:hover { background: var(--hairline); }
+
+  .error-msg {
+    background: #FBEAE7;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    font-size: 13px;
+    padding: 10px 12px;
+    border-radius: 3px;
+    margin-bottom: 16px;
+  }
+
+  .hint { font-size: 12px; color: var(--text-dim); margin-top: -10px; margin-bottom: 20px; }
+
+  /* ---------- App shell ---------- */
+  #app { display: none; height: 100vh; }
+  #app.active { display: flex; }
+
+  .sidebar {
+    width: 220px;
+    background: var(--ink);
+    color: #fff;
+    padding: 28px 0;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+  .sidebar .brand {
+    padding: 0 24px 28px;
+    border-bottom: 1px solid rgba(255,255,255,0.12);
+    margin-bottom: 20px;
+  }
+  .sidebar .brand h1 { font-size: 20px; color: #fff; }
+  .sidebar .brand .stamp-mini {
+    display: inline-block;
+    width: 26px; height: 26px;
+    border: 1.5px dashed var(--rust);
+    border-radius: 50%;
+    transform: rotate(-8deg);
+    margin-bottom: 10px;
+  }
+
+  .nav-item {
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.65);
+    cursor: pointer;
+    border-left: 3px solid transparent;
+  }
+  .nav-item:hover { color: #fff; background: rgba(255,255,255,0.04); }
+  .nav-item.active {
+    color: #fff;
+    border-left-color: var(--rust);
+    background: rgba(255,255,255,0.06);
+  }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 16px 24px 0;
+    border-top: 1px solid rgba(255,255,255,0.12);
+  }
+  .sidebar-footer .who { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
+  .sidebar-footer .who strong { color: #fff; }
+
+  .link-btn {
+    background: none; border: none; color: rgba(255,255,255,0.6);
+    font-size: 13px; padding: 0; cursor: pointer; text-decoration: underline;
+  }
+  .link-btn:hover { color: #fff; }
+
+  .link-btn-inline {
+    background: none; border: none; color: var(--rust);
+    font-size: 13px; padding: 0; cursor: pointer; text-decoration: underline;
+    font-weight: 500;
+  }
+  .link-btn-inline:hover { color: var(--rust-dark); }
+
+  .main {
+    flex: 1;
+    padding: 40px 48px;
+    overflow-y: auto;
+  }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .view-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 28px;
+  }
+  .view-header h2 { font-size: 26px; }
+  .view-header p { color: var(--text-dim); font-size: 14px; margin: 4px 0 0; }
+
+  /* ---------- Table ---------- */
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--hairline); border-radius: 4px; overflow: hidden; }
+  th {
+    text-align: left;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    font-weight: 600;
+    padding: 12px 16px;
+    background: var(--paper-dim);
+    border-bottom: 1px solid var(--hairline);
+  }
+  td {
+    padding: 13px 16px;
+    font-size: 14px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #FFFDF9; }
+
+  .empty-row td { text-align: center; color: var(--text-dim); padding: 36px; font-size: 14px; }
+
+  /* ---------- Stamp badge (signature element) ---------- */
+  .stamp {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 10px;
+    border: 1.5px dashed currentColor;
+    border-radius: 3px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    transform: rotate(-2deg);
+  }
+  .stamp-draft { color: var(--text-dim); }
+  .stamp-sent, .stamp-paid { color: var(--success); }
+  .stamp-void, .stamp-expired { color: var(--danger); }
+  .stamp-invoice, .stamp-quotation, .stamp-proposal, .stamp-catalogue { color: var(--rust); }
+
+  /* ---------- Forms / cards ---------- */
+  .card {
+    background: #fff;
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 28px;
+    margin-bottom: 28px;
+  }
+  .card h3 { font-size: 17px; margin-bottom: 18px; }
+
+  .form-row { display: flex; gap: 14px; }
+  .form-row > div { flex: 1; }
+
+  .line-item-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px dashed var(--hairline);
+  }
+  .line-item-row > div { flex: 1; }
+  .line-item-row label { font-size: 11px; }
+  .line-item-row input { margin-bottom: 0; }
+  .remove-line { background: none; border: none; color: var(--danger); font-size: 12px; cursor: pointer; padding: 8px 4px; }
+
+  .add-line-btn {
+    background: none;
+    border: 1px dashed var(--hairline);
+    color: var(--ink-soft);
+    font-size: 13px;
+    font-weight: 500;
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 20px;
+  }
+  .add-line-btn:hover { border-color: var(--rust); color: var(--rust); }
+
+  .toggle-form-btn { margin-bottom: 20px; }
+
+  /* ---------- Search ---------- */
+  .status-toggle-btn {
+    border: none;
+    border-radius: 3px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+  .status-toggle-btn.is-active { background: var(--success); color: #fff; }
+  .status-toggle-btn.is-disabled { background: var(--danger); color: #fff; }
+
+  .sort-btn {
+    background: none; border: none; cursor: pointer; padding: 0 0 0 4px;
+    font-size: 11px; color: var(--text-dim); vertical-align: middle;
+  }
+  .sort-btn:hover { color: var(--ink); }
+  .sort-btn.active { color: var(--rust); }
+
+  .checkbox-list { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; }
+  .checkbox-list label {
+    display: flex; align-items: center; gap: 6px; font-weight: normal; font-size: 13px; margin: 0;
+  }
+  .checkbox-list input[type=checkbox] { width: auto; margin: 0; }
+
+  @keyframes save-flash {
+    0% { background: var(--success); color: #fff; }
+    100% { background: transparent; color: inherit; }
+  }
+  .save-flash { animation: save-flash 0.8s ease-out; border-radius: 3px; padding: 1px 4px; margin: -1px -4px; }
+
+  .user-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #fff; border: 1px solid var(--hairline); border-radius: 3px;
+    padding: 3px 8px; font-size: 12px; margin: 0 6px 6px 0;
+  }
+  .user-chip button {
+    background: none; border: none; color: var(--danger); cursor: pointer; padding: 0; font-size: 13px;
+  }
+
+  .modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(27,42,74,0.4);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal-box {
+    background: #fff; border-radius: 4px; padding: 28px;
+    width: 480px; max-height: 70vh; overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(27,42,74,0.2);
+  }
+  .modal-box h3 { margin-bottom: 16px; }
+  .modal-close { float: right; }
+
+  .filter-bar { margin-bottom: 14px; }
+  .filter-bar input { max-width: 320px; margin-bottom: 0; }
+
+  .search-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+  .search-bar input { margin-bottom: 0; flex: 1; }
+  .search-bar button { flex-shrink: 0; }
+
+  .search-section-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    font-weight: 600;
+    margin: 24px 0 10px;
+  }
+
+  /* ---------- Toast / banner messages ---------- */
+  .banner {
+    padding: 12px 16px;
+    border-radius: 3px;
+    font-size: 13px;
+    margin-bottom: 20px;
+  }
+  .banner-error { background: #FBEAE7; border: 1px solid var(--danger); color: var(--danger); }
+  .banner-info { background: #EEF1F6; border: 1px solid var(--ink-soft); color: var(--ink-soft); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+
+  @media (max-width: 720px) {
+    #app.active { flex-direction: column; }
+    .sidebar { width: 100%; flex-direction: row; overflow-x: auto; padding: 12px 0; }
+    .sidebar .brand, .sidebar-footer { display: none; }
+    .nav-item { border-left: none; border-bottom: 3px solid transparent; white-space: nowrap; }
+    .nav-item.active { border-left: none; border-bottom-color: var(--rust); }
+    .main { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN SCREEN ============ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-mark"><span>DM</span></div>
+    <h1 id="auth-card-title">Ledger</h1>
+    <p class="sub" id="auth-card-sub">Sign in to manage documents, products, and search.</p>
+
+    <div id="login-error"></div>
+    <form id="login-form">
+      <label for="login-username">Username</label>
+      <input type="text" id="login-username" autocomplete="username" required>
+      <label for="login-password">Password</label>
+      <input type="password" id="login-password" autocomplete="current-password" required>
+      <button type="submit" class="btn-primary">Sign in</button>
+    </form>
+    <p style="text-align:center; margin-top:16px; font-size:13px;">
+      <button type="button" class="link-btn-inline" id="show-register-btn">Don't have an account? Register</button>
+    </p>
+
+    <form id="register-form" style="display:none;">
+      <label for="register-username">Choose a username</label>
+      <input type="text" id="register-username" autocomplete="username" required>
+      <label for="register-password">Choose a password</label>
+      <input type="password" id="register-password" autocomplete="new-password" required>
+      <label for="register-group">Which group are you requesting to join? (optional)</label>
+      <select id="register-group">
+        <option value="">— not sure / none —</option>
+      </select>
+      <div class="hint">Picking a group lets that group's own admin approve you — otherwise only a superuser can.</div>
+      <button type="submit" class="btn-primary">Register</button>
+    </form>
+    <p style="text-align:center; margin-top:16px; font-size:13px; display:none;" id="show-login-wrap">
+      <button type="button" class="link-btn-inline" id="show-login-btn">Already have an account? Sign in</button>
+    </p>
+  </div>
+</div>
+
+<!-- ============ MAIN APP ============ -->
+<div id="app">
+  <div class="sidebar">
+    <div class="brand">
+      <div class="stamp-mini"></div>
+      <h1>Ledger</h1>
+    </div>
+    <div class="nav-item active" data-view="documents">Documents</div>
+    <div class="nav-item" data-view="products">Products</div>
+    <div class="nav-item" data-view="customers">Customers</div>
+    <div class="nav-item" data-view="projects">Projects</div>
+    <div class="nav-item" data-view="company">Company</div>
+    <div class="nav-item" data-view="search">Search</div>
+    <div class="nav-item" data-view="adminpanel" id="admin-nav-item" style="display:none;">Admin</div>
+    <div class="sidebar-footer">
+      <div class="who">Signed in as<br><strong id="whoami-username">—</strong></div>
+      <button class="link-btn" id="logout-btn">Sign out</button>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- ---------- DOCUMENTS VIEW ---------- -->
+    <div class="view active" id="view-documents">
+      <div class="view-header">
+        <div>
+          <h2>Documents</h2>
+          <p>Invoices, quotations, and catalogue entries.</p>
+        </div>
+        <button class="btn-secondary" id="toggle-doc-form">+ New document</button>
+      </div>
+
+      <div id="documents-banner"></div>
+
+      <div class="card" id="doc-form-card" style="display:none;">
+        <h3 id="doc-form-title">New document</h3>
+        <form id="doc-form">
+          <div class="form-row">
+            <div>
+              <label for="doc-type">Type</label>
+              <select id="doc-type">
+                <option value="invoice">Invoice</option>
+                <option value="quotation">Quotation</option>
+                <option value="proposal">Proposal</option>
+                <option value="catalogue">Catalogue</option>
+              </select>
+            </div>
+            <div>
+              <label for="doc-number">Document number</label>
+              <input type="text" id="doc-number" placeholder="Leave blank to auto-generate (e.g. INV-2026-07-17)">
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <label for="doc-customer">Customer</label>
+              <input type="text" id="doc-customer" list="customer-datalist" placeholder="Type a customer name…" autocomplete="off">
+              <datalist id="customer-datalist"></datalist>
+              <div class="hint" id="doc-customer-hint" style="display:none;">No matching customer — this document will be created without one.</div>
+            </div>
+            <div>
+              <label for="doc-currency">Currency</label>
+              <select id="doc-currency">
+                <option value="USD">USD</option>
+                <option value="MMK">MMK</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <label for="doc-project">Project</label>
+              <select id="doc-project">
+                <option value="">— no project —</option>
+              </select>
+            </div>
+            <div></div>
+          </div>
+
+          <label>Line items</label>
+          <div id="line-items"></div>
+          <button type="button" class="add-line-btn" id="add-line-btn">+ Add line item</button>
+
+          <label for="doc-terms">Terms &amp; Conditions</label>
+          <textarea id="doc-terms" rows="6" placeholder="Price Validity, Payment Lead Time, Delivery, Warranty, etc.">Price Validity: 30 Days
+Payment Lead Time: 35% on Agreement, 65% on delivery
+Lead Time: 30 to 45 days after payment confirmation
+Delivery: DDP
+Warranty: 2 years from the date of delivery</textarea>
+
+          <button type="submit" class="btn-primary" id="doc-form-submit-btn">Create document</button>
+        </form>
+      </div>
+
+      <div class="filter-bar">
+        <input type="text" id="documents-filter" placeholder="Filter by document number…">
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>Number</th><th>Type</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th></tr>
+        </thead>
+        <tbody id="documents-tbody">
+          <tr class="empty-row"><td colspan="9">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ---------- PRODUCTS VIEW ---------- -->
+    <div class="view" id="view-products">
+      <div class="view-header">
+        <div>
+          <h2>Products</h2>
+          <p>Your catalogue.</p>
+        </div>
+        <div>
+          <button class="btn-secondary" id="open-category-modal-btn" style="display:none; margin-right:8px;">+ Add category</button>
+          <button class="btn-secondary" id="toggle-product-form">+ New product</button>
+        </div>
+      </div>
+
+      <div id="products-banner"></div>
+
+      <div class="filter-bar">
+        <input type="text" id="products-filter" placeholder="Filter by name or SKU…">
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Name <button class="sort-btn" data-sort-table="products" data-sort-col="name">⇅</button></th>
+            <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
+            <th>Price <button class="sort-btn" data-sort-table="products" data-sort-col="price">⇅</button></th>
+            <th>Catalog</th><th>Edit</th>
+          </tr>
+        </thead>
+        <tbody id="products-tbody">
+          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ---------- CUSTOMERS VIEW ---------- -->
+    <div class="view" id="view-customers">
+      <div class="view-header">
+        <div>
+          <h2>Customers</h2>
+          <p>Who your documents are for.</p>
+        </div>
+        <button class="btn-secondary" id="toggle-customer-form">+ New customer</button>
+      </div>
+
+      <div id="customers-banner"></div>
+
+      <div class="card" id="customer-form-card" style="display:none;">
+        <h3 id="customer-form-title">New customer</h3>
+        <form id="customer-form">
+          <div class="form-row">
+            <div>
+              <label for="customer-name">Name / organization</label>
+              <input type="text" id="customer-name" placeholder="Acme Corp" required>
+            </div>
+            <div>
+              <label for="customer-email">Email</label>
+              <input type="text" id="customer-email" placeholder="billing@acme.com">
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <label for="customer-phone">Phone</label>
+              <input type="text" id="customer-phone" placeholder="+95 9 xxx xxx xxx">
+            </div>
+            <div>
+              <label for="customer-address">Address</label>
+              <input type="text" id="customer-address" placeholder="Yangon, Myanmar">
+            </div>
+          </div>
+          <button type="submit" class="btn-primary" id="customer-form-submit-btn">Create customer</button>
+        </form>
+      </div>
+
+      <div class="filter-bar">
+        <input type="text" id="customers-filter" placeholder="Filter by name…">
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Name <button class="sort-btn" data-sort-table="customers" data-sort-col="name">⇅</button></th>
+            <th>Email</th><th>Phone</th>
+            <th>Created <button class="sort-btn" data-sort-table="customers" data-sort-col="created_at">⇅</button></th>
+            <th>Edit</th>
+          </tr>
+        </thead>
+        <tbody id="customers-tbody">
+          <tr class="empty-row"><td colspan="5">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ---------- PROJECTS VIEW ---------- -->
+    <div class="view" id="view-projects">
+      <div class="view-header">
+        <div>
+          <h2>Projects</h2>
+          <p>Group documents by project and budget year.</p>
+        </div>
+        <button class="btn-secondary" id="toggle-project-form">+ New project</button>
+      </div>
+
+      <div id="projects-banner"></div>
+
+      <div id="project-documents-panel" style="display:none;" class="card">
+        <h3 id="project-documents-title">Documents</h3>
+        <table>
+          <thead><tr><th>Number</th><th>Type</th><th>Status</th><th>Total</th><th>Created</th></tr></thead>
+          <tbody id="project-documents-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="card" id="project-form-card" style="display:none;">
+        <h3 id="project-form-title">New project</h3>
+        <form id="project-form">
+          <div class="form-row">
+            <div>
+              <label for="project-name">Project name</label>
+              <input type="text" id="project-name" placeholder="Network Upgrade Phase 2" required>
+            </div>
+            <div>
+              <label for="project-year">Budget year</label>
+              <input type="text" id="project-year" placeholder="2025-2026">
+            </div>
+          </div>
+          <label for="project-description">Description</label>
+          <textarea id="project-description" rows="2" placeholder="Optional notes about this project"></textarea>
+          <button type="submit" class="btn-primary" id="project-form-submit-btn">Create project</button>
+        </form>
+      </div>
+
+      <div class="filter-bar">
+        <input type="text" id="projects-filter" placeholder="Filter by name…">
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Name <button class="sort-btn" data-sort-table="projects" data-sort-col="name">⇅</button></th>
+            <th>Budget year <button class="sort-btn" data-sort-table="projects" data-sort-col="budget_year">⇅</button></th>
+            <th>Created</th><th>Documents</th><th>Edit</th>
+          </tr>
+        </thead>
+        <tbody id="projects-tbody">
+          <tr class="empty-row"><td colspan="5">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ---------- COMPANY VIEW ---------- -->
+    <div class="view" id="view-company">
+      <div class="view-header">
+        <div>
+          <h2>Company</h2>
+          <p>Your business profile — used as the supplier on generated quotations.</p>
+        </div>
+        <button class="btn-secondary" id="toggle-company-form">+ New company</button>
+      </div>
+
+      <div id="company-banner"></div>
+
+      <div class="card" id="company-form-card" style="display:none;">
+        <h3 id="company-form-title">New company</h3>
+        <form id="company-form">
+          <div class="form-row">
+            <div>
+              <label for="company-name">Company name</label>
+              <input type="text" id="company-name" placeholder="Trustwell International Co., Ltd." required>
+            </div>
+            <div>
+              <label for="company-position">Signer position</label>
+              <input type="text" id="company-position" placeholder="Director">
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <label for="company-address">Address</label>
+              <input type="text" id="company-address" placeholder="Yangon, Myanmar">
+            </div>
+            <div>
+              <label for="company-contact">Contact No</label>
+              <input type="text" id="company-contact" placeholder="+95 9 xxx xxx xxx">
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <label for="company-email">Support email</label>
+              <input type="text" id="company-email" placeholder="support@trustwell.com">
+            </div>
+            <div>
+              <label for="company-phone">Support phone</label>
+              <input type="text" id="company-phone" placeholder="+95 9 xxx xxx xxx">
+            </div>
+          </div>
+          <label for="company-logo">Logo (optional)</label>
+          <input type="file" id="company-logo" accept="image/*">
+          <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-top:4px;">
+            <input type="checkbox" id="company-is-primary" style="width:auto; margin:0;"> Use as primary company on quotations
+          </label>
+          <button type="submit" class="btn-primary" id="company-form-submit-btn" style="margin-top:14px;">Create company</button>
+        </form>
+      </div>
+
+      <div class="filter-bar">
+        <input type="text" id="company-filter" placeholder="Filter by name…">
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Name <button class="sort-btn" data-sort-table="company" data-sort-col="name">⇅</button></th>
+            <th>Position</th><th>Contact No</th><th>Primary</th><th>Logo</th><th>Edit</th>
+          </tr>
+        </thead>
+        <tbody id="companies-tbody">
+          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ---------- ADMIN VIEW ---------- -->
+    <div class="view" id="view-adminpanel">
+      <div class="view-header">
+        <div>
+          <h2>Admin</h2>
+          <p>Approve new users, and manage groups, roles, and access.</p>
+        </div>
+      </div>
+
+      <div id="admin-banner"></div>
+
+      <div class="card">
+        <h3>Pending approvals</h3>
+        <p style="font-size:13px; color:var(--text-dim); margin-bottom:14px;">
+          As a group admin, you only see requests for groups you administer. Superusers see everyone.
+        </p>
+        <table>
+          <thead><tr><th>Username</th><th>Requested group</th><th>Requested</th><th>Action</th></tr></thead>
+          <tbody id="pending-users-tbody">
+            <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" id="all-users-card" style="display:none;">
+        <h3>All users</h3>
+        <div class="filter-bar">
+          <input type="text" id="all-users-filter" placeholder="Filter by username…">
+        </div>
+        <table>
+          <thead><tr><th>Username</th><th>Superuser?</th><th>Approved?</th><th>Status</th><th>Edit</th><th>Remove</th></tr></thead>
+          <tbody id="all-users-tbody">
+            <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" id="groups-card">
+        <h3>Groups</h3>
+        <div id="new-group-form-wrap" style="display:none;">
+          <div class="form-row">
+            <div>
+              <label for="new-group-name">New group name</label>
+              <input type="text" id="new-group-name" placeholder="Sales">
+            </div>
+            <div style="display:flex; align-items:flex-end;">
+              <button class="btn-primary" id="create-group-btn" style="margin-bottom:16px;">Create group</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="group-select-wrap">
+          <label for="group-select">Select a group to manage</label>
+          <select id="group-select">
+            <option value="">— choose a group —</option>
+          </select>
+          <div id="group-manage-controls" style="display:none; margin-top:10px;">
+            <span id="group-status-stamp"></span>
+            <button type="button" class="btn-secondary" id="group-toggle-btn" style="padding:6px 12px; font-size:13px; margin-left:8px;">Disable group</button>
+            <button type="button" class="btn-secondary" id="group-delete-btn" style="padding:6px 12px; font-size:13px; color:var(--danger); border-color:var(--danger);">Delete group</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="group-detail-panel" style="display:none;">
+
+        <div class="card" id="group-project-pool-card" style="display:none;">
+          <h3>Project access — <span id="group-detail-name-pool"></span></h3>
+          <p style="font-size:13px; color:var(--text-dim); margin-bottom:12px;">
+            Which projects this group's roles are allowed to be granted access to. A group admin can only hand out projects checked here — nothing else.
+          </p>
+          <div class="checkbox-list" id="group-project-pool-checkboxes"></div>
+        </div>
+
+        <div class="card">
+          <h3>Members — <span id="group-detail-name"></span></h3>
+          <table>
+            <thead><tr><th>Username</th><th>Group admin?</th></tr></thead>
+            <tbody id="group-members-tbody"></tbody>
+          </table>
+          <div class="form-row" style="margin-top:14px;">
+            <div>
+              <label for="add-member-username">Add existing user (username)</label>
+              <input type="text" id="add-member-username" placeholder="username">
+            </div>
+            <div>
+              <label for="add-member-role">Role</label>
+              <select id="add-member-role">
+                <option value="">— no role yet —</option>
+              </select>
+            </div>
+          </div>
+          <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-bottom:14px;">
+            <input type="checkbox" id="add-member-is-admin" style="width:auto; margin:0;"> Make group admin
+          </label>
+          <button class="btn-secondary" id="add-member-btn">Add to group</button>
+
+          <p style="margin: 18px 0 10px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">— or —</p>
+          <p style="margin: 0 0 12px; font-size:13px; color:var(--text-dim);">Create a brand-new account and add them to this group in one step (skips the registration/approval wait):</p>
+          <div class="form-row">
+            <div>
+              <label for="new-member-username">New username</label>
+              <input type="text" id="new-member-username" placeholder="username">
+            </div>
+            <div>
+              <label for="new-member-password">Password</label>
+              <input type="text" id="new-member-password" placeholder="temporary password">
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <label for="new-member-role">Role — decides what they can do (e.g. Viewer = view/download only, Member = can edit/upload)</label>
+              <select id="new-member-role">
+                <option value="">— no role yet —</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-top:28px;">
+                <input type="checkbox" id="new-member-is-admin" style="width:auto; margin:0;"> Make group admin
+              </label>
+            </div>
+          </div>
+          <button class="btn-secondary" id="create-member-btn">Create user &amp; add to group</button>
+        </div>
+
+        <div class="card">
+          <h3>Roles — <span id="group-detail-name-2"></span></h3>
+          <div class="form-row">
+            <div>
+              <label for="new-role-name">New role name</label>
+              <input type="text" id="new-role-name" placeholder="Sales Rep">
+            </div>
+            <div style="display:flex; align-items:flex-end;">
+              <button class="btn-primary" id="create-role-btn" style="margin-bottom:16px;">Create role</button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input type="text" id="roles-filter" placeholder="Filter by role name…">
+          </div>
+          <table>
+            <thead><tr><th>Name</th><th>Status</th><th>Services</th><th>Edit</th></tr></thead>
+            <tbody id="roles-tbody">
+              <tr class="empty-row"><td colspan="4">Select a group above.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ---------- SEARCH VIEW ---------- -->
+    <div class="view" id="view-search">
+      <div class="view-header">
+        <div>
+          <h2>Search</h2>
+          <p>Find anything across documents and products.</p>
+        </div>
+      </div>
+
+      <div class="search-bar">
+        <input type="text" id="search-input" placeholder="Search by document number, customer, product name…">
+        <select id="search-project-filter" style="max-width:220px; margin-bottom:0;">
+          <option value="">All projects</option>
+        </select>
+        <button class="btn-primary" id="search-btn">Search</button>
+      </div>
+
+      <div id="search-banner"></div>
+      <div id="search-results"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ============ AUDIT LOG MODAL ============ -->
+<div class="modal-overlay" id="audit-log-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="audit-log-close">Close ✕</button>
+    <h3 id="audit-log-title">Audit log</h3>
+    <div id="audit-log-content"></div>
+  </div>
+</div>
+
+<!-- ============ EDIT USER MODAL ============ -->
+<div class="modal-overlay" id="edit-user-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="edit-user-close">Close ✕</button>
+    <h3 id="edit-user-title">Edit user</h3>
+    <div id="edit-user-banner"></div>
+
+    <label for="edit-user-username">Username</label>
+    <input type="text" id="edit-user-username">
+    <label for="edit-user-password">New password (leave blank to keep current)</label>
+    <input type="text" id="edit-user-password" placeholder="new password">
+    <button class="btn-primary" id="edit-user-save-btn">Save changes</button>
+
+    <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Current roles</label>
+    <div id="edit-user-roles-list" style="margin-bottom:14px;"></div>
+
+    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Add a role</label>
+    <div class="form-row">
+      <div>
+        <select id="edit-user-add-role" style="margin-bottom:0;">
+          <option value="">— choose a role —</option>
+        </select>
+      </div>
+      <div><button type="button" class="btn-secondary" id="edit-user-add-role-btn" style="padding:10px 14px;">Add</button></div>
+    </div>
+
+    <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Project access (leave all unchecked = see every project)</label>
+    <div class="checkbox-list" id="edit-user-project-checkboxes"></div>
+  </div>
+</div>
+
+<!-- ============ EDIT ROLE MODAL ============ -->
+<div class="modal-overlay" id="edit-role-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="edit-role-close">Close ✕</button>
+    <h3 id="edit-role-title">Edit role</h3>
+    <div id="edit-role-banner"></div>
+
+    <div class="form-row" style="align-items:flex-end;">
+      <div>
+        <label for="edit-role-name">Role name</label>
+        <input type="text" id="edit-role-name" style="margin-bottom:0;">
+      </div>
+      <div><button type="button" class="btn-secondary" id="edit-role-rename-btn" style="padding:10px 14px;">Save name</button></div>
+    </div>
+
+    <div style="margin:14px 0;" id="edit-role-status-stamp"></div>
+    <div style="margin-bottom:18px;">
+      <button type="button" class="btn-secondary" id="edit-role-toggle-btn" style="padding:6px 12px; font-size:13px;">Disable role</button>
+      <button type="button" class="btn-secondary" id="edit-role-delete-btn" style="padding:6px 12px; font-size:13px; color:var(--danger); border-color:var(--danger);">Delete role</button>
+    </div>
+
+    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Service access</label>
+    <div class="checkbox-list" id="edit-role-service-checkboxes"></div>
+
+    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Users with this role</label>
+    <div id="edit-role-users-list"></div>
+  </div>
+</div>
+
+<!-- ============ NEW/EDIT PRODUCT MODAL ============ -->
+<div class="modal-overlay" id="product-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="product-modal-close">Close ✕</button>
+    <h3 id="product-form-title">New product</h3>
+    <div id="product-modal-banner"></div>
+    <form id="product-form">
+      <div class="form-row">
+        <div>
+          <label for="product-sku">SKU</label>
+          <input type="text" id="product-sku" placeholder="Leave blank to auto-generate (e.g. COM-0001)">
+        </div>
+        <div>
+          <label for="product-name">Name</label>
+          <input type="text" id="product-name" placeholder="Widget A" required>
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="product-category">Category</label>
+          <select id="product-category">
+            <option value="">— choose a category —</option>
+          </select>
+        </div>
+        <div>
+          <label for="product-price">Unit price</label>
+          <input type="text" id="product-price" placeholder="20.00">
+        </div>
+      </div>
+      <label for="product-description">Description</label>
+      <textarea id="product-description" rows="2" placeholder="Short description of this product"></textarea>
+      <label for="product-file">Catalog file (image, PDF, or spec sheet — optional)</label>
+      <input type="file" id="product-file">
+      <button type="submit" class="btn-primary" id="product-form-submit-btn">Create product</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ ADD CATEGORY MODAL ============ -->
+<div class="modal-overlay" id="category-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="category-modal-close">Close ✕</button>
+    <h3>Add category</h3>
+    <div id="category-modal-banner"></div>
+    <label for="new-category-name">Category</label>
+    <input type="text" id="new-category-name" placeholder="e.g. Server">
+    <label for="new-category-description">Description</label>
+    <textarea id="new-category-description" rows="2" placeholder="Optional — what belongs in this category"></textarea>
+    <button type="button" class="btn-primary" id="create-category-btn">Add</button>
+  </div>
+</div>
+
+<script>
+const API_BASE = '/api';
+let token = localStorage.getItem('ledger_token') || null;
+
+// ---------- helpers ----------
+function fmtMoney(v) {
+  if (v === null || v === undefined) return '—';
+  return '$' + Number(v).toFixed(2);
+}
+function fmtDate(v) {
+  if (!v) return '—';
+  return new Date(v).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function stampClass(value) {
+  return 'stamp stamp-' + String(value || '').toLowerCase();
+}
+function projectLabel(projectId) {
+  if (!projectId) return '—';
+  const project = cachedProjects.find(p => p.id === projectId);
+  if (!project) return '—';
+  const yearPart = project.budget_year ? ` <span class="mono" style="color:var(--text-dim); font-size:12px;">(${escapeHtml(project.budget_year)})</span>` : '';
+  return `<button class="link-btn-inline" data-goto-project-id="${project.id}">${escapeHtml(project.name)}</button>${yearPart}`;
+}
+
+function gotoProject(projectId) {
+  const project = cachedProjects.find(p => p.id === projectId);
+  if (!project) return;
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelector('.nav-item[data-view="projects"]').classList.add('active');
+  document.getElementById('view-projects').classList.add('active');
+  viewProjectDocuments(project);
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = Object.assign({}, options.headers, { 'Authorization': 'Bearer ' + token });
+  if (options.body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(API_BASE + path, Object.assign({}, options, { headers }));
+  if (res.status === 401) {
+    doLogout();
+    throw new Error('Session expired — please sign in again.');
+  }
+  if (!res.ok) {
+    let detail = 'Something went wrong.';
+    try { const body = await res.json(); detail = body.detail || detail; } catch (e) {}
+    if (res.status === 403) detail = "You don't have access to this. (" + detail + ")";
+    throw new Error(detail);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+function showBanner(elId, message, type = 'error') {
+  const el = document.getElementById(elId);
+  el.innerHTML = message ? `<div class="banner banner-${type}">${escapeHtml(message)}</div>` : '';
+}
+
+// ---------- auth ----------
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('login-username').value;
+  const password = document.getElementById('login-password').value;
+  document.getElementById('login-error').innerHTML = '';
+  try {
+    const res = await fetch(API_BASE + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || 'Invalid username or password.');
+    }
+    const data = await res.json();
+    token = data.access_token;
+    localStorage.setItem('ledger_token', token);
+    enterApp();
+  } catch (err) {
+    document.getElementById('login-error').innerHTML =
+      `<div class="error-msg">${escapeHtml(err.message)}</div>`;
+  }
+});
+
+document.getElementById('show-register-btn').addEventListener('click', () => {
+  document.getElementById('auth-card-title').textContent = 'Create an account';
+  document.getElementById('auth-card-sub').textContent = 'Register to request access — an administrator will need to approve you before you can sign in.';
+  document.getElementById('login-form').style.display = 'none';
+  document.getElementById('register-form').style.display = 'block';
+  document.getElementById('show-register-btn').parentElement.style.display = 'none';
+  document.getElementById('show-login-wrap').style.display = 'block';
+  document.getElementById('login-error').innerHTML = '';
+});
+
+document.getElementById('show-login-btn').addEventListener('click', () => {
+  document.getElementById('auth-card-title').textContent = 'Ledger';
+  document.getElementById('auth-card-sub').textContent = 'Sign in to manage documents, products, and search.';
+  document.getElementById('login-form').style.display = 'block';
+  document.getElementById('register-form').style.display = 'none';
+  document.getElementById('show-register-btn').parentElement.style.display = 'block';
+  document.getElementById('show-login-wrap').style.display = 'none';
+  document.getElementById('login-error').innerHTML = '';
+});
+
+document.getElementById('register-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('register-username').value;
+  const password = document.getElementById('register-password').value;
+  const requestedGroupId = document.getElementById('register-group').value || null;
+  document.getElementById('login-error').innerHTML = '';
+  try {
+    const res = await fetch(API_BASE + '/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, requested_group_id: requestedGroupId })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || 'Could not register.');
+    document.getElementById('register-form').reset();
+    document.getElementById('show-login-btn').click();
+    document.getElementById('login-error').innerHTML =
+      `<div class="banner banner-info">${escapeHtml(body.message || 'Registered — waiting for admin approval.')}</div>`;
+  } catch (err) {
+    document.getElementById('login-error').innerHTML =
+      `<div class="error-msg">${escapeHtml(err.message)}</div>`;
+  }
+});
+
+document.getElementById('logout-btn').addEventListener('click', doLogout);
+
+function doLogout() {
+  token = null;
+  localStorage.removeItem('ledger_token');
+  document.getElementById('app').classList.remove('active');
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+}
+
+async function enterApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').classList.add('active');
+  try {
+    const me = await apiFetch('/admin/me');
+    document.getElementById('whoami-username').textContent = me.username + (me.is_superuser ? ' (superuser)' : '');
+    currentUserIsSuperuser = me.is_superuser;
+    const isAnyGroupAdmin = me.groups && me.groups.some(g => g.is_group_admin);
+    const canManageUsers = me.is_superuser || isAnyGroupAdmin;
+    if (canManageUsers) {
+      document.getElementById('admin-nav-item').style.display = 'block';
+      document.getElementById('groups-card').style.display = me.is_superuser ? 'block' : 'none';
+      const adminGroupIds = me.is_superuser ? null : me.groups.filter(g => g.is_group_admin).map(g => g.group_id);
+      loadAdminGroups(adminGroupIds).then(loadPendingUsers);
+      document.getElementById('all-users-card').style.display = 'block';
+      loadAllUsers();
+    }
+    if (me.is_superuser) {
+      document.getElementById('new-group-form-wrap').style.display = 'block';
+    }
+    const canManageCategories = me.is_superuser || (me.service_access && me.service_access.includes('categories'));
+    document.getElementById('open-category-modal-btn').style.display = canManageCategories ? 'inline-block' : 'none';
+  } catch (e) {
+    document.getElementById('whoami-username').textContent = '—';
+  }
+  loadDocuments();
+  loadProducts();
+  loadCustomers();
+  loadCompanies();
+  loadProjects();
+  loadCategories();
+}
+
+// ---------- navigation ----------
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    item.classList.add('active');
+    document.getElementById('view-' + item.dataset.view).classList.add('active');
+  });
+});
+
+// ---------- documents ----------
+document.getElementById('toggle-doc-form').addEventListener('click', () => {
+  const card = document.getElementById('doc-form-card');
+  const opening = card.style.display === 'none';
+  card.style.display = opening ? 'block' : 'none';
+  if (opening) {
+    editingDocumentId = null;
+    document.getElementById('doc-form').reset();
+    document.getElementById('doc-customer-hint').style.display = 'none';
+    document.getElementById('doc-form-title').textContent = 'New document';
+    document.getElementById('doc-form-submit-btn').textContent = 'Create document';
+    document.getElementById('doc-type').disabled = false;
+    document.getElementById('doc-number').disabled = false;
+    document.getElementById('line-items').innerHTML = '';
+    addLineItem();
+  }
+});
+
+let editingDocumentId = null;
+let cachedDocuments = [];
+let lineItemCount = 0;
+function addLineItem(prefill) {
+  lineItemCount++;
+  const id = lineItemCount;
+  const div = document.createElement('div');
+  div.className = 'line-item-row';
+  div.dataset.lineId = id;
+  const productOptions = cachedProducts.map(p =>
+    `<option value="${p.id}" data-price="${p.unit_price || ''}" data-name="${escapeHtml(p.name)}" ${prefill && prefill.product_id === p.id ? 'selected' : ''}>${escapeHtml(p.sku)} — ${escapeHtml(p.name)}</option>`
+  ).join('');
+  div.innerHTML = `
+    <div style="flex: 1.4;">
+      <label>Product (optional)</label>
+      <select class="li-product">
+        <option value="">— free text instead —</option>
+        ${productOptions}
+      </select>
+    </div>
+    <div><label>Description</label><input type="text" class="li-desc" placeholder="Widget A" value="${prefill ? escapeHtml(prefill.description || '') : ''}" ${prefill && prefill.product_id ? 'disabled' : ''}></div>
+    <div style="max-width:70px;"><label>Qty</label><input type="text" class="li-qty" placeholder="1" value="${prefill ? prefill.quantity : ''}"></div>
+    <div style="max-width:80px;"><label>Unit</label><input type="text" class="li-unit" placeholder="Nos" value="${prefill ? escapeHtml(prefill.unit || 'Nos') : 'Nos'}"></div>
+    <div><label>Unit price</label><input type="text" class="li-price" placeholder="20.00" value="${prefill ? prefill.unit_price : ''}"></div>
+    <div style="max-width:70px;"><label>Tax %</label><input type="text" class="li-tax" placeholder="0" value="${prefill ? prefill.tax_rate : ''}"></div>
+    <button type="button" class="remove-line" data-line-id="${id}">Remove</button>
+  `;
+  document.getElementById('line-items').appendChild(div);
+  div.querySelector('.remove-line').addEventListener('click', () => div.remove());
+  div.querySelector('.li-product').addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions[0];
+    const descInput = div.querySelector('.li-desc');
+    const priceInput = div.querySelector('.li-price');
+    if (opt.value) {
+      descInput.value = opt.dataset.name;
+      descInput.disabled = true;
+      if (opt.dataset.price) priceInput.value = opt.dataset.price;
+    } else {
+      descInput.disabled = false;
+      descInput.value = '';
+    }
+  });
+}
+document.getElementById('add-line-btn').addEventListener('click', addLineItem);
+
+document.getElementById('doc-customer').addEventListener('input', (e) => {
+  const hint = document.getElementById('doc-customer-hint');
+  const typed = e.target.value.trim();
+  const matches = typed && cachedCustomers.some(c => c.name.toLowerCase() === typed.toLowerCase());
+  hint.style.display = (typed && !matches) ? 'block' : 'none';
+});
+
+function refreshLineItemProductOptions() {
+  document.querySelectorAll('.li-product').forEach(select => {
+    const currentValue = select.value;
+    const productOptions = cachedProducts.map(p =>
+      `<option value="${p.id}" data-price="${p.unit_price || ''}" data-name="${escapeHtml(p.name)}">${escapeHtml(p.sku)} — ${escapeHtml(p.name)}</option>`
+    ).join('');
+    select.innerHTML = `<option value="">— free text instead —</option>${productOptions}`;
+    if (currentValue) select.value = currentValue;
+  });
+}
+
+document.getElementById('doc-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showBanner('documents-banner', '');
+  const items = [];
+  document.querySelectorAll('#line-items .line-item-row').forEach(row => {
+    const product_id = row.querySelector('.li-product').value || null;
+    const description = row.querySelector('.li-desc').value;
+    const quantity = row.querySelector('.li-qty').value;
+    const unit = row.querySelector('.li-unit').value || 'Nos';
+    const unit_price = row.querySelector('.li-price').value;
+    const tax_rate = row.querySelector('.li-tax').value || '0';
+    if (!quantity) return;
+    if (!product_id && (!description || !unit_price)) return; // free-text items still need these
+    const item = { quantity: Number(quantity), tax_rate: Number(tax_rate), unit };
+    if (product_id) item.product_id = product_id;
+    if (description) item.description = description;
+    if (unit_price) item.unit_price = Number(unit_price);
+    items.push(item);
+  });
+  if (items.length === 0) {
+    showBanner('documents-banner', 'Add at least one line item: either pick a product, or fill in description + quantity + price.');
+    return;
+  }
+  try {
+    const commonPayload = {
+      customer_id: resolveCustomerIdFromInput(),
+      project_id: document.getElementById('doc-project').value || null,
+      currency: document.getElementById('doc-currency').value,
+      terms_and_conditions: document.getElementById('doc-terms').value || null,
+      items
+    };
+    if (editingDocumentId) {
+      await apiFetch('/documents/' + editingDocumentId, { method: 'PATCH', body: JSON.stringify(commonPayload) });
+    } else {
+      await apiFetch('/documents', {
+        method: 'POST',
+        body: JSON.stringify({
+          doc_type: document.getElementById('doc-type').value,
+          doc_number: document.getElementById('doc-number').value || null,
+          ...commonPayload
+        })
+      });
+    }
+    document.getElementById('doc-form').reset();
+    document.getElementById('doc-customer-hint').style.display = 'none';
+    document.getElementById('line-items').innerHTML = '';
+    addLineItem();
+    document.getElementById('doc-form-card').style.display = 'none';
+    document.getElementById('doc-form-title').textContent = 'New document';
+    document.getElementById('doc-form-submit-btn').textContent = 'Create document';
+    document.getElementById('doc-type').disabled = false;
+    document.getElementById('doc-number').disabled = false;
+    editingDocumentId = null;
+    loadDocuments();
+  } catch (err) {
+    showBanner('documents-banner', err.message);
+  }
+});
+
+function startEditDocument(doc) {
+  editingDocumentId = doc.id;
+  document.getElementById('doc-form-card').style.display = 'block';
+  document.getElementById('doc-form-title').textContent = 'Edit document — ' + doc.doc_number;
+  document.getElementById('doc-form-submit-btn').textContent = 'Save changes';
+
+  document.getElementById('doc-type').value = doc.doc_type;
+  document.getElementById('doc-type').disabled = true;
+  document.getElementById('doc-number').value = doc.doc_number;
+  document.getElementById('doc-number').disabled = true;
+
+  const customer = cachedCustomers.find(c => c.id === doc.customer_id);
+  document.getElementById('doc-customer').value = customer ? customer.name : '';
+  document.getElementById('doc-customer-hint').style.display = 'none';
+
+  document.getElementById('doc-currency').value = doc.currency || 'USD';
+  document.getElementById('doc-project').value = doc.project_id || '';
+  document.getElementById('doc-terms').value = doc.terms_and_conditions || '';
+
+  document.getElementById('line-items').innerHTML = '';
+  lineItemCount = 0;
+  doc.items.forEach(item => addLineItem(item));
+  if (doc.items.length === 0) addLineItem();
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function downloadQuotation(documentId, docNumber, format) {
+  showBanner('documents-banner', '');
+  const endpoint = format === 'pdf' ? '/export/quotation-pdf' : '/export/quotation';
+  const extension = format === 'pdf' ? 'pdf' : 'xlsx';
+  try {
+    const res = await fetch(API_BASE + '/documents/' + documentId + endpoint, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || 'Could not generate quotation.');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Quotation-' + docNumber + '.' + extension;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showBanner('documents-banner', err.message);
+  }
+}
+
+async function loadDocuments() {
+  const tbody = document.getElementById('documents-tbody');
+  try {
+    const docs = await apiFetch('/documents');
+    cachedDocuments = docs;
+    renderDocumentsTable(docs);
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderDocumentsTable(docs) {
+  const tbody = document.getElementById('documents-tbody');
+  if (!docs.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No documents match.</td></tr>';
+    return;
+  }
+  const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
+  tbody.innerHTML = docs.map(d => `
+    <tr>
+      <td class="mono">${escapeHtml(d.doc_number)}</td>
+      <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
+      <td>${projectLabel(d.project_id)}</td>
+      <td><span class="${stampClass(d.status)}">${escapeHtml(d.status)}</span></td>
+      <td class="mono">${fmtMoney(d.total)} ${escapeHtml(d.currency || '')}</td>
+      <td>${fmtDate(d.created_at)}</td>
+      <td>
+        <select class="status-select" data-doc-id="${d.id}" style="margin-bottom:0; padding:6px 8px; font-size:13px;">
+          ${statusOptions.map(s => `<option value="${s}" ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <button class="link-btn-inline" data-export-id="${d.id}" data-export-number="${escapeHtml(d.doc_number)}" data-export-format="xlsx">Excel</button>
+        &nbsp;|&nbsp;
+        <button class="link-btn-inline" data-export-id="${d.id}" data-export-number="${escapeHtml(d.doc_number)}" data-export-format="pdf">PDF</button>
+      </td>
+      <td>
+        <button class="link-btn-inline" data-edit-doc-id="${d.id}">Edit</button>
+        &nbsp;|&nbsp;
+        <button class="link-btn-inline" data-log-doc-id="${d.id}" data-log-doc-number="${escapeHtml(d.doc_number)}">Log</button>
+      </td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-goto-project-id]').forEach(btn => {
+    btn.addEventListener('click', () => gotoProject(btn.dataset.gotoProjectId));
+  });
+  tbody.querySelectorAll('[data-edit-doc-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const doc = cachedDocuments.find(d => d.id === btn.dataset.editDocId);
+      if (doc) startEditDocument(doc);
+    });
+  });
+  tbody.querySelectorAll('[data-log-doc-id]').forEach(btn => {
+    btn.addEventListener('click', () => viewAuditLog(btn.dataset.logDocId, btn.dataset.logDocNumber));
+  });
+  tbody.querySelectorAll('.status-select').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      try {
+        await apiFetch('/documents/' + sel.dataset.docId + '/status?new_status=' + sel.value, { method: 'PATCH' });
+        loadDocuments();
+      } catch (err) {
+        showBanner('documents-banner', err.message);
+        loadDocuments();
+      }
+    });
+  });
+  tbody.querySelectorAll('[data-export-id]').forEach(btn => {
+    btn.addEventListener('click', () => downloadQuotation(btn.dataset.exportId, btn.dataset.exportNumber, btn.dataset.exportFormat));
+  });
+}
+
+document.getElementById('documents-filter').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const filtered = q ? cachedDocuments.filter(d => d.doc_number.toLowerCase().includes(q)) : cachedDocuments;
+  renderDocumentsTable(filtered);
+});
+
+// ---------- projects ----------
+let editingProjectId = null;
+let cachedProjects = [];
+
+document.getElementById('toggle-project-form').addEventListener('click', () => {
+  const card = document.getElementById('project-form-card');
+  const opening = card.style.display === 'none';
+  card.style.display = opening ? 'block' : 'none';
+  if (opening) {
+    editingProjectId = null;
+    document.getElementById('project-form').reset();
+    document.getElementById('project-form-title').textContent = 'New project';
+    document.getElementById('project-form-submit-btn').textContent = 'Create project';
+  }
+});
+
+document.getElementById('project-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showBanner('projects-banner', '');
+  const payload = {
+    name: document.getElementById('project-name').value,
+    budget_year: document.getElementById('project-year').value || null,
+    description: document.getElementById('project-description').value || null
+  };
+  try {
+    if (editingProjectId) {
+      await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify(payload) });
+    } else {
+      await apiFetch('/projects', { method: 'POST', body: JSON.stringify(payload) });
+    }
+    document.getElementById('project-form').reset();
+    document.getElementById('project-form-card').style.display = 'none';
+    document.getElementById('project-form-title').textContent = 'New project';
+    document.getElementById('project-form-submit-btn').textContent = 'Create project';
+    editingProjectId = null;
+    loadProjects();
+  } catch (err) {
+    showBanner('projects-banner', err.message);
+  }
+});
+
+function startEditProject(project) {
+  editingProjectId = project.id;
+  document.getElementById('project-form-card').style.display = 'block';
+  document.getElementById('project-form-title').textContent = 'Edit project — ' + project.name;
+  document.getElementById('project-form-submit-btn').textContent = 'Save changes';
+  document.getElementById('project-name').value = project.name;
+  document.getElementById('project-year').value = project.budget_year || '';
+  document.getElementById('project-description').value = project.description || '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function viewProjectDocuments(project) {
+  const panel = document.getElementById('project-documents-panel');
+  const tbody = document.getElementById('project-documents-tbody');
+  document.getElementById('project-documents-title').textContent =
+    'Documents — ' + project.name + (project.budget_year ? ' (' + project.budget_year + ')' : '');
+  panel.style.display = 'block';
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="5">Loading…</td></tr>';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  try {
+    const docs = await apiFetch('/projects/' + project.id + '/documents');
+    if (!docs.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No documents linked to this project yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = docs.map(d => `
+      <tr>
+        <td class="mono">${escapeHtml(d.doc_number)}</td>
+        <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
+        <td><span class="${stampClass(d.status)}">${escapeHtml(d.status)}</span></td>
+        <td class="mono">${fmtMoney(d.total)} ${escapeHtml(d.currency || '')}</td>
+        <td>${fmtDate(d.created_at)}</td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function refreshProjectPicker() {
+  const select = document.getElementById('doc-project');
+  if (select) {
+    const currentValue = select.value;
+    const options = cachedProjects.map(p =>
+      `<option value="${p.id}">${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}</option>`
+    ).join('');
+    select.innerHTML = `<option value="">— no project —</option>${options}`;
+    if (currentValue) select.value = currentValue;
+  }
+
+  const searchSelect = document.getElementById('search-project-filter');
+  if (searchSelect) {
+    const currentValue = searchSelect.value;
+    const options = cachedProjects.map(p =>
+      `<option value="${p.id}">${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}</option>`
+    ).join('');
+    searchSelect.innerHTML = `<option value="">All projects</option>${options}`;
+    if (currentValue) searchSelect.value = currentValue;
+  }
+}
+
+async function loadProjects() {
+  const tbody = document.getElementById('projects-tbody');
+  try {
+    const projects = await apiFetch('/projects');
+    cachedProjects = projects;
+    refreshProjectPicker();
+    renderProjectsTable(projects);
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderProjectsTable(projects) {
+  const tbody = document.getElementById('projects-tbody');
+  if (!projects.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No projects match.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = projects.map(p => `
+    <tr>
+      <td>${escapeHtml(p.name)}</td>
+      <td class="mono">${escapeHtml(p.budget_year || '—')}</td>
+      <td>${fmtDate(p.created_at)}</td>
+      <td><button class="link-btn-inline" data-view-project-id="${p.id}">View documents</button></td>
+      <td><button class="link-btn-inline" data-edit-project-id="${p.id}">Edit</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-view-project-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const project = cachedProjects.find(p => p.id === btn.dataset.viewProjectId);
+      if (project) viewProjectDocuments(project);
+    });
+  });
+  tbody.querySelectorAll('[data-edit-project-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const project = cachedProjects.find(p => p.id === btn.dataset.editProjectId);
+      if (project) startEditProject(project);
+    });
+  });
+}
+
+document.getElementById('projects-filter').addEventListener('input', () => applyFilterAndSort('projects'));
+
+// ---------- company ----------
+let editingCompanyId = null;
+
+document.getElementById('toggle-company-form').addEventListener('click', () => {
+  const card = document.getElementById('company-form-card');
+  const opening = card.style.display === 'none';
+  card.style.display = opening ? 'block' : 'none';
+  if (opening) {
+    editingCompanyId = null;
+    document.getElementById('company-form').reset();
+    document.getElementById('company-form-title').textContent = 'New company';
+    document.getElementById('company-form-submit-btn').textContent = 'Create company';
+  }
+});
+
+document.getElementById('company-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showBanner('company-banner', '');
+  const logoInput = document.getElementById('company-logo');
+  const payload = {
+    name: document.getElementById('company-name').value,
+    position: document.getElementById('company-position').value || null,
+    address: document.getElementById('company-address').value || null,
+    contact_no: document.getElementById('company-contact').value || null,
+    support_email: document.getElementById('company-email').value || null,
+    support_phone: document.getElementById('company-phone').value || null,
+    is_primary: document.getElementById('company-is-primary').checked
+  };
+  try {
+    let company;
+    if (editingCompanyId) {
+      company = await apiFetch('/companies/' + editingCompanyId, { method: 'PATCH', body: JSON.stringify(payload) });
+    } else {
+      company = await apiFetch('/companies', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    if (logoInput.files.length > 0) {
+      const formData = new FormData();
+      formData.append('file', logoInput.files[0]);
+      await fetch(API_BASE + '/companies/' + company.id + '/logo', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: formData
+      });
+    }
+
+    document.getElementById('company-form').reset();
+    document.getElementById('company-form-card').style.display = 'none';
+    document.getElementById('company-form-title').textContent = 'New company';
+    document.getElementById('company-form-submit-btn').textContent = 'Create company';
+    editingCompanyId = null;
+    loadCompanies();
+  } catch (err) {
+    showBanner('company-banner', err.message);
+  }
+});
+
+function startEditCompany(company) {
+  editingCompanyId = company.id;
+  document.getElementById('company-form-card').style.display = 'block';
+  document.getElementById('company-form-title').textContent = 'Edit company — ' + company.name;
+  document.getElementById('company-form-submit-btn').textContent = 'Save changes';
+  document.getElementById('company-name').value = company.name;
+  document.getElementById('company-position').value = company.position || '';
+  document.getElementById('company-address').value = company.address || '';
+  document.getElementById('company-contact').value = company.contact_no || '';
+  document.getElementById('company-email').value = company.support_email || '';
+  document.getElementById('company-phone').value = company.support_phone || '';
+  document.getElementById('company-is-primary').checked = company.is_primary;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+let cachedCompanies = [];
+
+async function loadCompanies() {
+  const tbody = document.getElementById('companies-tbody');
+  try {
+    const companies = await apiFetch('/companies');
+    cachedCompanies = companies;
+    renderCompaniesTable(companies);
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderCompaniesTable(companies) {
+  const tbody = document.getElementById('companies-tbody');
+  if (!companies.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No company matches.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = companies.map(c => `
+    <tr>
+      <td>${escapeHtml(c.name)}</td>
+      <td>${escapeHtml(c.position || '—')}</td>
+      <td>${escapeHtml(c.contact_no || '—')}</td>
+      <td>${c.is_primary ? '<span class="stamp stamp-paid">Primary</span>' : '—'}</td>
+      <td>${c.logo_object_key ? `<button class="link-btn-inline" data-logo-id="${c.id}">View logo</button>` : '—'}</td>
+      <td><button class="link-btn-inline" data-edit-company-id="${c.id}">Edit</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-logo-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        const data = await apiFetch('/companies/' + btn.dataset.logoId + '/logo-url');
+        window.open(data.url, '_blank');
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
+  tbody.querySelectorAll('[data-edit-company-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const company = cachedCompanies.find(c => c.id === btn.dataset.editCompanyId);
+      if (company) startEditCompany(company);
+    });
+  });
+}
+
+document.getElementById('company-filter').addEventListener('input', () => applyFilterAndSort('company'));
+
+// ---------- customers ----------
+let cachedCustomers = [];
+let editingCustomerId = null;
+
+document.getElementById('toggle-customer-form').addEventListener('click', () => {
+  const card = document.getElementById('customer-form-card');
+  const opening = card.style.display === 'none';
+  card.style.display = opening ? 'block' : 'none';
+  if (opening) {
+    editingCustomerId = null;
+    document.getElementById('customer-form').reset();
+    document.getElementById('customer-form-title').textContent = 'New customer';
+    document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
+  }
+});
+
+document.getElementById('customer-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showBanner('customers-banner', '');
+  const payload = {
+    name: document.getElementById('customer-name').value,
+    email: document.getElementById('customer-email').value || null,
+    phone: document.getElementById('customer-phone').value || null,
+    billing_address: document.getElementById('customer-address').value
+      ? { address: document.getElementById('customer-address').value }
+      : null
+  };
+  try {
+    if (editingCustomerId) {
+      await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify(payload) });
+    } else {
+      await apiFetch('/customers', { method: 'POST', body: JSON.stringify(payload) });
+    }
+    document.getElementById('customer-form').reset();
+    document.getElementById('customer-form-card').style.display = 'none';
+    document.getElementById('customer-form-title').textContent = 'New customer';
+    document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
+    editingCustomerId = null;
+    loadCustomers();
+  } catch (err) {
+    showBanner('customers-banner', err.message);
+  }
+});
+
+function startEditCustomer(customer) {
+  editingCustomerId = customer.id;
+  document.getElementById('customer-form-card').style.display = 'block';
+  document.getElementById('customer-form-title').textContent = 'Edit customer — ' + customer.name;
+  document.getElementById('customer-form-submit-btn').textContent = 'Save changes';
+  document.getElementById('customer-name').value = customer.name;
+  document.getElementById('customer-email').value = customer.email || '';
+  document.getElementById('customer-phone').value = customer.phone || '';
+  document.getElementById('customer-address').value = (customer.billing_address && customer.billing_address.address) || '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Customer field on the document form is a type-to-search input (backed by
+// a <datalist>) rather than a plain dropdown, since customer lists can get
+// long — typing "ji" suggests "Jimmy", etc. The actual customer_id is
+// resolved by matching the typed text against the cached customer list.
+function refreshCustomerPicker() {
+  const datalist = document.getElementById('customer-datalist');
+  if (!datalist) return;
+  datalist.innerHTML = cachedCustomers.map(c => `<option value="${escapeHtml(c.name)}">`).join('');
+}
+
+function resolveCustomerIdFromInput() {
+  const input = document.getElementById('doc-customer');
+  const typed = input.value.trim();
+  if (!typed) return null;
+  const match = cachedCustomers.find(c => c.name.toLowerCase() === typed.toLowerCase());
+  return match ? match.id : null;
+}
+
+async function loadCustomers() {
+  const tbody = document.getElementById('customers-tbody');
+  try {
+    const customers = await apiFetch('/customers');
+    cachedCustomers = customers;
+    refreshCustomerPicker();
+    renderCustomersTable(customers);
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderCustomersTable(customers) {
+  const tbody = document.getElementById('customers-tbody');
+  if (!customers.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No customers match.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = customers.map(c => `
+    <tr>
+      <td>${escapeHtml(c.name)}</td>
+      <td>${escapeHtml(c.email || '—')}</td>
+      <td>${escapeHtml(c.phone || '—')}</td>
+      <td>${fmtDate(c.created_at)}</td>
+      <td><button class="link-btn-inline" data-edit-customer-id="${c.id}">Edit</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-edit-customer-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const customer = cachedCustomers.find(c => c.id === btn.dataset.editCustomerId);
+      if (customer) startEditCustomer(customer);
+    });
+  });
+}
+
+document.getElementById('customers-filter').addEventListener('input', () => applyFilterAndSort('customers'));
+
+// ---------- products ----------
+document.getElementById('toggle-product-form').addEventListener('click', () => {
+  editingProductId = null;
+  document.getElementById('product-form').reset();
+  document.getElementById('product-form-title').textContent = 'New product';
+  document.getElementById('product-sku').disabled = false;
+  document.getElementById('product-form-submit-btn').textContent = 'Create product';
+  document.getElementById('product-modal').classList.add('active');
+});
+
+document.getElementById('product-modal-close').addEventListener('click', () => {
+  document.getElementById('product-modal').classList.remove('active');
+});
+
+let editingProductId = null;
+let cachedProducts = [];
+let cachedCategories = [];
+
+async function loadCategories() {
+  try {
+    cachedCategories = await apiFetch('/categories');
+    const select = document.getElementById('product-category');
+    const currentValue = select.value;
+    select.innerHTML = '<option value="">— choose a category —</option>' +
+      cachedCategories.map(c => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('');
+    if (currentValue) select.value = currentValue;
+  } catch (err) {
+    // non-fatal — product form still works, just without a populated dropdown yet
+  }
+}
+
+document.getElementById('open-category-modal-btn').addEventListener('click', () => {
+  document.getElementById('new-category-name').value = '';
+  document.getElementById('new-category-description').value = '';
+  showBanner('category-modal-banner', '');
+  document.getElementById('category-modal').classList.add('active');
+});
+
+document.getElementById('category-modal-close').addEventListener('click', () => {
+  document.getElementById('category-modal').classList.remove('active');
+});
+
+document.getElementById('create-category-btn').addEventListener('click', async () => {
+  const name = document.getElementById('new-category-name').value.trim();
+  const description = document.getElementById('new-category-description').value.trim();
+  if (!name) return;
+  showBanner('category-modal-banner', '');
+  try {
+    await apiFetch('/categories', { method: 'POST', body: JSON.stringify({ name, description: description || null }) });
+    await loadCategories();
+    document.getElementById('product-category').value = name;
+    document.getElementById('category-modal').classList.remove('active');
+  } catch (err) {
+    showBanner('category-modal-banner', err.message);
+  }
+});
+
+document.getElementById('product-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showBanner('product-modal-banner', '');
+  const fileInput = document.getElementById('product-file');
+  const payload = {
+    sku: document.getElementById('product-sku').value || null,
+    name: document.getElementById('product-name').value,
+    category: document.getElementById('product-category').value || null,
+    description: document.getElementById('product-description').value || null,
+    unit_price: document.getElementById('product-price').value ? Number(document.getElementById('product-price').value) : null
+  };
+  try {
+    let product;
+    if (editingProductId) {
+      // sku can't be changed via PATCH (it's the identity), so leave it out
+      const { sku, ...updatePayload } = payload;
+      product = await apiFetch('/products/' + editingProductId, {
+        method: 'PATCH',
+        body: JSON.stringify(updatePayload)
+      });
+    } else {
+      product = await apiFetch('/products', { method: 'POST', body: JSON.stringify(payload) });
+    }
+
+    if (fileInput.files.length > 0) {
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      await fetch(API_BASE + '/products/' + product.id + '/file', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: formData
+      });
+    }
+
+    document.getElementById('product-form').reset();
+    document.getElementById('product-modal').classList.remove('active');
+    document.getElementById('product-form-title').textContent = 'New product';
+    document.getElementById('product-sku').disabled = false;
+    document.getElementById('product-form-submit-btn').textContent = 'Create product';
+    editingProductId = null;
+    loadProducts();
+  } catch (err) {
+    showBanner('product-modal-banner', err.message);
+  }
+});
+
+function startEditProduct(product) {
+  editingProductId = product.id;
+  document.getElementById('product-form-title').textContent = 'Edit product — ' + product.sku;
+  document.getElementById('product-sku').value = product.sku;
+  document.getElementById('product-sku').disabled = true; // identity field, not editable
+  document.getElementById('product-name').value = product.name;
+  document.getElementById('product-category').value = product.category || '';
+  document.getElementById('product-description').value = product.description || '';
+  document.getElementById('product-price').value = product.unit_price || '';
+  document.getElementById('product-form-submit-btn').textContent = 'Save changes';
+  document.getElementById('product-modal').classList.add('active');
+}
+
+async function loadProducts() {
+  const tbody = document.getElementById('products-tbody');
+  try {
+    const products = await apiFetch('/products');
+    cachedProducts = products;
+    refreshLineItemProductOptions();
+    renderProductsTable(products);
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderProductsTable(products) {
+  const tbody = document.getElementById('products-tbody');
+  if (!products.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No products match.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = products.map(p => `
+    <tr>
+      <td class="mono">${escapeHtml(p.sku)}</td>
+      <td>${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(p.category || '—')}</td>
+      <td class="mono">${fmtMoney(p.unit_price)}</td>
+      <td>${p.image_object_key ? `<button class="link-btn-inline" data-product-id="${p.id}">View file</button>` : '—'}</td>
+      <td><button class="link-btn-inline" data-edit-id="${p.id}">Edit</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-product-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        const data = await apiFetch('/products/' + btn.dataset.productId + '/file-url');
+        window.open(data.url, '_blank');
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
+  tbody.querySelectorAll('[data-edit-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const product = cachedProducts.find(p => p.id === btn.dataset.editId);
+      if (product) startEditProduct(product);
+    });
+  });
+}
+
+document.getElementById('products-filter').addEventListener('input', () => applyFilterAndSort('products'));
+
+// ---------- generic 3-state column sorting (asc -> desc -> back to normal) ----------
+// Used by Products, Customers, Projects, and Company tables — each already
+// caches its full list and has a render*Table(list) function from the filter
+// work above, so sorting just re-filters + re-sorts + re-renders from cache.
+
+const sortState = {
+  products: { column: null, dir: null },
+  customers: { column: null, dir: null },
+  projects: { column: null, dir: null },
+  company: { column: null, dir: null },
+};
+
+const sortAccessors = {
+  products: {
+    name: p => (p.name || '').toLowerCase(),
+    category: p => (p.category || '').toLowerCase(),
+    price: p => Number(p.unit_price) || 0,
+  },
+  customers: {
+    name: c => (c.name || '').toLowerCase(),
+    created_at: c => new Date(c.created_at).getTime(),
+  },
+  projects: {
+    name: p => (p.name || '').toLowerCase(),
+    budget_year: p => p.budget_year || '',
+  },
+  company: {
+    name: c => (c.name || '').toLowerCase(),
+  },
+};
+
+const tableConfig = {
+  products: {
+    cache: () => cachedProducts,
+    filterInputId: 'products-filter',
+    matchFn: (p, q) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q),
+    render: renderProductsTable,
+  },
+  customers: {
+    cache: () => cachedCustomers,
+    filterInputId: 'customers-filter',
+    matchFn: (c, q) => c.name.toLowerCase().includes(q),
+    render: renderCustomersTable,
+  },
+  projects: {
+    cache: () => cachedProjects,
+    filterInputId: 'projects-filter',
+    matchFn: (p, q) => p.name.toLowerCase().includes(q),
+    render: renderProjectsTable,
+  },
+  company: {
+    cache: () => cachedCompanies,
+    filterInputId: 'company-filter',
+    matchFn: (c, q) => c.name.toLowerCase().includes(q),
+    render: renderCompaniesTable,
+  },
+};
+
+function applyFilterAndSort(tableName) {
+  const config = tableConfig[tableName];
+  const q = document.getElementById(config.filterInputId).value.trim().toLowerCase();
+  let list = q ? config.cache().filter(item => config.matchFn(item, q)) : config.cache().slice();
+
+  const state = sortState[tableName];
+  if (state.column && state.dir) {
+    const getValue = sortAccessors[tableName][state.column];
+    list.sort((a, b) => {
+      const va = getValue(a), vb = getValue(b);
+      if (va < vb) return state.dir === 'asc' ? -1 : 1;
+      if (va > vb) return state.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
+  config.render(list);
+}
+
+document.querySelectorAll('.sort-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tableName = btn.dataset.sortTable;
+    const column = btn.dataset.sortCol;
+    const state = sortState[tableName];
+
+    if (state.column !== column) {
+      state.column = column;
+      state.dir = 'asc';
+    } else if (state.dir === 'asc') {
+      state.dir = 'desc';
+    } else {
+      state.column = null;
+      state.dir = null;
+    }
+
+    // Reset all sort button icons/active state for this table, then mark the current one
+    document.querySelectorAll(`.sort-btn[data-sort-table="${tableName}"]`).forEach(b => {
+      b.textContent = '⇅';
+      b.classList.remove('active');
+    });
+    if (state.column) {
+      btn.textContent = state.dir === 'asc' ? '▲' : '▼';
+      btn.classList.add('active');
+    }
+
+    applyFilterAndSort(tableName);
+  });
+});
+
+// ---------- search ----------
+async function runSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  const projectId = document.getElementById('search-project-filter').value;
+  const resultsEl = document.getElementById('search-results');
+  showBanner('search-banner', '');
+  if (!q) { resultsEl.innerHTML = ''; return; }
+  try {
+    let url = '/search?q=' + encodeURIComponent(q);
+    if (projectId) url += '&project_id=' + encodeURIComponent(projectId);
+    const data = await apiFetch(url);
+    let html = '';
+    if (data.documents && data.documents.length) {
+      html += '<div class="search-section-title">Documents</div><table><tbody>';
+      html += data.documents.map(d => `
+        <tr>
+          <td class="mono">${escapeHtml(d.doc_number)}</td>
+          <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
+          <td>${d.project_name
+            ? `<button class="link-btn-inline" data-goto-project-id="${d.project_id}">${escapeHtml(d.project_name)}</button>` +
+              (d.project_budget_year ? ` <span class="mono" style="color:var(--text-dim); font-size:12px;">(${escapeHtml(d.project_budget_year)})</span>` : '')
+            : '<span style="color:var(--text-dim);">No project</span>'}</td>
+          <td class="mono">${fmtMoney(d.total)}</td>
+        </tr>`).join('');
+      html += '</tbody></table>';
+    }
+    if (data.products && data.products.length) {
+      html += '<div class="search-section-title">Products</div><table><tbody>';
+      html += data.products.map(p => `
+        <tr>
+          <td class="mono">${escapeHtml(p.sku)}</td>
+          <td>${escapeHtml(p.name)}</td>
+          <td class="mono">${fmtMoney(p.unit_price)}</td>
+        </tr>`).join('');
+      html += '</tbody></table>';
+    }
+    if (!html) html = '<p style="color:var(--text-dim);">No results. Try a different term.</p>';
+    resultsEl.innerHTML = html;
+    resultsEl.querySelectorAll('[data-goto-project-id]').forEach(btn => {
+      btn.addEventListener('click', () => gotoProject(btn.dataset.gotoProjectId));
+    });
+  } catch (err) {
+    showBanner('search-banner', err.message);
+  }
+}
+document.getElementById('search-btn').addEventListener('click', runSearch);
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') runSearch();
+});
+
+// ---------- admin panel ----------
+let cachedAllUsers = [];
+let editingUserId = null;
+
+async function loadAllUsers() {
+  const tbody = document.getElementById('all-users-tbody');
+  try {
+    const users = await apiFetch('/admin/users');
+    cachedAllUsers = users;
+    renderAllUsersTable(users);
+  } catch (err) {
+    // 403 here just means this account can't manage users — card is hidden anyway in that case
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderAllUsersTable(users) {
+  const tbody = document.getElementById('all-users-tbody');
+  if (!users.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No users match.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = users.map(u => `
+    <tr>
+      <td>${escapeHtml(u.username)}</td>
+      <td>${u.is_superuser ? 'Yes' : '—'}</td>
+      <td>${u.is_approved ? 'Yes' : '<span style="color:var(--danger);">Pending</span>'}</td>
+      <td>
+        ${u.is_superuser
+          ? '<span class="stamp stamp-paid" style="font-size:10px;">active</span>'
+          : `<button class="status-toggle-btn ${u.is_active ? 'is-active' : 'is-disabled'}" data-toggle-user-id="${u.id}" data-toggle-active="${u.is_active}">${u.is_active ? 'Active' : 'Disabled'}</button>`}
+      </td>
+      <td><button class="link-btn-inline" data-edit-user-id="${u.id}">Edit</button></td>
+      <td>${u.is_superuser ? '<span style="color:var(--text-dim);">—</span>' : `<button class="link-btn-inline" data-remove-user-id="${u.id}" data-remove-username="${escapeHtml(u.username)}" style="color:var(--danger);">Remove</button>`}</td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-edit-user-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const user = cachedAllUsers.find(u => u.id === btn.dataset.editUserId);
+      if (user) openEditUserModal(user);
+    });
+  });
+  tbody.querySelectorAll('[data-toggle-user-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const currentlyActive = btn.dataset.toggleActive === 'true';
+      showBanner('admin-banner', '');
+      try {
+        await apiFetch('/admin/users/' + btn.dataset.toggleUserId + '/active', {
+          method: 'PATCH',
+          body: JSON.stringify({ is_active: !currentlyActive })
+        });
+        loadAllUsers();
+      } catch (err) {
+        showBanner('admin-banner', err.message);
+      }
+    });
+  });
+  tbody.querySelectorAll('[data-remove-user-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Remove user "${btn.dataset.removeUsername}"? This deletes their account, group memberships, and role assignments. This can't be undone.`)) return;
+      showBanner('admin-banner', '');
+      try {
+        await apiFetch('/admin/users/' + btn.dataset.removeUserId, { method: 'DELETE' });
+        loadAllUsers();
+      } catch (err) {
+        showBanner('admin-banner', err.message);
+      }
+    });
+  });
+}
+
+document.getElementById('all-users-filter').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const filtered = q ? cachedAllUsers.filter(u => u.username.toLowerCase().includes(q)) : cachedAllUsers;
+  renderAllUsersTable(filtered);
+});
+
+async function openEditUserModal(user) {
+  editingUserId = user.id;
+  document.getElementById('edit-user-title').textContent = 'Edit user — ' + user.username;
+  document.getElementById('edit-user-username').value = user.username;
+  document.getElementById('edit-user-password').value = '';
+  showBanner('edit-user-banner', '');
+  document.getElementById('edit-user-modal').classList.add('active');
+  await loadEditUserRoles();
+  await loadManageableRolesForPicker();
+  await loadEditUserProjectAccess();
+}
+
+async function loadEditUserProjectAccess() {
+  const container = document.getElementById('edit-user-project-checkboxes');
+  container.innerHTML = '<span style="color:var(--text-dim); font-size:13px;">Loading…</span>';
+  try {
+    let availableProjects;
+    if (currentUserIsSuperuser) {
+      availableProjects = cachedProjects;
+    } else {
+      const available = await apiFetch('/admin/users/' + editingUserId + '/available-projects');
+      availableProjects = cachedProjects.filter(p => available.project_ids.includes(p.id));
+    }
+
+    const currentGrants = await apiFetch('/admin/users/' + editingUserId + '/project-access');
+
+    if (!availableProjects.length) {
+      container.innerHTML = currentUserIsSuperuser
+        ? '<span style="color:var(--text-dim); font-size:13px;">No projects created yet.</span>'
+        : '<span style="color:var(--text-dim); font-size:13px;">No shared group has project access yet — ask a superuser to grant some to your group first.</span>';
+      return;
+    }
+
+    container.innerHTML = availableProjects.map(p => `
+      <label>
+        <input type="checkbox" class="edit-user-project-cb" data-project-id="${p.id}" ${currentGrants.includes(p.id) ? 'checked' : ''}>
+        ${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}
+      </label>
+    `).join('');
+
+    container.querySelectorAll('.edit-user-project-cb').forEach(cb => {
+      cb.addEventListener('change', async () => {
+        showBanner('edit-user-banner', '');
+        try {
+          if (cb.checked) {
+            await apiFetch('/admin/users/' + editingUserId + '/project-access', {
+              method: 'POST', body: JSON.stringify({ project_id: cb.dataset.projectId })
+            });
+          } else {
+            await apiFetch('/admin/users/' + editingUserId + '/project-access/' + cb.dataset.projectId, { method: 'DELETE' });
+          }
+          flashSaved(cb.closest('label'));
+        } catch (err) {
+          showBanner('edit-user-banner', err.message);
+          loadEditUserProjectAccess();
+        }
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<span style="color:var(--danger); font-size:13px;">${escapeHtml(err.message)}</span>`;
+  }
+}
+
+document.getElementById('edit-user-close').addEventListener('click', () => {
+  document.getElementById('edit-user-modal').classList.remove('active');
+});
+
+document.getElementById('edit-user-save-btn').addEventListener('click', async () => {
+  const username = document.getElementById('edit-user-username').value.trim();
+  const password = document.getElementById('edit-user-password').value;
+  showBanner('edit-user-banner', '');
+  try {
+    const payload = { username };
+    if (password) payload.password = password;
+    await apiFetch('/admin/users/' + editingUserId, { method: 'PATCH', body: JSON.stringify(payload) });
+    document.getElementById('edit-user-password').value = '';
+    loadAllUsers();
+    showBanner('edit-user-banner', 'Saved.', 'info');
+  } catch (err) {
+    showBanner('edit-user-banner', err.message);
+  }
+});
+
+async function loadEditUserRoles() {
+  const container = document.getElementById('edit-user-roles-list');
+  container.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Loading…</p>';
+  try {
+    const roles = await apiFetch('/admin/users/' + editingUserId + '/roles');
+    if (!roles.length) {
+      container.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">No roles assigned yet.</p>';
+      return;
+    }
+    container.innerHTML = roles.map(r => `
+      <span class="user-chip">${escapeHtml(r.role_name)} <span style="color:var(--text-dim);">(${escapeHtml(r.group_name)})</span>
+        <button data-remove-role-id="${r.role_id}">✕</button>
+      </span>
+    `).join('');
+    container.querySelectorAll('[data-remove-role-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const user = cachedAllUsers.find(u => u.id === editingUserId);
+        if (!user) return;
+        try {
+          await apiFetch('/admin/roles/' + btn.dataset.removeRoleId + '/assign/' + encodeURIComponent(user.username), { method: 'DELETE' });
+          loadEditUserRoles();
+        } catch (err) {
+          showBanner('edit-user-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--danger); font-size:13px;">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadManageableRolesForPicker() {
+  const select = document.getElementById('edit-user-add-role');
+  select.innerHTML = '<option value="">— choose a role —</option>';
+  try {
+    const groups = await apiFetch('/admin/groups');
+    for (const group of groups) {
+      const roles = await apiFetch('/admin/groups/' + group.id + '/roles');
+      roles.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = r.name + ' (' + group.name + ')';
+        select.appendChild(opt);
+      });
+    }
+  } catch (err) {
+    // non-fatal — user can still edit username/password without an add-role picker
+  }
+}
+
+document.getElementById('edit-user-add-role-btn').addEventListener('click', async () => {
+  const roleId = document.getElementById('edit-user-add-role').value;
+  const user = cachedAllUsers.find(u => u.id === editingUserId);
+  if (!roleId || !user) return;
+  showBanner('edit-user-banner', '');
+  try {
+    await apiFetch('/admin/roles/' + roleId + '/assign', { method: 'POST', body: JSON.stringify({ username: user.username }) });
+    loadEditUserRoles();
+  } catch (err) {
+    showBanner('edit-user-banner', err.message);
+  }
+});
+
+let cachedGroups = [];
+let selectedGroupId = null;
+
+async function loadPendingUsers() {
+  const tbody = document.getElementById('pending-users-tbody');
+  try {
+    const pending = await apiFetch('/admin/users/pending');
+    if (!pending.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No pending registrations.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = pending.map(u => {
+      const group = cachedGroups.find(g => g.id === u.requested_group_id);
+      return `
+      <tr>
+        <td>${escapeHtml(u.username)}</td>
+        <td>${group ? escapeHtml(group.name) : '<span style="color:var(--text-dim);">— none specified —</span>'}</td>
+        <td>${fmtDate(u.created_at)}</td>
+        <td>
+          <button class="btn-secondary" data-approve-id="${u.id}" style="padding:6px 12px; font-size:13px;">Approve</button>
+          <button class="btn-secondary" data-deny-id="${u.id}" data-deny-username="${escapeHtml(u.username)}" style="padding:6px 12px; font-size:13px; color:var(--danger); border-color:var(--danger);">Deny</button>
+        </td>
+      </tr>
+    `;
+    }).join('');
+    tbody.querySelectorAll('[data-approve-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await apiFetch('/admin/users/' + btn.dataset.approveId + '/approve', { method: 'POST' });
+          loadPendingUsers();
+        } catch (err) {
+          showBanner('admin-banner', err.message);
+        }
+      });
+    });
+    tbody.querySelectorAll('[data-deny-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Deny and delete the registration request from "${btn.dataset.denyUsername}"? This can't be undone.`)) return;
+        try {
+          await apiFetch('/admin/users/' + btn.dataset.denyId + '/deny', { method: 'POST' });
+          loadPendingUsers();
+        } catch (err) {
+          showBanner('admin-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+document.getElementById('create-group-btn').addEventListener('click', async () => {
+  const name = document.getElementById('new-group-name').value.trim();
+  if (!name) return;
+  showBanner('admin-banner', '');
+  try {
+    await apiFetch('/admin/groups', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('new-group-name').value = '';
+    loadAdminGroups();
+  } catch (err) {
+    showBanner('admin-banner', err.message);
+  }
+});
+
+async function loadAdminGroups(restrictToGroupIds) {
+  try {
+    let groups = await apiFetch('/admin/groups');
+    if (restrictToGroupIds) {
+      groups = groups.filter(g => restrictToGroupIds.includes(g.id));
+    }
+    cachedGroups = groups;
+    const select = document.getElementById('group-select');
+    const currentValue = select.value;
+    select.innerHTML = '<option value="">— choose a group —</option>' +
+      cachedGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    if (currentValue) {
+      select.value = currentValue;
+    } else if (cachedGroups.length === 1) {
+      // Only one group to administer — no need to make them pick it manually.
+      select.value = cachedGroups[0].id;
+      select.dispatchEvent(new Event('change'));
+    }
+  } catch (err) {
+    showBanner('admin-banner', err.message);
+  }
+}
+
+document.getElementById('group-select').addEventListener('change', (e) => {
+  selectedGroupId = e.target.value || null;
+  const panel = document.getElementById('group-detail-panel');
+  const controls = document.getElementById('group-manage-controls');
+  if (!selectedGroupId) {
+    panel.style.display = 'none';
+    controls.style.display = 'none';
+    return;
+  }
+  const group = cachedGroups.find(g => g.id === selectedGroupId);
+  document.getElementById('group-detail-name').textContent = group ? group.name : '';
+  document.getElementById('group-detail-name-2').textContent = group ? group.name : '';
+  document.getElementById('group-detail-name-pool').textContent = group ? group.name : '';
+  panel.style.display = 'block';
+  refreshGroupManageControls(group);
+  loadGroupMembers();
+  loadGroupProjectPool().then(loadGroupRoles);
+});
+
+async function loadGroupProjectPool() {
+  const card = document.getElementById('group-project-pool-card');
+  card.style.display = currentUserIsSuperuser ? 'block' : 'none';
+  try {
+    cachedGroupProjectPool = await apiFetch('/admin/groups/' + selectedGroupId + '/project-access');
+  } catch (err) {
+    cachedGroupProjectPool = [];
+  }
+
+  if (currentUserIsSuperuser) {
+    const container = document.getElementById('group-project-pool-checkboxes');
+    container.innerHTML = cachedProjects.map(p => `
+      <label>
+        <input type="checkbox" class="group-pool-cb" data-project-id="${p.id}" ${cachedGroupProjectPool.includes(p.id) ? 'checked' : ''}>
+        ${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}
+      </label>
+    `).join('') || '<span style="color:var(--text-dim); font-size:13px;">No projects created yet.</span>';
+
+    container.querySelectorAll('.group-pool-cb').forEach(cb => {
+      cb.addEventListener('change', async () => {
+        showBanner('admin-banner', '');
+        try {
+          if (cb.checked) {
+            await apiFetch('/admin/groups/' + selectedGroupId + '/project-access', {
+              method: 'POST', body: JSON.stringify({ project_id: cb.dataset.projectId })
+            });
+          } else {
+            await apiFetch('/admin/groups/' + selectedGroupId + '/project-access/' + cb.dataset.projectId, { method: 'DELETE' });
+          }
+          flashSaved(cb.closest('label'));
+          await loadGroupProjectPool();
+          loadGroupRoles();
+        } catch (err) {
+          showBanner('admin-banner', err.message);
+        }
+      });
+    });
+  }
+}
+
+function refreshGroupManageControls(group) {
+  if (!group) return;
+  const controls = document.getElementById('group-manage-controls');
+  controls.style.display = 'block';
+  document.getElementById('group-status-stamp').innerHTML = group.is_active
+    ? '<span class="stamp stamp-paid" style="font-size:10px;">active</span>'
+    : '<span class="stamp stamp-void" style="font-size:10px;">disabled</span>';
+  document.getElementById('group-toggle-btn').textContent = group.is_active ? 'Disable group' : 'Enable group';
+}
+
+document.getElementById('group-toggle-btn').addEventListener('click', async () => {
+  const group = cachedGroups.find(g => g.id === selectedGroupId);
+  if (!group) return;
+  showBanner('admin-banner', '');
+  try {
+    await apiFetch('/admin/groups/' + selectedGroupId + '/active', {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active: !group.is_active })
+    });
+    await loadAdminGroups();
+    const updated = cachedGroups.find(g => g.id === selectedGroupId);
+    refreshGroupManageControls(updated);
+  } catch (err) {
+    showBanner('admin-banner', err.message);
+  }
+});
+
+document.getElementById('group-delete-btn').addEventListener('click', async () => {
+  const group = cachedGroups.find(g => g.id === selectedGroupId);
+  if (!group) return;
+  if (!confirm(`Delete group "${group.name}"? This removes all its members, roles, and access grants. This can't be undone.`)) return;
+  showBanner('admin-banner', '');
+  try {
+    await apiFetch('/admin/groups/' + selectedGroupId, { method: 'DELETE' });
+    selectedGroupId = null;
+    document.getElementById('group-detail-panel').style.display = 'none';
+    document.getElementById('group-manage-controls').style.display = 'none';
+    document.getElementById('group-select').value = '';
+    loadAdminGroups();
+  } catch (err) {
+    showBanner('admin-banner', err.message);
+  }
+});
+
+async function loadGroupMembers() {
+  const tbody = document.getElementById('group-members-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Loading…</td></tr>';
+  try {
+    const members = await apiFetch('/admin/groups/' + selectedGroupId + '/members');
+    if (!members.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="2">No members yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = members.map(m => `
+      <tr><td>${escapeHtml(m.username)}</td><td>${m.is_group_admin ? 'Yes' : '—'}</td></tr>
+    `).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="2">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+document.getElementById('add-member-btn').addEventListener('click', async () => {
+  const username = document.getElementById('add-member-username').value.trim();
+  const isAdmin = document.getElementById('add-member-is-admin').checked;
+  const roleId = document.getElementById('add-member-role').value;
+  if (!username || !selectedGroupId) return;
+  showBanner('admin-banner', '');
+  try {
+    await apiFetch('/admin/groups/' + selectedGroupId + '/members', {
+      method: 'POST',
+      body: JSON.stringify({ username, is_group_admin: isAdmin })
+    });
+    if (roleId) {
+      await apiFetch('/admin/roles/' + roleId + '/assign', { method: 'POST', body: JSON.stringify({ username }) });
+    }
+    document.getElementById('add-member-username').value = '';
+    document.getElementById('add-member-is-admin').checked = false;
+    document.getElementById('add-member-role').value = '';
+    loadGroupMembers();
+    loadGroupRoles();
+  } catch (err) {
+    showBanner('admin-banner', err.message);
+  }
+});
+
+document.getElementById('create-member-btn').addEventListener('click', async () => {
+  const username = document.getElementById('new-member-username').value.trim();
+  const password = document.getElementById('new-member-password').value;
+  const isAdmin = document.getElementById('new-member-is-admin').checked;
+  const roleId = document.getElementById('new-member-role').value;
+  if (!username || !password || !selectedGroupId) return;
+  showBanner('admin-banner', '');
+  try {
+    await apiFetch('/admin/groups/' + selectedGroupId + '/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, is_group_admin: isAdmin })
+    });
+    if (roleId) {
+      await apiFetch('/admin/roles/' + roleId + '/assign', { method: 'POST', body: JSON.stringify({ username }) });
+    }
+    document.getElementById('new-member-username').value = '';
+    document.getElementById('new-member-password').value = '';
+    document.getElementById('new-member-is-admin').checked = false;
+    document.getElementById('new-member-role').value = '';
+    loadGroupMembers();
+    loadGroupRoles();
+  } catch (err) {
+    showBanner('admin-banner', err.message);
+  }
+});
+
+document.getElementById('create-role-btn').addEventListener('click', async () => {
+  const name = document.getElementById('new-role-name').value.trim();
+  if (!name || !selectedGroupId) return;
+  showBanner('admin-banner', '');
+  try {
+    await apiFetch('/admin/groups/' + selectedGroupId + '/roles', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('new-role-name').value = '';
+    loadGroupRoles();
+  } catch (err) {
+    showBanner('admin-banner', err.message);
+  }
+});
+
+const ALL_SERVICES = ['documents', 'products', 'search', 'audit-log', 'categories'];
+
+let cachedGroupRoles = [];
+let currentUserIsSuperuser = false;
+let cachedGroupProjectPool = [];
+
+function refreshMemberRolePickers() {
+  const options = '<option value="">— no role yet —</option>' +
+    cachedGroupRoles.map(r => `<option value="${r.id}">${escapeHtml(r.name)}${r.is_active ? '' : ' (disabled)'}</option>`).join('');
+  const addSel = document.getElementById('add-member-role');
+  const newSel = document.getElementById('new-member-role');
+  if (addSel) addSel.innerHTML = options;
+  if (newSel) newSel.innerHTML = options;
+}
+
+async function loadGroupRoles() {
+  const tbody = document.getElementById('roles-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  try {
+    const roles = await apiFetch('/admin/groups/' + selectedGroupId + '/roles');
+    cachedGroupRoles = roles;
+    refreshMemberRolePickers();
+    renderRolesTable(roles);
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderRolesTable(roles) {
+  const tbody = document.getElementById('roles-tbody');
+  if (!roles.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No roles match.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = roles.map(r => `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${r.is_active
+        ? '<span class="stamp stamp-paid" style="font-size:10px;">active</span>'
+        : '<span class="stamp stamp-void" style="font-size:10px;">disabled</span>'}</td>
+      <td class="mono" style="font-size:12px;">${r.services.length ? escapeHtml(r.services.join(', ')) : '—'}</td>
+      <td><button class="link-btn-inline" data-edit-role-id="${r.id}">Edit</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-edit-role-id]').forEach(btn => {
+    btn.addEventListener('click', () => openEditRoleModal(btn.dataset.editRoleId));
+  });
+}
+
+document.getElementById('roles-filter').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const filtered = q ? cachedGroupRoles.filter(r => r.name.toLowerCase().includes(q)) : cachedGroupRoles;
+  renderRolesTable(filtered);
+});
+
+function flashSaved(el) {
+  if (!el) return;
+  el.classList.remove('save-flash');
+  void el.offsetWidth; // restart the animation if it's already mid-flash
+  el.classList.add('save-flash');
+  setTimeout(() => el.classList.remove('save-flash'), 800);
+}
+
+let editingRoleId = null;
+
+document.getElementById('edit-role-close').addEventListener('click', () => {
+  document.getElementById('edit-role-modal').classList.remove('active');
+});
+
+async function openEditRoleModal(roleId) {
+  editingRoleId = roleId;
+  showBanner('edit-role-banner', '');
+  document.getElementById('edit-role-modal').classList.add('active');
+  await renderEditRoleModal();
+}
+
+async function renderEditRoleModal() {
+  const roleId = editingRoleId;
+  try {
+    const detail = await apiFetch('/admin/roles/' + roleId);
+
+    document.getElementById('edit-role-title').textContent = 'Edit role — ' + detail.name;
+    document.getElementById('edit-role-name').value = detail.name;
+    document.getElementById('edit-role-status-stamp').innerHTML = detail.is_active
+      ? '<span class="stamp stamp-paid" style="font-size:10px;">active</span>'
+      : '<span class="stamp stamp-void" style="font-size:10px;">disabled</span>';
+    document.getElementById('edit-role-toggle-btn').textContent = detail.is_active ? 'Disable role' : 'Enable role';
+
+    const serviceCheckboxes = ALL_SERVICES.map(s => `
+      <label>
+        <input type="checkbox" class="role-service-cb" data-service="${s}" ${detail.services.includes(s) ? 'checked' : ''}>
+        ${s}
+        ${s === 'documents' ? `
+          <select class="role-level-select" style="margin:0 0 0 4px; padding:2px 4px; font-size:12px; width:auto;" ${detail.services.includes('documents') ? '' : 'disabled'}>
+            <option value="edit" ${detail.service_levels && detail.service_levels.documents === 'edit' ? 'selected' : ''}>Edit</option>
+            <option value="view" ${detail.service_levels && detail.service_levels.documents === 'view' ? 'selected' : ''}>View only</option>
+          </select>
+        ` : ''}
+      </label>
+    `).join('');
+    document.getElementById('edit-role-service-checkboxes').innerHTML = serviceCheckboxes;
+
+    const userChips = detail.assigned_users.map(u => `
+      <span class="user-chip">${escapeHtml(u)} <button data-unassign-user="${escapeHtml(u)}" title="Remove this role from ${escapeHtml(u)}">✕</button></span>
+    `).join('') || '<span style="color:var(--text-dim); font-size:13px;">No users have this role yet — assign it when creating/adding a user in the Members section.</span>';
+    document.getElementById('edit-role-users-list').innerHTML = userChips;
+
+    document.getElementById('edit-role-service-checkboxes').querySelectorAll('.role-service-cb').forEach(cb => {
+      cb.addEventListener('change', async () => {
+        showBanner('edit-role-banner', '');
+        try {
+          if (cb.checked) {
+            const levelSelect = document.querySelector('.role-level-select');
+            const level = (cb.dataset.service === 'documents' && levelSelect) ? levelSelect.value : 'edit';
+            await apiFetch('/admin/roles/' + roleId + '/access', { method: 'POST', body: JSON.stringify({ service_name: cb.dataset.service, access_level: level }) });
+            if (cb.dataset.service === 'documents' && levelSelect) levelSelect.disabled = false;
+          } else {
+            await apiFetch('/admin/roles/' + roleId + '/access/' + cb.dataset.service, { method: 'DELETE' });
+            if (cb.dataset.service === 'documents') {
+              const levelSelect = document.querySelector('.role-level-select');
+              if (levelSelect) levelSelect.disabled = true;
+            }
+          }
+          flashSaved(cb.closest('label'));
+          loadGroupRoles();
+        } catch (err) {
+          showBanner('edit-role-banner', err.message);
+          renderEditRoleModal();
+        }
+      });
+    });
+
+    document.getElementById('edit-role-service-checkboxes').querySelectorAll('.role-level-select').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        showBanner('edit-role-banner', '');
+        try {
+          await apiFetch('/admin/roles/' + roleId + '/access', { method: 'POST', body: JSON.stringify({ service_name: 'documents', access_level: sel.value }) });
+          flashSaved(sel);
+        } catch (err) {
+          showBanner('edit-role-banner', err.message);
+          renderEditRoleModal();
+        }
+      });
+    });
+
+    document.getElementById('edit-role-users-list').querySelectorAll('[data-unassign-user]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await apiFetch('/admin/roles/' + roleId + '/assign/' + encodeURIComponent(btn.dataset.unassignUser), { method: 'DELETE' });
+          renderEditRoleModal();
+        } catch (err) {
+          showBanner('edit-role-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    showBanner('edit-role-banner', err.message);
+  }
+}
+
+document.getElementById('edit-role-rename-btn').addEventListener('click', async () => {
+  const newName = document.getElementById('edit-role-name').value.trim();
+  if (!newName) return;
+  showBanner('edit-role-banner', '');
+  try {
+    await apiFetch('/admin/roles/' + editingRoleId + '/rename', { method: 'PATCH', body: JSON.stringify({ name: newName }) });
+    await renderEditRoleModal();
+    loadGroupRoles();
+  } catch (err) {
+    showBanner('edit-role-banner', err.message);
+  }
+});
+
+document.getElementById('edit-role-toggle-btn').addEventListener('click', async () => {
+  const currentlyActive = document.getElementById('edit-role-toggle-btn').textContent === 'Disable role';
+  showBanner('edit-role-banner', '');
+  try {
+    await apiFetch('/admin/roles/' + editingRoleId + '/active', {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active: !currentlyActive })
+    });
+    await renderEditRoleModal();
+    loadGroupRoles();
+  } catch (err) {
+    showBanner('edit-role-banner', err.message);
+  }
+});
+
+document.getElementById('edit-role-delete-btn').addEventListener('click', async () => {
+  const name = document.getElementById('edit-role-name').value;
+  if (!confirm(`Delete role "${name}"? This removes its access grants and unassigns everyone who has it. This can't be undone.`)) return;
+  showBanner('edit-role-banner', '');
+  try {
+    await apiFetch('/admin/roles/' + editingRoleId, { method: 'DELETE' });
+    document.getElementById('edit-role-modal').classList.remove('active');
+    loadGroupRoles();
+  } catch (err) {
+    showBanner('edit-role-banner', err.message);
+  }
+});
+
+// ---------- audit log ----------
+document.getElementById('audit-log-close').addEventListener('click', () => {
+  document.getElementById('audit-log-modal').classList.remove('active');
+});
+
+async function viewAuditLog(documentId, docNumber) {
+  const modal = document.getElementById('audit-log-modal');
+  const content = document.getElementById('audit-log-content');
+  document.getElementById('audit-log-title').textContent = 'Audit log — ' + docNumber;
+  content.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Loading…</p>';
+  modal.classList.add('active');
+  try {
+    const entries = await apiFetch('/documents/' + documentId + '/audit-log');
+    if (!entries.length) {
+      content.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">No activity recorded yet.</p>';
+      return;
+    }
+    const actionLabels = {
+      created: 'Created', viewed: 'Viewed', edited: 'Edited',
+      status_changed: 'Changed status', file_uploaded: 'Uploaded a file'
+    };
+    content.innerHTML = `
+      <table>
+        <thead><tr><th>User</th><th>Action</th><th>When</th></tr></thead>
+        <tbody>
+          ${entries.map(e => `
+            <tr>
+              <td>${escapeHtml(e.username)}</td>
+              <td>${escapeHtml(actionLabels[e.action] || e.action)}</td>
+              <td>${new Date(e.created_at).toLocaleString()}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (err) {
+    content.innerHTML = `<p style="color:var(--danger); font-size:13px;">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// ---------- boot ----------
+addLineItem(); // start with one blank line item row
+
+async function loadPublicGroups() {
+  try {
+    const res = await fetch(API_BASE + '/auth/groups-public');
+    if (!res.ok) return;
+    const groups = await res.json();
+    const select = document.getElementById('register-group');
+    select.innerHTML = '<option value="">— not sure / none —</option>' +
+      groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  } catch (e) {
+    // non-fatal — registration still works without picking a group
+  }
+}
+loadPublicGroups();
+
+if (token) {
+  enterApp();
+} else {
+  document.getElementById('login-screen').style.display = 'flex';
+}
+</script>
+</body>
+</html>
