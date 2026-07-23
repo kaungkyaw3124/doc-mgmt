@@ -29,6 +29,7 @@ class ProjectOut(BaseModel):
 
 class CompanyCreate(BaseModel):
     name: str
+    short_name: Optional[str] = None  # e.g. "SS" for Swift Solution — used in doc numbers
     position: Optional[str] = None
     address: Optional[str] = None
     contact_no: Optional[str] = None
@@ -39,6 +40,7 @@ class CompanyCreate(BaseModel):
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
+    short_name: Optional[str] = None
     position: Optional[str] = None
     address: Optional[str] = None
     contact_no: Optional[str] = None
@@ -51,6 +53,7 @@ class CompanyOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     name: str
+    short_name: Optional[str]
     position: Optional[str]
     address: Optional[str]
     contact_no: Optional[str]

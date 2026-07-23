@@ -42,6 +42,13 @@ class ProductOut(BaseModel):
 
 class CategoryCreate(BaseModel):
     name: str
+    short_term: str  # required — this is what SKUs get generated from, e.g. "COM"
+    description: Optional[str] = None
+
+
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    short_term: Optional[str] = None
     description: Optional[str] = None
 
 
@@ -49,5 +56,6 @@ class CategoryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     name: str
+    short_term: Optional[str]
     description: Optional[str]
     created_at: datetime

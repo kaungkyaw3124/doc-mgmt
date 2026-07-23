@@ -117,6 +117,28 @@
   .btn-secondary { background: var(--paper-dim); color: var(--ink); border: 1px solid var(--hairline); }
   .btn-secondary:hover { background: var(--hairline); }
 
+  .split-btn-group { position: relative; display: inline-flex; margin-right: 8px; }
+  .split-btn-group .btn-secondary:first-child {
+    border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none;
+  }
+  .split-btn-arrow {
+    border-top-left-radius: 0; border-bottom-left-radius: 0;
+    padding: 10px 8px; line-height: 1; font-size: 11px;
+  }
+  .split-btn-menu {
+    display: none;
+    position: absolute; top: 100%; right: 0; margin-top: 4px;
+    background: #fff; border: 1px solid var(--hairline); border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    min-width: 160px; z-index: 20; overflow: hidden;
+  }
+  .split-btn-menu.active { display: block; }
+  .split-btn-menu button {
+    display: block; width: 100%; text-align: left; padding: 10px 14px;
+    background: none; border: none; font-size: 13px; color: var(--ink); cursor: pointer;
+  }
+  .split-btn-menu button:hover { background: var(--paper-dim); }
+
   .error-msg {
     background: #FBEAE7;
     border: 1px solid var(--danger);
@@ -350,6 +372,7 @@
     width: 480px; max-height: 70vh; overflow-y: auto;
     box-shadow: 0 4px 20px rgba(27,42,74,0.2);
   }
+  .modal-box-wide { width: 800px; max-width: 92vw; }
   .modal-box h3 { margin-bottom: 16px; }
   .modal-close { float: right; }
 
@@ -465,68 +488,13 @@
           <h2>Documents</h2>
           <p>Invoices, quotations, and catalogue entries.</p>
         </div>
-        <button class="btn-secondary" id="toggle-doc-form">+ New document</button>
+        <div>
+          <button class="btn-secondary" id="open-document-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="toggle-doc-form">+ New document</button>
+        </div>
       </div>
 
       <div id="documents-banner"></div>
-
-      <div class="card" id="doc-form-card" style="display:none;">
-        <h3 id="doc-form-title">New document</h3>
-        <form id="doc-form">
-          <div class="form-row">
-            <div>
-              <label for="doc-type">Type</label>
-              <select id="doc-type">
-                <option value="invoice">Invoice</option>
-                <option value="quotation">Quotation</option>
-                <option value="proposal">Proposal</option>
-                <option value="catalogue">Catalogue</option>
-              </select>
-            </div>
-            <div>
-              <label for="doc-number">Document number</label>
-              <input type="text" id="doc-number" placeholder="Leave blank to auto-generate (e.g. INV-2026-07-17)">
-            </div>
-          </div>
-          <div class="form-row">
-            <div>
-              <label for="doc-customer">Customer</label>
-              <input type="text" id="doc-customer" list="customer-datalist" placeholder="Type a customer name…" autocomplete="off">
-              <datalist id="customer-datalist"></datalist>
-              <div class="hint" id="doc-customer-hint" style="display:none;">No matching customer — this document will be created without one.</div>
-            </div>
-            <div>
-              <label for="doc-currency">Currency</label>
-              <select id="doc-currency">
-                <option value="USD">USD</option>
-                <option value="MMK">MMK</option>
-              </select>
-            </div>
-          </div>
-          <div class="form-row">
-            <div>
-              <label for="doc-project">Project</label>
-              <select id="doc-project">
-                <option value="">— no project —</option>
-              </select>
-            </div>
-            <div></div>
-          </div>
-
-          <label>Line items</label>
-          <div id="line-items"></div>
-          <button type="button" class="add-line-btn" id="add-line-btn">+ Add line item</button>
-
-          <label for="doc-terms">Terms &amp; Conditions</label>
-          <textarea id="doc-terms" rows="6" placeholder="Price Validity, Payment Lead Time, Delivery, Warranty, etc.">Price Validity: 30 Days
-Payment Lead Time: 35% on Agreement, 65% on delivery
-Lead Time: 30 to 45 days after payment confirmation
-Delivery: DDP
-Warranty: 2 years from the date of delivery</textarea>
-
-          <button type="submit" class="btn-primary" id="doc-form-submit-btn">Create document</button>
-        </form>
-      </div>
 
       <div class="filter-bar">
         <input type="text" id="documents-filter" placeholder="Filter by document number…">
@@ -534,10 +502,10 @@ Warranty: 2 years from the date of delivery</textarea>
 
       <table>
         <thead>
-          <tr><th>Number</th><th>Type</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th></tr>
+          <tr><th>Number</th><th>Type</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th></tr>
         </thead>
         <tbody id="documents-tbody">
-          <tr class="empty-row"><td colspan="9">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="10">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -550,7 +518,14 @@ Warranty: 2 years from the date of delivery</textarea>
           <p>Your catalogue.</p>
         </div>
         <div>
-          <button class="btn-secondary" id="open-category-modal-btn" style="display:none; margin-right:8px;">+ Add category</button>
+          <span class="split-btn-group" id="category-split-btn-wrap" style="display:none;">
+            <button class="btn-secondary" id="open-category-modal-btn">+ Add category</button>
+            <button class="btn-secondary split-btn-arrow" id="category-dropdown-arrow">▾</button>
+            <div class="split-btn-menu" id="category-dropdown-menu">
+              <button type="button" id="open-category-list-btn">Edit category</button>
+            </div>
+          </span>
+          <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
           <button class="btn-secondary" id="toggle-product-form">+ New product</button>
         </div>
       </div>
@@ -558,21 +533,21 @@ Warranty: 2 years from the date of delivery</textarea>
       <div id="products-banner"></div>
 
       <div class="filter-bar">
-        <input type="text" id="products-filter" placeholder="Filter by name or SKU…">
+        <input type="text" id="products-filter" placeholder="Filter by name or item number…">
       </div>
 
       <table>
         <thead>
           <tr>
-            <th>SKU</th>
+            <th>Item Number</th>
             <th>Name <button class="sort-btn" data-sort-table="products" data-sort-col="name">⇅</button></th>
             <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
             <th>Price <button class="sort-btn" data-sort-table="products" data-sort-col="price">⇅</button></th>
-            <th>Catalog</th><th>Edit</th>
+            <th>Catalog</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="products-tbody">
-          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="7">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -588,33 +563,6 @@ Warranty: 2 years from the date of delivery</textarea>
       </div>
 
       <div id="customers-banner"></div>
-
-      <div class="card" id="customer-form-card" style="display:none;">
-        <h3 id="customer-form-title">New customer</h3>
-        <form id="customer-form">
-          <div class="form-row">
-            <div>
-              <label for="customer-name">Name / organization</label>
-              <input type="text" id="customer-name" placeholder="Acme Corp" required>
-            </div>
-            <div>
-              <label for="customer-email">Email</label>
-              <input type="text" id="customer-email" placeholder="billing@acme.com">
-            </div>
-          </div>
-          <div class="form-row">
-            <div>
-              <label for="customer-phone">Phone</label>
-              <input type="text" id="customer-phone" placeholder="+95 9 xxx xxx xxx">
-            </div>
-            <div>
-              <label for="customer-address">Address</label>
-              <input type="text" id="customer-address" placeholder="Yangon, Myanmar">
-            </div>
-          </div>
-          <button type="submit" class="btn-primary" id="customer-form-submit-btn">Create customer</button>
-        </form>
-      </div>
 
       <div class="filter-bar">
         <input type="text" id="customers-filter" placeholder="Filter by name…">
@@ -655,25 +603,6 @@ Warranty: 2 years from the date of delivery</textarea>
         </table>
       </div>
 
-      <div class="card" id="project-form-card" style="display:none;">
-        <h3 id="project-form-title">New project</h3>
-        <form id="project-form">
-          <div class="form-row">
-            <div>
-              <label for="project-name">Project name</label>
-              <input type="text" id="project-name" placeholder="Network Upgrade Phase 2" required>
-            </div>
-            <div>
-              <label for="project-year">Budget year</label>
-              <input type="text" id="project-year" placeholder="2025-2026">
-            </div>
-          </div>
-          <label for="project-description">Description</label>
-          <textarea id="project-description" rows="2" placeholder="Optional notes about this project"></textarea>
-          <button type="submit" class="btn-primary" id="project-form-submit-btn">Create project</button>
-        </form>
-      </div>
-
       <div class="filter-bar">
         <input type="text" id="projects-filter" placeholder="Filter by name…">
       </div>
@@ -703,48 +632,6 @@ Warranty: 2 years from the date of delivery</textarea>
       </div>
 
       <div id="company-banner"></div>
-
-      <div class="card" id="company-form-card" style="display:none;">
-        <h3 id="company-form-title">New company</h3>
-        <form id="company-form">
-          <div class="form-row">
-            <div>
-              <label for="company-name">Company name</label>
-              <input type="text" id="company-name" placeholder="Trustwell International Co., Ltd." required>
-            </div>
-            <div>
-              <label for="company-position">Signer position</label>
-              <input type="text" id="company-position" placeholder="Director">
-            </div>
-          </div>
-          <div class="form-row">
-            <div>
-              <label for="company-address">Address</label>
-              <input type="text" id="company-address" placeholder="Yangon, Myanmar">
-            </div>
-            <div>
-              <label for="company-contact">Contact No</label>
-              <input type="text" id="company-contact" placeholder="+95 9 xxx xxx xxx">
-            </div>
-          </div>
-          <div class="form-row">
-            <div>
-              <label for="company-email">Support email</label>
-              <input type="text" id="company-email" placeholder="support@trustwell.com">
-            </div>
-            <div>
-              <label for="company-phone">Support phone</label>
-              <input type="text" id="company-phone" placeholder="+95 9 xxx xxx xxx">
-            </div>
-          </div>
-          <label for="company-logo">Logo (optional)</label>
-          <input type="file" id="company-logo" accept="image/*">
-          <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-top:4px;">
-            <input type="checkbox" id="company-is-primary" style="width:auto; margin:0;"> Use as primary company on quotations
-          </label>
-          <button type="submit" class="btn-primary" id="company-form-submit-btn" style="margin-top:14px;">Create company</button>
-        </form>
-      </div>
 
       <div class="filter-bar">
         <input type="text" id="company-filter" placeholder="Filter by name…">
@@ -1007,6 +894,180 @@ Warranty: 2 years from the date of delivery</textarea>
 </div>
 
 <!-- ============ NEW/EDIT PRODUCT MODAL ============ -->
+<!-- ============ NEW/EDIT DOCUMENT MODAL ============ -->
+<!-- ============ NEW/EDIT CUSTOMER MODAL ============ -->
+<div class="modal-overlay" id="customer-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="customer-modal-close">Close ✕</button>
+    <h3 id="customer-form-title">New customer</h3>
+    <div id="customer-modal-banner"></div>
+    <form id="customer-form">
+      <div class="form-row">
+        <div>
+          <label for="customer-name">Name / organization</label>
+          <input type="text" id="customer-name" placeholder="Acme Corp" required>
+        </div>
+        <div>
+          <label for="customer-email">Email</label>
+          <input type="text" id="customer-email" placeholder="billing@acme.com">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="customer-phone">Phone</label>
+          <input type="text" id="customer-phone" placeholder="+95 9 xxx xxx xxx">
+        </div>
+        <div>
+          <label for="customer-address">Address</label>
+          <input type="text" id="customer-address" placeholder="Yangon, Myanmar">
+        </div>
+      </div>
+      <button type="submit" class="btn-primary" id="customer-form-submit-btn">Create customer</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ NEW/EDIT PROJECT MODAL ============ -->
+<div class="modal-overlay" id="project-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="project-modal-close">Close ✕</button>
+    <h3 id="project-form-title">New project</h3>
+    <div id="project-modal-banner"></div>
+    <form id="project-form">
+      <div class="form-row">
+        <div>
+          <label for="project-name">Project name</label>
+          <input type="text" id="project-name" placeholder="Network Upgrade Phase 2" required>
+        </div>
+        <div>
+          <label for="project-year">Budget year</label>
+          <input type="text" id="project-year" placeholder="2025-2026">
+        </div>
+      </div>
+      <label for="project-description">Description</label>
+      <textarea id="project-description" rows="2" placeholder="Optional notes about this project"></textarea>
+      <button type="submit" class="btn-primary" id="project-form-submit-btn">Create project</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ NEW/EDIT COMPANY MODAL ============ -->
+<div class="modal-overlay" id="company-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="company-modal-close">Close ✕</button>
+    <h3 id="company-form-title">New company</h3>
+    <div id="company-modal-banner"></div>
+    <form id="company-form">
+      <div class="form-row">
+        <div>
+          <label for="company-name">Company name</label>
+          <input type="text" id="company-name" placeholder="Trustwell International Co., Ltd." required>
+        </div>
+        <div>
+          <label for="company-short-name">Short name (used in doc numbers, e.g. "SS")</label>
+          <input type="text" id="company-short-name" placeholder="SS" maxlength="20">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="company-position">Signer position</label>
+          <input type="text" id="company-position" placeholder="Director">
+        </div>
+        <div></div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="company-address">Address</label>
+          <input type="text" id="company-address" placeholder="Yangon, Myanmar">
+        </div>
+        <div>
+          <label for="company-contact">Contact No</label>
+          <input type="text" id="company-contact" placeholder="+95 9 xxx xxx xxx">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="company-email">Support email</label>
+          <input type="text" id="company-email" placeholder="support@trustwell.com">
+        </div>
+        <div>
+          <label for="company-phone">Support phone</label>
+          <input type="text" id="company-phone" placeholder="+95 9 xxx xxx xxx">
+        </div>
+      </div>
+      <label for="company-logo">Logo (optional)</label>
+      <input type="file" id="company-logo" accept="image/*">
+      <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-top:4px;">
+        <input type="checkbox" id="company-is-primary" style="width:auto; margin:0;"> Use as primary company on quotations
+      </label>
+      <button type="submit" class="btn-primary" id="company-form-submit-btn" style="margin-top:14px;">Create company</button>
+    </form>
+  </div>
+</div>
+
+<div class="modal-overlay" id="doc-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="doc-modal-close">Close ✕</button>
+    <h3 id="doc-form-title">New document</h3>
+    <div id="doc-modal-banner"></div>
+    <form id="doc-form">
+      <div class="form-row">
+        <div>
+          <label for="doc-type">Type</label>
+          <select id="doc-type">
+            <option value="invoice">Invoice</option>
+            <option value="quotation">Quotation</option>
+            <option value="proposal">Proposal</option>
+            <option value="catalogue">Catalogue</option>
+          </select>
+        </div>
+        <div>
+          <label for="doc-number">Document number</label>
+          <input type="text" id="doc-number" placeholder="Auto-generating…">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="doc-customer">Customer</label>
+          <input type="text" id="doc-customer" list="customer-datalist" placeholder="Type a customer name…" autocomplete="off">
+          <datalist id="customer-datalist"></datalist>
+          <datalist id="product-datalist"></datalist>
+          <div class="hint" id="doc-customer-hint" style="display:none;">No matching customer — this document will be created without one.</div>
+        </div>
+        <div>
+          <label for="doc-currency">Currency</label>
+          <select id="doc-currency">
+            <option value="USD">USD</option>
+            <option value="MMK">MMK</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="doc-project">Project</label>
+          <select id="doc-project">
+            <option value="">— no project —</option>
+          </select>
+        </div>
+        <div></div>
+      </div>
+
+      <label>Line items</label>
+      <div id="line-items"></div>
+      <button type="button" class="add-line-btn" id="add-line-btn">+ Add line item</button>
+
+      <label for="doc-terms">Terms &amp; Conditions</label>
+      <textarea id="doc-terms" rows="6" placeholder="Price Validity, Payment Lead Time, Delivery, Warranty, etc.">Price Validity: 30 Days
+Payment Lead Time: 35% on Agreement, 65% on delivery
+Lead Time: 30 to 45 days after payment confirmation
+Delivery: DDP
+Warranty: 2 years from the date of delivery</textarea>
+
+      <button type="submit" class="btn-primary" id="doc-form-submit-btn">Create document</button>
+    </form>
+  </div>
+</div>
+
 <div class="modal-overlay" id="product-modal">
   <div class="modal-box">
     <button class="link-btn-inline modal-close" id="product-modal-close">Close ✕</button>
@@ -1015,7 +1076,7 @@ Warranty: 2 years from the date of delivery</textarea>
     <form id="product-form">
       <div class="form-row">
         <div>
-          <label for="product-sku">SKU</label>
+          <label for="product-sku">Item Number</label>
           <input type="text" id="product-sku" placeholder="Leave blank to auto-generate (e.g. COM-0001)">
         </div>
         <div>
@@ -1039,6 +1100,7 @@ Warranty: 2 years from the date of delivery</textarea>
       <textarea id="product-description" rows="2" placeholder="Short description of this product"></textarea>
       <label for="product-file">Catalog file (image, PDF, or spec sheet — optional)</label>
       <input type="file" id="product-file">
+      <div id="product-current-file-info" style="display:none; font-size:13px; margin-top:6px;"></div>
       <button type="submit" class="btn-primary" id="product-form-submit-btn">Create product</button>
     </form>
   </div>
@@ -1052,9 +1114,70 @@ Warranty: 2 years from the date of delivery</textarea>
     <div id="category-modal-banner"></div>
     <label for="new-category-name">Category</label>
     <input type="text" id="new-category-name" placeholder="e.g. Server">
+    <label for="new-category-short-term">Short term (used in SKUs, e.g. "SER")</label>
+    <input type="text" id="new-category-short-term" placeholder="SER" maxlength="20">
     <label for="new-category-description">Description</label>
     <textarea id="new-category-description" rows="2" placeholder="Optional — what belongs in this category"></textarea>
     <button type="button" class="btn-primary" id="create-category-btn">Add</button>
+  </div>
+</div>
+
+<!-- ============ CATEGORY LIST MODAL ============ -->
+<div class="modal-overlay" id="category-list-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="category-list-close">Close ✕</button>
+    <h3>Categories</h3>
+    <div id="category-list-banner"></div>
+    <table>
+      <thead><tr><th>Category</th><th>Short term</th><th>Description</th><th>Edit</th></tr></thead>
+      <tbody id="category-list-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ EDIT CATEGORY MODAL ============ -->
+<div class="modal-overlay" id="edit-category-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="edit-category-close">Close ✕</button>
+    <h3>Edit category</h3>
+    <div id="edit-category-banner"></div>
+    <label for="edit-category-name">Category</label>
+    <input type="text" id="edit-category-name">
+    <label for="edit-category-short-term">Short term (used in SKUs, e.g. "SER")</label>
+    <input type="text" id="edit-category-short-term" maxlength="20">
+    <label for="edit-category-description">Description</label>
+    <textarea id="edit-category-description" rows="2" placeholder="Optional — what belongs in this category"></textarea>
+    <button type="button" class="btn-primary" id="edit-category-save-btn">Save changes</button>
+  </div>
+</div>
+
+<!-- ============ DOCUMENT RECYCLE BIN MODAL ============ -->
+<div class="modal-overlay" id="document-trash-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="document-trash-close">Close ✕</button>
+    <h3>Documents — recycle bin</h3>
+    <div id="document-trash-banner"></div>
+    <table>
+      <thead><tr><th>Number</th><th>Type</th><th>Total</th><th>Restore</th></tr></thead>
+      <tbody id="document-trash-tbody">
+        <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ PRODUCT RECYCLE BIN MODAL ============ -->
+<div class="modal-overlay" id="product-trash-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="product-trash-close">Close ✕</button>
+    <h3>Products — recycle bin</h3>
+    <div id="product-trash-banner"></div>
+    <table>
+      <thead><tr><th>Item Number</th><th>Name</th><th>Price</th><th>Restore</th></tr></thead>
+      <tbody id="product-trash-tbody">
+        <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -1221,7 +1344,7 @@ async function enterApp() {
       document.getElementById('new-group-form-wrap').style.display = 'block';
     }
     const canManageCategories = me.is_superuser || (me.service_access && me.service_access.includes('categories'));
-    document.getElementById('open-category-modal-btn').style.display = canManageCategories ? 'inline-block' : 'none';
+    document.getElementById('category-split-btn-wrap').style.display = canManageCategories ? 'inline-flex' : 'none';
   } catch (e) {
     document.getElementById('whoami-username').textContent = '—';
   }
@@ -1245,21 +1368,39 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
 // ---------- documents ----------
 document.getElementById('toggle-doc-form').addEventListener('click', () => {
-  const card = document.getElementById('doc-form-card');
-  const opening = card.style.display === 'none';
-  card.style.display = opening ? 'block' : 'none';
-  if (opening) {
-    editingDocumentId = null;
-    document.getElementById('doc-form').reset();
-    document.getElementById('doc-customer-hint').style.display = 'none';
-    document.getElementById('doc-form-title').textContent = 'New document';
-    document.getElementById('doc-form-submit-btn').textContent = 'Create document';
-    document.getElementById('doc-type').disabled = false;
-    document.getElementById('doc-number').disabled = false;
-    document.getElementById('line-items').innerHTML = '';
-    addLineItem();
-  }
+  editingDocumentId = null;
+  document.getElementById('doc-form').reset();
+  document.getElementById('doc-customer-hint').style.display = 'none';
+  document.getElementById('doc-form-title').textContent = 'New document';
+  document.getElementById('doc-form-submit-btn').textContent = 'Create document';
+  document.getElementById('doc-type').disabled = false;
+  document.getElementById('doc-number').disabled = false;
+  document.getElementById('doc-number').value = '';
+  document.getElementById('doc-number').placeholder = 'Auto-generating…';
+  document.getElementById('line-items').innerHTML = '';
+  addLineItem();
+  prefillNextDocNumber();
+  document.getElementById('doc-modal').classList.add('active');
 });
+
+document.getElementById('doc-modal-close').addEventListener('click', () => {
+  document.getElementById('doc-modal').classList.remove('active');
+});
+
+async function prefillNextDocNumber() {
+  try {
+    const result = await apiFetch('/documents/next-number');
+    // Only fill it in if the user hasn't already started typing their own
+    // while this was loading, and hasn't switched to editing a document.
+    const field = document.getElementById('doc-number');
+    if (!field.value && !editingDocumentId) {
+      field.value = result.doc_number;
+    }
+  } catch (err) {
+    // non-fatal — the field just stays blank and the server will
+    // generate a number at submit time either way.
+  }
+}
 
 let editingDocumentId = null;
 let cachedDocuments = [];
@@ -1270,16 +1411,20 @@ function addLineItem(prefill) {
   const div = document.createElement('div');
   div.className = 'line-item-row';
   div.dataset.lineId = id;
-  const productOptions = cachedProducts.map(p =>
-    `<option value="${p.id}" data-price="${p.unit_price || ''}" data-name="${escapeHtml(p.name)}" ${prefill && prefill.product_id === p.id ? 'selected' : ''}>${escapeHtml(p.sku)} — ${escapeHtml(p.name)}</option>`
-  ).join('');
+
+  let prefillProductDisplay = '';
+  if (prefill && prefill.product_id) {
+    const p = cachedProducts.find(p => p.id === prefill.product_id);
+    if (p) {
+      prefillProductDisplay = `${p.sku} — ${p.name}`;
+      div.dataset.resolvedProductId = p.id;
+    }
+  }
+
   div.innerHTML = `
     <div style="flex: 1.4;">
       <label>Product (optional)</label>
-      <select class="li-product">
-        <option value="">— free text instead —</option>
-        ${productOptions}
-      </select>
+      <input type="text" class="li-product-search" list="product-datalist" placeholder="Type to search products…" autocomplete="off" value="${escapeHtml(prefillProductDisplay)}">
     </div>
     <div><label>Description</label><input type="text" class="li-desc" placeholder="Widget A" value="${prefill ? escapeHtml(prefill.description || '') : ''}" ${prefill && prefill.product_id ? 'disabled' : ''}></div>
     <div style="max-width:70px;"><label>Qty</label><input type="text" class="li-qty" placeholder="1" value="${prefill ? prefill.quantity : ''}"></div>
@@ -1290,17 +1435,20 @@ function addLineItem(prefill) {
   `;
   document.getElementById('line-items').appendChild(div);
   div.querySelector('.remove-line').addEventListener('click', () => div.remove());
-  div.querySelector('.li-product').addEventListener('change', (e) => {
-    const opt = e.target.selectedOptions[0];
+  div.querySelector('.li-product-search').addEventListener('input', (e) => {
+    const typed = e.target.value.trim();
     const descInput = div.querySelector('.li-desc');
     const priceInput = div.querySelector('.li-price');
-    if (opt.value) {
-      descInput.value = opt.dataset.name;
+    const match = typed && cachedProducts.find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
+    if (match) {
+      div.dataset.resolvedProductId = match.id;
+      descInput.value = match.name;
       descInput.disabled = true;
-      if (opt.dataset.price) priceInput.value = opt.dataset.price;
+      if (match.unit_price) priceInput.value = match.unit_price;
     } else {
+      delete div.dataset.resolvedProductId;
       descInput.disabled = false;
-      descInput.value = '';
+      if (!typed) descInput.value = '';
     }
   });
 }
@@ -1314,22 +1462,17 @@ document.getElementById('doc-customer').addEventListener('input', (e) => {
 });
 
 function refreshLineItemProductOptions() {
-  document.querySelectorAll('.li-product').forEach(select => {
-    const currentValue = select.value;
-    const productOptions = cachedProducts.map(p =>
-      `<option value="${p.id}" data-price="${p.unit_price || ''}" data-name="${escapeHtml(p.name)}">${escapeHtml(p.sku)} — ${escapeHtml(p.name)}</option>`
-    ).join('');
-    select.innerHTML = `<option value="">— free text instead —</option>${productOptions}`;
-    if (currentValue) select.value = currentValue;
-  });
+  const datalist = document.getElementById('product-datalist');
+  if (!datalist) return;
+  datalist.innerHTML = cachedProducts.map(p => `<option value="${escapeHtml(p.sku)} — ${escapeHtml(p.name)}">`).join('');
 }
 
 document.getElementById('doc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  showBanner('documents-banner', '');
+  showBanner('doc-modal-banner', '');
   const items = [];
   document.querySelectorAll('#line-items .line-item-row').forEach(row => {
-    const product_id = row.querySelector('.li-product').value || null;
+    const product_id = row.dataset.resolvedProductId || null;
     const description = row.querySelector('.li-desc').value;
     const quantity = row.querySelector('.li-qty').value;
     const unit = row.querySelector('.li-unit').value || 'Nos';
@@ -1344,7 +1487,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     items.push(item);
   });
   if (items.length === 0) {
-    showBanner('documents-banner', 'Add at least one line item: either pick a product, or fill in description + quantity + price.');
+    showBanner('doc-modal-banner', 'Add at least one line item: either pick a product, or fill in description + quantity + price.');
     return;
   }
   try {
@@ -1371,7 +1514,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     document.getElementById('doc-customer-hint').style.display = 'none';
     document.getElementById('line-items').innerHTML = '';
     addLineItem();
-    document.getElementById('doc-form-card').style.display = 'none';
+    document.getElementById('doc-modal').classList.remove('active');
     document.getElementById('doc-form-title').textContent = 'New document';
     document.getElementById('doc-form-submit-btn').textContent = 'Create document';
     document.getElementById('doc-type').disabled = false;
@@ -1379,13 +1522,13 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     editingDocumentId = null;
     loadDocuments();
   } catch (err) {
-    showBanner('documents-banner', err.message);
+    showBanner('doc-modal-banner', err.message);
   }
 });
 
 function startEditDocument(doc) {
   editingDocumentId = doc.id;
-  document.getElementById('doc-form-card').style.display = 'block';
+  document.getElementById('doc-modal').classList.add('active');
   document.getElementById('doc-form-title').textContent = 'Edit document — ' + doc.doc_number;
   document.getElementById('doc-form-submit-btn').textContent = 'Save changes';
 
@@ -1443,14 +1586,14 @@ async function loadDocuments() {
     cachedDocuments = docs;
     renderDocumentsTable(docs);
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderDocumentsTable(docs) {
   const tbody = document.getElementById('documents-tbody');
   if (!docs.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No documents match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No documents match.</td></tr>';
     return;
   }
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
@@ -1477,6 +1620,7 @@ function renderDocumentsTable(docs) {
         &nbsp;|&nbsp;
         <button class="link-btn-inline" data-log-doc-id="${d.id}" data-log-doc-number="${escapeHtml(d.doc_number)}">Log</button>
       </td>
+      <td><button class="link-btn-inline" data-trash-doc-id="${d.id}" data-trash-doc-number="${escapeHtml(d.doc_number)}" style="color:var(--danger);">Delete</button></td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-goto-project-id]').forEach(btn => {
@@ -1505,6 +1649,18 @@ function renderDocumentsTable(docs) {
   tbody.querySelectorAll('[data-export-id]').forEach(btn => {
     btn.addEventListener('click', () => downloadQuotation(btn.dataset.exportId, btn.dataset.exportNumber, btn.dataset.exportFormat));
   });
+  tbody.querySelectorAll('[data-trash-doc-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Move "${btn.dataset.trashDocNumber}" to the recycle bin? You can restore it from there later.`)) return;
+      showBanner('documents-banner', '');
+      try {
+        await apiFetch('/documents/' + btn.dataset.trashDocId + '/trash', { method: 'PATCH' });
+        loadDocuments();
+      } catch (err) {
+        showBanner('documents-banner', err.message);
+      }
+    });
+  });
 }
 
 document.getElementById('documents-filter').addEventListener('input', (e) => {
@@ -1513,25 +1669,70 @@ document.getElementById('documents-filter').addEventListener('input', (e) => {
   renderDocumentsTable(filtered);
 });
 
+document.getElementById('open-document-trash-btn').addEventListener('click', async () => {
+  showBanner('document-trash-banner', '');
+  document.getElementById('document-trash-modal').classList.add('active');
+  await loadDocumentTrash();
+});
+
+document.getElementById('document-trash-close').addEventListener('click', () => {
+  document.getElementById('document-trash-modal').classList.remove('active');
+});
+
+async function loadDocumentTrash() {
+  const tbody = document.getElementById('document-trash-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  try {
+    const docs = await apiFetch('/documents/trash');
+    if (!docs.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Recycle bin is empty.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = docs.map(d => `
+      <tr>
+        <td class="mono">${escapeHtml(d.doc_number)}</td>
+        <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
+        <td class="mono">${fmtMoney(d.total)} ${escapeHtml(d.currency || '')}</td>
+        <td><button class="link-btn-inline" data-restore-doc-id="${d.id}">Restore</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('[data-restore-doc-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('document-trash-banner', '');
+        try {
+          await apiFetch('/documents/' + btn.dataset.restoreDocId + '/restore', { method: 'PATCH' });
+          await loadDocumentTrash();
+          loadDocuments();
+        } catch (err) {
+          showBanner('document-trash-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
 // ---------- projects ----------
 let editingProjectId = null;
 let cachedProjects = [];
 
 document.getElementById('toggle-project-form').addEventListener('click', () => {
-  const card = document.getElementById('project-form-card');
-  const opening = card.style.display === 'none';
-  card.style.display = opening ? 'block' : 'none';
-  if (opening) {
-    editingProjectId = null;
-    document.getElementById('project-form').reset();
-    document.getElementById('project-form-title').textContent = 'New project';
-    document.getElementById('project-form-submit-btn').textContent = 'Create project';
-  }
+  editingProjectId = null;
+  document.getElementById('project-form').reset();
+  document.getElementById('project-form-title').textContent = 'New project';
+  document.getElementById('project-form-submit-btn').textContent = 'Create project';
+  showBanner('project-modal-banner', '');
+  document.getElementById('project-modal').classList.add('active');
+});
+
+document.getElementById('project-modal-close').addEventListener('click', () => {
+  document.getElementById('project-modal').classList.remove('active');
 });
 
 document.getElementById('project-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  showBanner('projects-banner', '');
+  showBanner('project-modal-banner', '');
   const payload = {
     name: document.getElementById('project-name').value,
     budget_year: document.getElementById('project-year').value || null,
@@ -1544,25 +1745,24 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
       await apiFetch('/projects', { method: 'POST', body: JSON.stringify(payload) });
     }
     document.getElementById('project-form').reset();
-    document.getElementById('project-form-card').style.display = 'none';
+    document.getElementById('project-modal').classList.remove('active');
     document.getElementById('project-form-title').textContent = 'New project';
     document.getElementById('project-form-submit-btn').textContent = 'Create project';
     editingProjectId = null;
     loadProjects();
   } catch (err) {
-    showBanner('projects-banner', err.message);
+    showBanner('project-modal-banner', err.message);
   }
 });
 
 function startEditProject(project) {
   editingProjectId = project.id;
-  document.getElementById('project-form-card').style.display = 'block';
+  document.getElementById('project-modal').classList.add('active');
   document.getElementById('project-form-title').textContent = 'Edit project — ' + project.name;
   document.getElementById('project-form-submit-btn').textContent = 'Save changes';
   document.getElementById('project-name').value = project.name;
   document.getElementById('project-year').value = project.budget_year || '';
   document.getElementById('project-description').value = project.description || '';
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 async function viewProjectDocuments(project) {
@@ -1662,23 +1862,25 @@ document.getElementById('projects-filter').addEventListener('input', () => apply
 let editingCompanyId = null;
 
 document.getElementById('toggle-company-form').addEventListener('click', () => {
-  const card = document.getElementById('company-form-card');
-  const opening = card.style.display === 'none';
-  card.style.display = opening ? 'block' : 'none';
-  if (opening) {
-    editingCompanyId = null;
-    document.getElementById('company-form').reset();
-    document.getElementById('company-form-title').textContent = 'New company';
-    document.getElementById('company-form-submit-btn').textContent = 'Create company';
-  }
+  editingCompanyId = null;
+  document.getElementById('company-form').reset();
+  document.getElementById('company-form-title').textContent = 'New company';
+  document.getElementById('company-form-submit-btn').textContent = 'Create company';
+  showBanner('company-modal-banner', '');
+  document.getElementById('company-modal').classList.add('active');
+});
+
+document.getElementById('company-modal-close').addEventListener('click', () => {
+  document.getElementById('company-modal').classList.remove('active');
 });
 
 document.getElementById('company-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  showBanner('company-banner', '');
+  showBanner('company-modal-banner', '');
   const logoInput = document.getElementById('company-logo');
   const payload = {
     name: document.getElementById('company-name').value,
+    short_name: document.getElementById('company-short-name').value || null,
     position: document.getElementById('company-position').value || null,
     address: document.getElementById('company-address').value || null,
     contact_no: document.getElementById('company-contact').value || null,
@@ -1705,29 +1907,29 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     }
 
     document.getElementById('company-form').reset();
-    document.getElementById('company-form-card').style.display = 'none';
+    document.getElementById('company-modal').classList.remove('active');
     document.getElementById('company-form-title').textContent = 'New company';
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
     editingCompanyId = null;
     loadCompanies();
   } catch (err) {
-    showBanner('company-banner', err.message);
+    showBanner('company-modal-banner', err.message);
   }
 });
 
 function startEditCompany(company) {
   editingCompanyId = company.id;
-  document.getElementById('company-form-card').style.display = 'block';
+  document.getElementById('company-modal').classList.add('active');
   document.getElementById('company-form-title').textContent = 'Edit company — ' + company.name;
   document.getElementById('company-form-submit-btn').textContent = 'Save changes';
   document.getElementById('company-name').value = company.name;
+  document.getElementById('company-short-name').value = company.short_name || '';
   document.getElementById('company-position').value = company.position || '';
   document.getElementById('company-address').value = company.address || '';
   document.getElementById('company-contact').value = company.contact_no || '';
   document.getElementById('company-email').value = company.support_email || '';
   document.getElementById('company-phone').value = company.support_phone || '';
   document.getElementById('company-is-primary').checked = company.is_primary;
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 let cachedCompanies = [];
@@ -1784,20 +1986,21 @@ let cachedCustomers = [];
 let editingCustomerId = null;
 
 document.getElementById('toggle-customer-form').addEventListener('click', () => {
-  const card = document.getElementById('customer-form-card');
-  const opening = card.style.display === 'none';
-  card.style.display = opening ? 'block' : 'none';
-  if (opening) {
-    editingCustomerId = null;
-    document.getElementById('customer-form').reset();
-    document.getElementById('customer-form-title').textContent = 'New customer';
-    document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
-  }
+  editingCustomerId = null;
+  document.getElementById('customer-form').reset();
+  document.getElementById('customer-form-title').textContent = 'New customer';
+  document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
+  showBanner('customer-modal-banner', '');
+  document.getElementById('customer-modal').classList.add('active');
+});
+
+document.getElementById('customer-modal-close').addEventListener('click', () => {
+  document.getElementById('customer-modal').classList.remove('active');
 });
 
 document.getElementById('customer-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  showBanner('customers-banner', '');
+  showBanner('customer-modal-banner', '');
   const payload = {
     name: document.getElementById('customer-name').value,
     email: document.getElementById('customer-email').value || null,
@@ -1813,26 +2016,25 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
       await apiFetch('/customers', { method: 'POST', body: JSON.stringify(payload) });
     }
     document.getElementById('customer-form').reset();
-    document.getElementById('customer-form-card').style.display = 'none';
+    document.getElementById('customer-modal').classList.remove('active');
     document.getElementById('customer-form-title').textContent = 'New customer';
     document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
     editingCustomerId = null;
     loadCustomers();
   } catch (err) {
-    showBanner('customers-banner', err.message);
+    showBanner('customer-modal-banner', err.message);
   }
 });
 
 function startEditCustomer(customer) {
   editingCustomerId = customer.id;
-  document.getElementById('customer-form-card').style.display = 'block';
+  document.getElementById('customer-modal').classList.add('active');
   document.getElementById('customer-form-title').textContent = 'Edit customer — ' + customer.name;
   document.getElementById('customer-form-submit-btn').textContent = 'Save changes';
   document.getElementById('customer-name').value = customer.name;
   document.getElementById('customer-email').value = customer.email || '';
   document.getElementById('customer-phone').value = customer.phone || '';
   document.getElementById('customer-address').value = (customer.billing_address && customer.billing_address.address) || '';
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // Customer field on the document form is a type-to-search input (backed by
@@ -1897,6 +2099,7 @@ document.getElementById('toggle-product-form').addEventListener('click', () => {
   document.getElementById('product-form-title').textContent = 'New product';
   document.getElementById('product-sku').disabled = false;
   document.getElementById('product-form-submit-btn').textContent = 'Create product';
+  document.getElementById('product-current-file-info').style.display = 'none';
   document.getElementById('product-modal').classList.add('active');
 });
 
@@ -1934,16 +2137,103 @@ document.getElementById('category-modal-close').addEventListener('click', () => 
 
 document.getElementById('create-category-btn').addEventListener('click', async () => {
   const name = document.getElementById('new-category-name').value.trim();
+  const shortTerm = document.getElementById('new-category-short-term').value.trim();
   const description = document.getElementById('new-category-description').value.trim();
   if (!name) return;
+  if (!shortTerm) {
+    showBanner('category-modal-banner', 'Short term is required — this becomes the item number prefix for products in this category.');
+    return;
+  }
   showBanner('category-modal-banner', '');
   try {
-    await apiFetch('/categories', { method: 'POST', body: JSON.stringify({ name, description: description || null }) });
+    await apiFetch('/categories', { method: 'POST', body: JSON.stringify({ name, short_term: shortTerm, description: description || null }) });
     await loadCategories();
     document.getElementById('product-category').value = name;
+    document.getElementById('new-category-short-term').value = '';
     document.getElementById('category-modal').classList.remove('active');
   } catch (err) {
     showBanner('category-modal-banner', err.message);
+  }
+});
+
+document.getElementById('category-dropdown-arrow').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('category-dropdown-menu').classList.toggle('active');
+});
+
+document.addEventListener('click', () => {
+  document.getElementById('category-dropdown-menu').classList.remove('active');
+});
+
+document.getElementById('open-category-list-btn').addEventListener('click', async () => {
+  document.getElementById('category-dropdown-menu').classList.remove('active');
+  showBanner('category-list-banner', '');
+  document.getElementById('category-list-modal').classList.add('active');
+  await loadCategories();
+  renderCategoryListTable();
+});
+
+function renderCategoryListTable() {
+  const tbody = document.getElementById('category-list-tbody');
+  if (!cachedCategories.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No categories yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = cachedCategories.map(c => `
+    <tr>
+      <td>${escapeHtml(c.name)}</td>
+      <td class="mono">${c.short_term ? escapeHtml(c.short_term) : '—'}</td>
+      <td style="color:var(--text-dim); font-size:13px;">${c.description ? escapeHtml(c.description) : '—'}</td>
+      <td><button class="link-btn-inline" data-edit-category-id="${c.id}">Edit</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-edit-category-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const category = cachedCategories.find(c => c.id === btn.dataset.editCategoryId);
+      if (category) openEditCategoryModal(category);
+    });
+  });
+}
+
+document.getElementById('category-list-close').addEventListener('click', () => {
+  document.getElementById('category-list-modal').classList.remove('active');
+});
+
+let editingCategoryId = null;
+
+function openEditCategoryModal(category) {
+  editingCategoryId = category.id;
+  document.getElementById('edit-category-name').value = category.name;
+  document.getElementById('edit-category-short-term').value = category.short_term || '';
+  document.getElementById('edit-category-description').value = category.description || '';
+  showBanner('edit-category-banner', '');
+  document.getElementById('category-list-modal').classList.remove('active');
+  document.getElementById('edit-category-modal').classList.add('active');
+}
+
+document.getElementById('edit-category-close').addEventListener('click', () => {
+  document.getElementById('edit-category-modal').classList.remove('active');
+});
+
+document.getElementById('edit-category-save-btn').addEventListener('click', async () => {
+  const name = document.getElementById('edit-category-name').value.trim();
+  const shortTerm = document.getElementById('edit-category-short-term').value.trim();
+  const description = document.getElementById('edit-category-description').value.trim();
+  if (!name) return;
+  if (!shortTerm) {
+    showBanner('edit-category-banner', 'Short term is required — this becomes the item number prefix for products in this category.');
+    return;
+  }
+  showBanner('edit-category-banner', '');
+  try {
+    await apiFetch('/categories/' + editingCategoryId, {
+      method: 'PATCH',
+      body: JSON.stringify({ name, short_term: shortTerm, description: description || null })
+    });
+    await loadCategories();
+    document.getElementById('edit-category-modal').classList.remove('active');
+  } catch (err) {
+    showBanner('edit-category-banner', err.message);
   }
 });
 
@@ -1974,11 +2264,23 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     if (fileInput.files.length > 0) {
       const formData = new FormData();
       formData.append('file', fileInput.files[0]);
-      await fetch(API_BASE + '/products/' + product.id + '/file', {
+      const uploadResponse = await fetch(API_BASE + '/products/' + product.id + '/file', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
         body: formData
       });
+      if (!uploadResponse.ok) {
+        let detail = 'Catalog file upload failed.';
+        try {
+          const errBody = await uploadResponse.json();
+          if (errBody.detail) detail = errBody.detail;
+        } catch (parseErr) {
+          // response wasn't JSON — stick with the generic message
+        }
+        showBanner('product-modal-banner', `Product saved, but the catalog file didn't upload: ${detail}`);
+        loadProducts();
+        return;
+      }
     }
 
     document.getElementById('product-form').reset();
@@ -2003,6 +2305,13 @@ function startEditProduct(product) {
   document.getElementById('product-description').value = product.description || '';
   document.getElementById('product-price').value = product.unit_price || '';
   document.getElementById('product-form-submit-btn').textContent = 'Save changes';
+  const fileInfo = document.getElementById('product-current-file-info');
+  if (product.image_object_key) {
+    fileInfo.textContent = 'A catalog file is already attached. Choosing a new one will replace it.';
+    fileInfo.style.display = 'block';
+  } else {
+    fileInfo.style.display = 'none';
+  }
   document.getElementById('product-modal').classList.add('active');
 }
 
@@ -2014,14 +2323,14 @@ async function loadProducts() {
     refreshLineItemProductOptions();
     renderProductsTable(products);
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
@@ -2032,6 +2341,7 @@ function renderProductsTable(products) {
       <td class="mono">${fmtMoney(p.unit_price)}</td>
       <td>${p.image_object_key ? `<button class="link-btn-inline" data-product-id="${p.id}">View file</button>` : '—'}</td>
       <td><button class="link-btn-inline" data-edit-id="${p.id}">Edit</button></td>
+      <td><button class="link-btn-inline" data-trash-product-id="${p.id}" data-trash-product-sku="${escapeHtml(p.sku)}" style="color:var(--danger);">Delete</button></td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-product-id]').forEach(btn => {
@@ -2050,9 +2360,65 @@ function renderProductsTable(products) {
       if (product) startEditProduct(product);
     });
   });
+  tbody.querySelectorAll('[data-trash-product-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Move "${btn.dataset.trashProductSku}" to the recycle bin? You can restore it from there later.`)) return;
+      showBanner('products-banner', '');
+      try {
+        await apiFetch('/products/' + btn.dataset.trashProductId + '/trash', { method: 'PATCH' });
+        loadProducts();
+      } catch (err) {
+        showBanner('products-banner', err.message);
+      }
+    });
+  });
 }
 
 document.getElementById('products-filter').addEventListener('input', () => applyFilterAndSort('products'));
+
+document.getElementById('open-product-trash-btn').addEventListener('click', async () => {
+  showBanner('product-trash-banner', '');
+  document.getElementById('product-trash-modal').classList.add('active');
+  await loadProductTrash();
+});
+
+document.getElementById('product-trash-close').addEventListener('click', () => {
+  document.getElementById('product-trash-modal').classList.remove('active');
+});
+
+async function loadProductTrash() {
+  const tbody = document.getElementById('product-trash-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  try {
+    const products = await apiFetch('/products/trash');
+    if (!products.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Recycle bin is empty.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = products.map(p => `
+      <tr>
+        <td class="mono">${escapeHtml(p.sku)}</td>
+        <td>${escapeHtml(p.name)}</td>
+        <td class="mono">${fmtMoney(p.unit_price)}</td>
+        <td><button class="link-btn-inline" data-restore-product-id="${p.id}">Restore</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('[data-restore-product-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('product-trash-banner', '');
+        try {
+          await apiFetch('/products/' + btn.dataset.restoreProductId + '/restore', { method: 'PATCH' });
+          await loadProductTrash();
+          loadProducts();
+        } catch (err) {
+          showBanner('product-trash-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
 
 // ---------- generic 3-state column sorting (asc -> desc -> back to normal) ----------
 // Used by Products, Customers, Projects, and Company tables — each already

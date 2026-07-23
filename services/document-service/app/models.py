@@ -27,6 +27,7 @@ class Company(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
+    short_name = Column(String(20))  # e.g. "SS" for Swift Solution — used in doc numbers (SS-20260723/001)
     position = Column(String(100))  # e.g. "Director" — title of the authorized signer
     address = Column(Text)
     contact_no = Column(String(50))
@@ -55,6 +56,7 @@ class Document(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     doc_type = Column(String(20), nullable=False)  # quotation | invoice | catalogue
+    is_deleted = Column(Boolean, default=False, nullable=False)  # soft delete — trashed, recoverable via recycle bin
     doc_number = Column(String(50), unique=True, nullable=False)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))

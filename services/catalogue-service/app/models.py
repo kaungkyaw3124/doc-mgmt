@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Numeric, DateTime
+from sqlalchemy import Column, String, Numeric, DateTime, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from app.core.db import Base
@@ -12,6 +12,7 @@ class Product(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sku = Column(String(100), unique=True, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)  # soft delete — trashed, recoverable via recycle bin
     name = Column(String(255), nullable=False)
     description = Column(String)
     category = Column(String(100))
@@ -35,5 +36,6 @@ class Category(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(100), unique=True, nullable=False)
+    short_term = Column(String(20))  # e.g. "COM" for Computer — manually entered, used as the SKU prefix
     description = Column(String(500))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

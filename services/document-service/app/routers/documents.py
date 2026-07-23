@@ -82,33 +82,31 @@ def _process_items(items_payload, db: Session):
     return line_items, subtotal, tax_total
 
 
-DOC_TYPE_PREFIXES = {
-    "invoice": "INV",
-    "quotation": "QUO",
-    "proposal": "PRO",
-    "catalogue": "CAT",
-}
-
-
-def _generate_doc_number(db: Session, doc_type: str) -> str:
+def _generate_doc_number(db: Session) -> str:
     """
-    e.g. INV-2026-07-17 for an invoice created today. If that exact number
-    is already taken (e.g. a second invoice the same day), appends -2, -3,
-    etc. until a free one is found.
+    e.g. SS-20260723/001 — {primary company's short_name}-{YYYYMMDD}/{3-digit
+    sequence for that company+day, starting at 001}. Falls back to "DOC" as
+    the prefix if there's no primary company yet, or it has no short_name set.
     """
-    prefix = DOC_TYPE_PREFIXES.get(doc_type, doc_type[:3].upper() if doc_type else "DOC")
+    company = db.query(models.Company).filter_by(is_primary=True).first()
+    prefix = (company.short_name if company and company.short_name else "DOC").upper()
+
     today = date.today()
-    base = f"{prefix}-{today.year}-{today.month:02d}-{today.day:02d}"
+    date_part = f"{today.year}{today.month:02d}{today.day:02d}"
+    base_prefix = f"{prefix}-{date_part}/"
 
-    if not db.query(models.Document).filter_by(doc_number=base).first():
-        return base
+    existing_count = (
+        db.query(models.Document)
+        .filter(models.Document.doc_number.like(f"{base_prefix}%"))
+        .count()
+    )
 
-    suffix = 2
+    seq = existing_count + 1
     while True:
-        candidate = f"{base}-{suffix}"
+        candidate = f"{base_prefix}{seq:03d}"
         if not db.query(models.Document).filter_by(doc_number=candidate).first():
             return candidate
-        suffix += 1
+        seq += 1
 
 
 @router.post("", response_model=schemas.DocumentOut, status_code=201)
@@ -120,7 +118,7 @@ def create_document(
 ):
     _require_edit_access(x_access_level)
 
-    doc_number = payload.doc_number or _generate_doc_number(db, payload.doc_type)
+    doc_number = payload.doc_number or _generate_doc_number(db)
 
     existing = db.query(models.Document).filter_by(doc_number=doc_number).first()
     if existing:
@@ -221,7 +219,7 @@ def list_documents(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
-    query = db.query(models.Document)
+    query = db.query(models.Document).filter(models.Document.is_deleted == False)  # noqa: E712
     if doc_type:
         query = query.filter(models.Document.doc_type == doc_type)
     if status:
@@ -237,6 +235,72 @@ def list_documents(
         )
 
     return query.order_by(models.Document.created_at.desc()).all()
+
+
+@router.get("/next-number")
+def preview_next_doc_number(db: Session = Depends(get_db)):
+    """
+    Lets the New Document form show the real number it'll get, filled in
+    up front, instead of a placeholder hint. Since this doesn't reserve
+    the number, it's possible (rare) for it to be taken by the time the
+    document is actually submitted if two people open the form at once —
+    creation still re-generates and re-checks uniqueness at that point.
+    """
+    return {"doc_number": _generate_doc_number(db)}
+
+
+@router.get("/trash", response_model=list[schemas.DocumentOut])
+def list_trashed_documents(
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    """The recycle bin — soft-deleted documents, same project-visibility
+    rule as the main list, so you only see what you could delete."""
+    query = db.query(models.Document).filter(models.Document.is_deleted == True)  # noqa: E712
+
+    allowed = _parse_allowed_projects(x_allowed_projects)
+    if allowed is not None:
+        query = query.filter(
+            (models.Document.project_id == None)  # noqa: E711
+            | (models.Document.project_id.in_(allowed))
+        )
+
+    return query.order_by(models.Document.updated_at.desc()).all()
+
+
+@router.patch("/{document_id}/trash", response_model=schemas.DocumentOut)
+def trash_document(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    """Soft delete — hides it from the main list and marks it recoverable.
+    For a permanent purge, use DELETE /{document_id} instead (only ever
+    called from within the recycle bin in the UI)."""
+    _require_edit_access(x_access_level)
+    doc = db.query(models.Document).filter_by(id=document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="document not found")
+    doc.is_deleted = True
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+@router.patch("/{document_id}/restore", response_model=schemas.DocumentOut)
+def restore_document(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
+    doc = db.query(models.Document).filter_by(id=document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="document not found")
+    doc.is_deleted = False
+    db.commit()
+    db.refresh(doc)
+    return doc
 
 
 @router.get("/{document_id}", response_model=schemas.DocumentOut)

@@ -13,11 +13,19 @@ from app import models, schemas
 router = APIRouter(prefix="/products", tags=["products"])
 
 
-def _generate_sku(db: Session, category: str | None) -> str:
-    """e.g. COM-0001 for a "Computer" category product. Falls back to
-    "PRD-0001" if no category was given. Finds the next free number for
-    that prefix, so it stays sequential per-category."""
-    prefix = re.sub(r"[^A-Z0-9]", "", (category or "PRD").upper())[:3] or "PRD"
+def _generate_sku(db: Session, category_name: str | None) -> str:
+    """
+    e.g. COM-0001 for a product in the "Computer" category — using that
+    category's manually-set short_term as the prefix (not derived from
+    the category name itself). Falls back to "PRD" if no category was
+    given, or the category has no short_term set. Finds the next free
+    number for that prefix, so it stays sequential per-category.
+    """
+    prefix = "PRD"
+    if category_name:
+        category = db.query(models.Category).filter_by(name=category_name).first()
+        if category and category.short_term:
+            prefix = category.short_term.upper()
 
     existing_skus = [
         p.sku for p in db.query(models.Product.sku).filter(models.Product.sku.like(f"{prefix}-%")).all()
@@ -55,7 +63,7 @@ def list_products(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
-    query = db.query(models.Product)
+    query = db.query(models.Product).filter(models.Product.is_deleted == False)  # noqa: E712
     if category:
         query = query.filter(models.Product.category == category)
     if q:
@@ -66,6 +74,47 @@ def list_products(
         query = query.filter(models.Product.id.in_(visible_ids))
 
     return query.order_by(models.Product.created_at.desc()).all()
+
+
+@router.get("/trash", response_model=list[schemas.ProductOut])
+def list_trashed_products(
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    """The recycle bin — soft-deleted products, same project-visibility
+    rule as the main list."""
+    query = db.query(models.Product).filter(models.Product.is_deleted == True)  # noqa: E712
+
+    visible_ids = get_visible_product_ids(x_allowed_projects)
+    if visible_ids is not None:
+        query = query.filter(models.Product.id.in_(visible_ids))
+
+    return query.order_by(models.Product.updated_at.desc()).all()
+
+
+@router.patch("/{product_id}/trash", response_model=schemas.ProductOut)
+def trash_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Soft delete — hides it from the catalogue and main list, but keeps
+    it recoverable via the recycle bin. For a permanent purge, use
+    DELETE /{product_id} instead (only called from within the recycle bin)."""
+    product = db.query(models.Product).filter_by(id=product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="product not found")
+    product.is_deleted = True
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+@router.patch("/{product_id}/restore", response_model=schemas.ProductOut)
+def restore_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
+    product = db.query(models.Product).filter_by(id=product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="product not found")
+    product.is_deleted = False
+    db.commit()
+    db.refresh(product)
+    return product
 
 
 @router.get("/{product_id}", response_model=schemas.ProductOut)
