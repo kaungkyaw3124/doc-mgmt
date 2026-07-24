@@ -1,11 +1,15 @@
 import io
+<<<<<<< HEAD
+=======
+import logging
+>>>>>>> testing
 import uuid
 import zipfile
 from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -23,6 +27,8 @@ from app.core.export_quotation import generate_quotation_xlsx
 from app.core.export_pdf import generate_quotation_pdf
 from app.core.audit import log_action
 from app import models, schemas
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -525,8 +531,8 @@ def export_quotation_xlsx(document_id: uuid.UUID, db: Session = Depends(get_db))
     doc, customer, items_with_product, company, logo_bytes = _gather_export_data(document_id, db)
     buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes)
     filename = f"Quotation-{doc.doc_number}.xlsx"
-    return StreamingResponse(
-        buffer,
+    return Response(
+        content=buffer.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -537,8 +543,8 @@ def export_quotation_pdf(document_id: uuid.UUID, db: Session = Depends(get_db)):
     doc, customer, items_with_product, company, logo_bytes = _gather_export_data(document_id, db)
     buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes)
     filename = f"Quotation-{doc.doc_number}.pdf"
-    return StreamingResponse(
-        buffer,
+    return Response(
+        content=buffer.getvalue(),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -576,6 +582,13 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
             if sub_items:
                 bundle_bytes = get_product_download_bundle_bytes(item.product_id)
                 if not bundle_bytes:
+<<<<<<< HEAD
+=======
+                    logger.warning(
+                        "catalogue export: product %s (position %d) has sub-items but its bundle came back empty — skipping",
+                        item.product_id, position,
+                    )
+>>>>>>> testing
                     continue
                 try:
                     with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as inner_zip:
@@ -584,14 +597,36 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
                             zf.writestr(f"{position}/{position}.{inner_name}", data)
                             added_any = True
                 except zipfile.BadZipFile:
+<<<<<<< HEAD
+=======
+                    logger.warning(
+                        "catalogue export: product %s (position %d) returned a bad zip for its sub-items bundle — skipping",
+                        item.product_id, position,
+                    )
+>>>>>>> testing
                     continue
             else:
                 file_bytes = get_product_file_bytes(item.product_id)
                 if not file_bytes:
+<<<<<<< HEAD
                     continue
                 try:
                     product = get_product(item.product_id)
                 except (ProductNotFoundError, CatalogueServiceUnavailableError):
+=======
+                    logger.warning(
+                        "catalogue export: product %s (position %d) has no sub-items and no file to bundle — skipping",
+                        item.product_id, position,
+                    )
+                    continue
+                try:
+                    product = get_product(item.product_id)
+                except (ProductNotFoundError, CatalogueServiceUnavailableError) as exc:
+                    logger.warning(
+                        "catalogue export: couldn't look up product %s (position %d) for its file extension — using none (%s)",
+                        item.product_id, position, exc,
+                    )
+>>>>>>> testing
                     product = None
                 ext = ""
                 key = (product or {}).get("image_object_key") or ""
@@ -601,12 +636,24 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
                 added_any = True
 
     if not added_any:
+<<<<<<< HEAD
         raise HTTPException(status_code=404, detail="none of this document's products have catalogue files")
 
     zip_buffer.seek(0)
     filename = f"{doc.doc_number}-catalogue.zip"
     return StreamingResponse(
         zip_buffer,
+=======
+        logger.warning(
+            "catalogue export: nothing was bundled for document %s (doc_number=%s) — %d product-based line item(s) checked",
+            document_id, doc.doc_number, len(product_items),
+        )
+        raise HTTPException(status_code=404, detail="none of this document's products have catalogue files")
+
+    filename = f"{doc.doc_number}-catalogue.zip"
+    return Response(
+        content=zip_buffer.getvalue(),
+>>>>>>> testing
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

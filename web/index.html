@@ -525,6 +525,10 @@
               <button type="button" id="open-category-list-btn">Edit category</button>
             </div>
           </span>
+<<<<<<< HEAD
+=======
+          <button class="btn-secondary" id="open-bulk-import-btn" style="margin-right:8px;">📥 Bulk import</button>
+>>>>>>> testing
           <button class="btn-secondary" id="open-cart-btn" style="margin-right:8px;">🛒 Cart <span id="cart-count-badge"></span></button>
           <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
           <button class="btn-secondary" id="toggle-product-form">+ New product</button>
@@ -1227,6 +1231,31 @@ Warranty: 2 years from the date of delivery</textarea>
   </div>
 </div>
 
+<<<<<<< HEAD
+=======
+<!-- ============ BULK IMPORT PRODUCTS MODAL ============ -->
+<div class="modal-overlay" id="bulk-import-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="bulk-import-close">Close ✕</button>
+    <h3>Bulk import products</h3>
+    <div id="bulk-import-banner"></div>
+    <p style="font-size:13px; color:var(--text-dim);">
+      Spreadsheet needs a header row with a <strong>Name</strong> column — <strong>Category</strong>, <strong>Price</strong>, and <strong>Description</strong> are optional.
+      Item Number is always auto-generated from the category, same as adding one product at a time.
+    </p>
+    <label for="bulk-import-excel">Product spreadsheet (.xlsx) — required</label>
+    <input type="file" id="bulk-import-excel" accept=".xlsx">
+    <p style="font-size:13px; color:var(--text-dim); margin-top:14px;">
+      Optional: a zip or rar of catalogue files named <strong>1.ext, 2.ext, 3.ext…</strong> — matched by position to your spreadsheet rows (file "1" attaches to the first row, "2" to the second, and so on).
+    </p>
+    <label for="bulk-import-zip">Catalogue files (.zip or .rar) — optional</label>
+    <input type="file" id="bulk-import-zip" accept=".zip,.rar">
+    <button type="button" class="btn-primary" id="bulk-import-submit-btn" style="margin-top:14px;">Import</button>
+    <div id="bulk-import-results" style="margin-top:16px;"></div>
+  </div>
+</div>
+
+>>>>>>> testing
 <script>
 const API_BASE = '/api';
 
@@ -1619,8 +1648,18 @@ function startEditDocument(doc) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+<<<<<<< HEAD
 async function downloadDocumentCatalogue(documentId, docNumber) {
   showBanner('documents-banner', '');
+=======
+async function downloadDocumentCatalogue(documentId, docNumber, btn) {
+  showBanner('documents-banner', '');
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
+>>>>>>> testing
   try {
     const res = await fetch(API_BASE + '/documents/' + documentId + '/export/catalogue', {
       headers: { 'Authorization': 'Bearer ' + token }
@@ -1640,13 +1679,30 @@ async function downloadDocumentCatalogue(documentId, docNumber) {
     URL.revokeObjectURL(url);
   } catch (err) {
     showBanner('documents-banner', err.message);
+<<<<<<< HEAD
   }
 }
 
 async function downloadQuotation(documentId, docNumber, format) {
+=======
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
+  }
+}
+
+async function downloadQuotation(documentId, docNumber, format, btn) {
+>>>>>>> testing
   showBanner('documents-banner', '');
   const endpoint = format === 'pdf' ? '/export/quotation-pdf' : '/export/quotation';
   const extension = format === 'pdf' ? 'pdf' : 'xlsx';
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
   try {
     const res = await fetch(API_BASE + '/documents/' + documentId + endpoint, {
       headers: { 'Authorization': 'Bearer ' + token }
@@ -1666,6 +1722,11 @@ async function downloadQuotation(documentId, docNumber, format) {
     URL.revokeObjectURL(url);
   } catch (err) {
     showBanner('documents-banner', err.message);
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
   }
 }
 
@@ -1798,7 +1859,16 @@ function renderDocumentsTable(docs) {
     });
   });
   tbody.querySelectorAll('[data-export-id]').forEach(btn => {
-    btn.addEventListener('click', () => downloadQuotation(btn.dataset.exportId, btn.dataset.exportNumber, btn.dataset.exportFormat));
+    btn.addEventListener('click', () => downloadQuotation(btn.dataset.exportId, btn.dataset.exportNumber, btn.dataset.exportFormat, btn));
+  });
+  tbody.querySelectorAll('[data-catalogue-export-id]').forEach(btn => {
+    btn.addEventListener('click', () => downloadDocumentCatalogue(btn.dataset.catalogueExportId, btn.dataset.catalogueExportNumber, btn));
+  });
+  tbody.querySelectorAll('[data-view-doc-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const doc = cachedDocuments.find(d => d.id === btn.dataset.viewDocId);
+      if (doc) openViewDocumentModal(doc);
+    });
   });
   tbody.querySelectorAll('[data-catalogue-export-id]').forEach(btn => {
     btn.addEventListener('click', () => downloadDocumentCatalogue(btn.dataset.catalogueExportId, btn.dataset.catalogueExportNumber));
@@ -2714,6 +2784,86 @@ function startEditProduct(product) {
   loadEditingProductSubItems();
 }
 
+document.getElementById('open-bulk-import-btn').addEventListener('click', () => {
+  showBanner('bulk-import-banner', '');
+  document.getElementById('bulk-import-excel').value = '';
+  document.getElementById('bulk-import-zip').value = '';
+  document.getElementById('bulk-import-results').innerHTML = '';
+  document.getElementById('bulk-import-modal').classList.add('active');
+});
+
+document.getElementById('bulk-import-close').addEventListener('click', () => {
+  document.getElementById('bulk-import-modal').classList.remove('active');
+});
+
+document.getElementById('bulk-import-submit-btn').addEventListener('click', async () => {
+  const excelInput = document.getElementById('bulk-import-excel');
+  const zipInput = document.getElementById('bulk-import-zip');
+  const resultsEl = document.getElementById('bulk-import-results');
+
+  if (!excelInput.files.length) {
+    showBanner('bulk-import-banner', 'Choose a spreadsheet file first.');
+    return;
+  }
+
+  showBanner('bulk-import-banner', '');
+  resultsEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Importing…</p>';
+  const submitBtn = document.getElementById('bulk-import-submit-btn');
+  submitBtn.disabled = true;
+
+  try {
+    const formData = new FormData();
+    formData.append('excel_file', excelInput.files[0]);
+    if (zipInput.files.length) {
+      formData.append('catalogue_zip', zipInput.files[0]);
+    }
+
+    const response = await fetch(API_BASE + '/products/bulk-import', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: formData
+    });
+
+    if (!response.ok) {
+      let detail = 'Bulk import failed.';
+      try {
+        const errBody = await response.json();
+        if (errBody.detail) detail = errBody.detail;
+      } catch (parseErr) {
+        // response wasn't JSON — stick with the generic message
+      }
+      showBanner('bulk-import-banner', detail);
+      resultsEl.innerHTML = '';
+      return;
+    }
+
+    const result = await response.json();
+    const rows = result.created.map(item => `
+      <tr>
+        <td class="mono">${item.row}</td>
+        <td class="mono">${escapeHtml(item.sku)}</td>
+        <td>${escapeHtml(item.name)}</td>
+        <td>${item.has_file ? '✓' : '—'}</td>
+      </tr>
+    `).join('');
+
+    resultsEl.innerHTML = `
+      <p style="font-weight:600;">Created ${result.created.length} product${result.created.length === 1 ? '' : 's'}.</p>
+      <table>
+        <thead><tr><th>Row</th><th>Item Number</th><th>Name</th><th>File attached?</th></tr></thead>
+        <tbody>${rows || '<tr class="empty-row"><td colspan="4">Nothing was created.</td></tr>'}</tbody>
+      </table>
+      ${result.warnings.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${result.warnings.map(w => escapeHtml(w)).join('<br>')}</p>` : ''}
+    `;
+    loadProducts();
+  } catch (err) {
+    showBanner('bulk-import-banner', err.message);
+    resultsEl.innerHTML = '';
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 async function loadProducts() {
   const tbody = document.getElementById('products-tbody');
   const mySeq = startLoad('products');
@@ -2729,16 +2879,42 @@ async function loadProducts() {
   }
 }
 
+<<<<<<< HEAD
 async function viewSingleProductFile(productId) {
+=======
+async function viewSingleProductFile(productId, btn) {
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
+>>>>>>> testing
   try {
     const data = await apiFetch('/products/' + productId + '/file-url');
     window.open(data.url, '_blank');
   } catch (err) {
     alert(err.message);
+<<<<<<< HEAD
   }
 }
 
 async function downloadProductBundle(productId, sku) {
+=======
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
+  }
+}
+
+async function downloadProductBundle(productId, sku, btn) {
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
+>>>>>>> testing
   try {
     const response = await fetch(API_BASE + '/products/' + productId + '/download-bundle', {
       headers: { 'Authorization': 'Bearer ' + token }
@@ -2765,6 +2941,14 @@ async function downloadProductBundle(productId, sku) {
     window.URL.revokeObjectURL(url);
   } catch (err) {
     alert(err.message);
+<<<<<<< HEAD
+=======
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
+>>>>>>> testing
   }
 }
 
@@ -2794,9 +2978,15 @@ function wireViewProductFileButton(product) {
   if (!btn) return;
   btn.addEventListener('click', () => {
     if (product.sub_item_count > 0) {
+<<<<<<< HEAD
       downloadProductBundle(product.id, product.sku);
     } else {
       viewSingleProductFile(product.id);
+=======
+      downloadProductBundle(product.id, product.sku, btn);
+    } else {
+      viewSingleProductFile(product.id, btn);
+>>>>>>> testing
     }
   });
 }
@@ -2870,10 +3060,17 @@ function renderProductsTable(products) {
     });
   });
   tbody.querySelectorAll('[data-product-id]').forEach(btn => {
+<<<<<<< HEAD
     btn.addEventListener('click', () => viewSingleProductFile(btn.dataset.productId));
   });
   tbody.querySelectorAll('[data-download-bundle-id]').forEach(btn => {
     btn.addEventListener('click', () => downloadProductBundle(btn.dataset.downloadBundleId, btn.dataset.downloadBundleSku));
+=======
+    btn.addEventListener('click', () => viewSingleProductFile(btn.dataset.productId, btn));
+  });
+  tbody.querySelectorAll('[data-download-bundle-id]').forEach(btn => {
+    btn.addEventListener('click', () => downloadProductBundle(btn.dataset.downloadBundleId, btn.dataset.downloadBundleSku, btn));
+>>>>>>> testing
   });
   tbody.querySelectorAll('[data-edit-id]').forEach(btn => {
     btn.addEventListener('click', () => {

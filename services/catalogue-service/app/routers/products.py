@@ -1,10 +1,26 @@
 import io
+<<<<<<< HEAD
+=======
+import os
+>>>>>>> testing
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
 import zipfile
+<<<<<<< HEAD
+=======
+from decimal import Decimal, InvalidOperation
+>>>>>>> testing
 
+import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
+<<<<<<< HEAD
 from fastapi.responses import StreamingResponse
+=======
+from fastapi.responses import Response
+>>>>>>> testing
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -44,6 +60,72 @@ def _attach_sub_item_count(db: Session, product):
     return product
 
 
+<<<<<<< HEAD
+=======
+def _extract_zip_entries(file_bytes: bytes):
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(file_bytes))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="that catalogue file isn't a valid zip")
+    entries = []
+    for entry_name in zf.namelist():
+        if entry_name.endswith("/"):
+            continue  # a directory entry, not a file
+        entries.append((entry_name.rsplit("/", 1)[-1], zf.read(entry_name)))
+    return entries
+
+
+def _extract_rar_entries(file_bytes: bytes):
+    """
+    Shells out to `unar` (installed in the container image) rather than
+    relying on a Python RAR library — there's no free, pure-Python RAR
+    decoder, and `unar` is a well-supported, actually-free command-line
+    tool that handles it reliably.
+    """
+    tmp_dir = tempfile.mkdtemp(prefix="rar_import_")
+    try:
+        rar_path = os.path.join(tmp_dir, "archive.rar")
+        with open(rar_path, "wb") as f:
+            f.write(file_bytes)
+
+        extract_dir = os.path.join(tmp_dir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+
+        result = subprocess.run(
+            ["unar", "-quiet", "-no-directory-confirmation", "-force-overwrite", "-output-directory", extract_dir, rar_path],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=400,
+                detail="couldn't read that rar file — it may be corrupted, password-protected, or in an unsupported format",
+            )
+
+        entries = []
+        for root, _dirs, files in os.walk(extract_dir):
+            for fname in files:
+                with open(os.path.join(root, fname), "rb") as f:
+                    entries.append((fname, f.read()))
+        return entries
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=400, detail="that rar file took too long to extract")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _extract_archive_entries(filename: str | None, file_bytes: bytes):
+    """Returns [(basename, bytes), ...] from either a .zip or .rar archive,
+    picked by the uploaded file's extension. Falls back to zip if the
+    extension is missing or unrecognized — matches this endpoint's
+    original behavior before .rar support was added."""
+    ext = filename.rsplit(".", 1)[-1].lower() if filename and "." in filename else ""
+    if ext == "rar":
+        return _extract_rar_entries(file_bytes)
+    return _extract_zip_entries(file_bytes)
+
+
+>>>>>>> testing
 def _generate_sku(db: Session, category_name: str | None) -> str:
     """
     e.g. COM-0001 for a product in the "Computer" category — using that
@@ -105,6 +187,123 @@ def list_products(
         query = query.filter(models.Product.id.in_(visible_ids))
 
     return _attach_sub_item_counts(db, query.order_by(models.Product.created_at.desc()).all())
+<<<<<<< HEAD
+=======
+
+
+@router.post("/bulk-import")
+def bulk_import_products(
+    excel_file: UploadFile = File(...),
+    catalogue_zip: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Creates many products at once from a spreadsheet, optionally matched
+    up with catalogue files from a zip.
+
+    Excel file: first row is headers (case-insensitive) — needs a "Name"
+    column; "Category", "Price", and "Description" are optional. Item
+    Number/SKU is always auto-generated from the category, same as
+    creating one product at a time.
+
+    Catalogue archive (optional, .zip or .rar): files named "1.ext",
+    "2.ext", "3.ext"…
+    (any extension, subfolders ignored) — matched by POSITION to the
+    spreadsheet's data rows: file "1" attaches to the first product row,
+    "2" to the second, and so on. A blank/skipped row still "uses up"
+    its number, so numbering always matches the row's position in the
+    sheet, not the count of products actually created.
+    """
+    try:
+        workbook = openpyxl.load_workbook(io.BytesIO(excel_file.file.read()), data_only=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="couldn't read that file — make sure it's a valid .xlsx")
+
+    sheet = workbook.active
+    rows = list(sheet.iter_rows(values_only=True))
+    if not rows:
+        raise HTTPException(status_code=400, detail="that spreadsheet is empty")
+
+    header = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
+
+    def col_index(*names):
+        for name in names:
+            if name in header:
+                return header.index(name)
+        return None
+
+    name_idx = col_index("name")
+    category_idx = col_index("category")
+    price_idx = col_index("price", "unit_price", "unit price")
+    description_idx = col_index("description")
+
+    if name_idx is None:
+        raise HTTPException(status_code=400, detail='the spreadsheet needs a "Name" column')
+
+    def cell(row, idx):
+        if idx is None or idx >= len(row):
+            return None
+        value = row[idx]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+    # Pull every "N.ext" file out of the archive, keyed by its position number.
+    files_by_position = {}
+    if catalogue_zip is not None:
+        entries = _extract_archive_entries(catalogue_zip.filename, catalogue_zip.file.read())
+        for basename, data in entries:
+            stem = basename.rsplit(".", 1)[0] if "." in basename else basename
+            if stem.isdigit():
+                files_by_position[int(stem)] = (basename, data)
+
+    created = []
+    for position, row in enumerate(rows[1:], start=1):
+        name = cell(row, name_idx)
+        if not name:
+            continue  # blank row — skipped, but still "uses up" this position number
+        name = str(name).strip()
+
+        category = cell(row, category_idx)
+        category = str(category).strip() if category else None
+
+        price = None
+        raw_price = cell(row, price_idx)
+        if raw_price is not None:
+            try:
+                price = Decimal(str(raw_price))
+            except InvalidOperation:
+                price = None
+
+        description = cell(row, description_idx)
+        description = str(description).strip() if description else None
+
+        sku = _generate_sku(db, category)
+        product = models.Product(sku=sku, name=name, category=category, unit_price=price, description=description)
+        db.add(product)
+        db.commit()
+        db.refresh(product)
+        index_product(product)
+
+        entry = {"sku": sku, "name": name, "row": position, "has_file": False}
+
+        if position in files_by_position:
+            filename, file_bytes = files_by_position.pop(position)
+            object_key = f"{sku}/{filename}"
+            upload_file(io.BytesIO(file_bytes), object_key, content_type="application/octet-stream")
+            product.image_object_key = object_key
+            db.commit()
+            entry["has_file"] = True
+
+        created.append(entry)
+
+    warnings = []
+    if files_by_position:
+        leftover = ", ".join(str(k) for k in sorted(files_by_position.keys()))
+        warnings.append(f"{len(files_by_position)} catalogue file(s) didn't match any spreadsheet row (numbers: {leftover})")
+
+    return {"created": created, "warnings": warnings}
+>>>>>>> testing
 
 
 @router.get("/trash", response_model=list[schemas.ProductOut])
@@ -225,7 +424,11 @@ def get_product_file_content(product_id: uuid.UUID, db: Session = Depends(get_db
     if not product or not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
     file_bytes = download_file_bytes(product.image_object_key)
+<<<<<<< HEAD
     return StreamingResponse(io.BytesIO(file_bytes), media_type="application/octet-stream")
+=======
+    return Response(content=file_bytes, media_type="application/octet-stream")
+>>>>>>> testing
 
 
 # ---------- sub-items (components a "bundle" product is made of) ----------
@@ -362,8 +565,13 @@ def download_product_bundle(product_id: uuid.UUID, db: Session = Depends(get_db)
 
     zip_buffer.seek(0)
     filename = f"{product.sku}-catalogue.zip"
+<<<<<<< HEAD
     return StreamingResponse(
         zip_buffer,
+=======
+    return Response(
+        content=zip_buffer.getvalue(),
+>>>>>>> testing
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
