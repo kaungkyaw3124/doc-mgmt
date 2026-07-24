@@ -36,8 +36,22 @@ class ProductOut(BaseModel):
     currency: str
     attributes: Optional[dict]
     image_object_key: Optional[str]
+    sub_item_count: int = 0
     created_at: datetime
     updated_at: datetime
+
+
+class SubItemAdd(BaseModel):
+    product_id: uuid.UUID
+
+
+class SubItemOut(BaseModel):
+    id: uuid.UUID
+    sequence_number: int
+    product_id: uuid.UUID
+    sku: str
+    name: str
+    has_file: bool
 
 
 class CategoryCreate(BaseModel):

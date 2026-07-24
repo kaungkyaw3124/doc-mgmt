@@ -1,4 +1,6 @@
+import io
 import uuid
+import zipfile
 from datetime import date
 from decimal import Decimal
 
@@ -10,6 +12,9 @@ from app.core.db import get_db
 from app.core.storage import upload_file, get_presigned_url, get_file_bytes
 from app.core.catalogue_client import (
     get_product,
+    get_product_sub_items,
+    get_product_file_bytes,
+    get_product_download_bundle_bytes,
     ProductNotFoundError,
     CatalogueServiceUnavailableError,
 )
@@ -41,7 +46,7 @@ def _process_items(items_payload, db: Session):
     line_items = []
     subtotal = Decimal("0")
     tax_total = Decimal("0")
-    for item_in in items_payload:
+    for index, item_in in enumerate(items_payload):
         description = item_in.description
         unit_price = item_in.unit_price
 
@@ -77,6 +82,7 @@ def _process_items(items_payload, db: Session):
                 unit_price=unit_price,
                 tax_rate=item_in.tax_rate,
                 line_total=line_total,
+                sort_order=index,
             )
         )
     return line_items, subtotal, tax_total
@@ -534,5 +540,73 @@ def export_quotation_pdf(document_id: uuid.UUID, db: Session = Depends(get_db)):
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{document_id}/export/catalogue")
+def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Bundles the catalogue files of every product in this document into one
+    zip. Products are numbered by their position among the document's
+    product-based line items (1, 2, 3… — free-text line items with no
+    product are skipped, since there's no file to include for them).
+
+    A product with no sub-items contributes a single top-level file named
+    by its position (e.g. "2.pdf"). A product WITH sub-items instead gets
+    its own folder named by that position (e.g. "3/"), containing each
+    sub-item's file renamed "{position}.{sub-item's own sequence}"
+    (e.g. "3/3.1.pdf", "3/3.2.png") — reusing the same zip that product's
+    own "View file" button would produce, just renamed into this shape.
+    """
+    doc = db.query(models.Document).filter_by(id=document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    product_items = [item for item in doc.items if item.product_id]
+    if not product_items:
+        raise HTTPException(status_code=404, detail="this document has no product-based line items to bundle")
+
+    zip_buffer = io.BytesIO()
+    added_any = False
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for position, item in enumerate(product_items, start=1):
+            sub_items = get_product_sub_items(item.product_id)
+
+            if sub_items:
+                bundle_bytes = get_product_download_bundle_bytes(item.product_id)
+                if not bundle_bytes:
+                    continue
+                try:
+                    with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as inner_zip:
+                        for inner_name in inner_zip.namelist():
+                            data = inner_zip.read(inner_name)
+                            zf.writestr(f"{position}/{position}.{inner_name}", data)
+                            added_any = True
+                except zipfile.BadZipFile:
+                    continue
+            else:
+                file_bytes = get_product_file_bytes(item.product_id)
+                if not file_bytes:
+                    continue
+                try:
+                    product = get_product(item.product_id)
+                except (ProductNotFoundError, CatalogueServiceUnavailableError):
+                    product = None
+                ext = ""
+                key = (product or {}).get("image_object_key") or ""
+                if "." in key.rsplit("/", 1)[-1]:
+                    ext = "." + key.rsplit(".", 1)[-1]
+                zf.writestr(f"{position}{ext}", file_bytes)
+                added_any = True
+
+    if not added_any:
+        raise HTTPException(status_code=404, detail="none of this document's products have catalogue files")
+
+    zip_buffer.seek(0)
+    filename = f"{doc.doc_number}-catalogue.zip"
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

@@ -55,12 +55,12 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    doc_type = Column(String(20), nullable=False)  # quotation | invoice | catalogue
-    is_deleted = Column(Boolean, default=False, nullable=False)  # soft delete — trashed, recoverable via recycle bin
+    doc_type = Column(String(20), nullable=False, index=True)  # quotation | invoice | catalogue
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)  # soft delete — trashed, recoverable via recycle bin
     doc_number = Column(String(50), unique=True, nullable=False)
-    customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))
-    status = Column(String(20), nullable=False, default="draft")
+    customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
+    status = Column(String(20), nullable=False, default="draft", index=True)
     currency = Column(String(3), default="USD")
     subtotal = Column(Numeric(12, 2))
     tax_total = Column(Numeric(12, 2))
@@ -76,15 +76,16 @@ class Document(Base):
 
     customer = relationship("Customer", back_populates="documents")
     project = relationship("Project", back_populates="documents")
-    items = relationship("LineItem", back_populates="document", cascade="all, delete-orphan")
+    items = relationship("LineItem", back_populates="document", cascade="all, delete-orphan", order_by="LineItem.sort_order")
 
 
 class LineItem(Base):
     __tablename__ = "line_items"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
-    product_id = Column(UUID(as_uuid=True))
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    product_id = Column(UUID(as_uuid=True), index=True)
+    sort_order = Column(Integer, default=0)  # preserves entry order — ids are random UUIDs, not sequential
     description = Column(Text)
     unit = Column(String(20), default="Nos")
     quantity = Column(Numeric(12, 2))

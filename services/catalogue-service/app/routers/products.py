@@ -1,16 +1,47 @@
+import io
 import re
 import uuid
+import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.search_client import index_product, remove_product_from_index
-from app.core.storage import upload_file, get_presigned_url
+from app.core.storage import upload_file, get_presigned_url, download_file_bytes
 from app.core.document_client import get_visible_product_ids
 from app import models, schemas
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+def _sub_item_counts_map(db: Session, product_ids: list) -> dict:
+    """One query for however many products, instead of one query per product."""
+    if not product_ids:
+        return {}
+    rows = (
+        db.query(models.ProductSubItem.parent_product_id, func.count(models.ProductSubItem.id))
+        .filter(models.ProductSubItem.parent_product_id.in_(product_ids))
+        .group_by(models.ProductSubItem.parent_product_id)
+        .all()
+    )
+    return {str(pid): count for pid, count in rows}
+
+
+def _attach_sub_item_counts(db: Session, products: list):
+    counts = _sub_item_counts_map(db, [p.id for p in products])
+    for p in products:
+        p.sub_item_count = counts.get(str(p.id), 0)
+    return products
+
+
+def _attach_sub_item_count(db: Session, product):
+    product.sub_item_count = (
+        db.query(models.ProductSubItem).filter_by(parent_product_id=product.id).count()
+    )
+    return product
 
 
 def _generate_sku(db: Session, category_name: str | None) -> str:
@@ -53,7 +84,7 @@ def create_product(payload: schemas.ProductCreate, db: Session = Depends(get_db)
     db.commit()
     db.refresh(product)
     index_product(product)
-    return product
+    return _attach_sub_item_count(db, product)
 
 
 @router.get("", response_model=list[schemas.ProductOut])
@@ -73,7 +104,7 @@ def list_products(
     if visible_ids is not None:
         query = query.filter(models.Product.id.in_(visible_ids))
 
-    return query.order_by(models.Product.created_at.desc()).all()
+    return _attach_sub_item_counts(db, query.order_by(models.Product.created_at.desc()).all())
 
 
 @router.get("/trash", response_model=list[schemas.ProductOut])
@@ -89,7 +120,7 @@ def list_trashed_products(
     if visible_ids is not None:
         query = query.filter(models.Product.id.in_(visible_ids))
 
-    return query.order_by(models.Product.updated_at.desc()).all()
+    return _attach_sub_item_counts(db, query.order_by(models.Product.updated_at.desc()).all())
 
 
 @router.patch("/{product_id}/trash", response_model=schemas.ProductOut)
@@ -103,7 +134,7 @@ def trash_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
     product.is_deleted = True
     db.commit()
     db.refresh(product)
-    return product
+    return _attach_sub_item_count(db, product)
 
 
 @router.patch("/{product_id}/restore", response_model=schemas.ProductOut)
@@ -114,7 +145,7 @@ def restore_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
     product.is_deleted = False
     db.commit()
     db.refresh(product)
-    return product
+    return _attach_sub_item_count(db, product)
 
 
 @router.get("/{product_id}", response_model=schemas.ProductOut)
@@ -131,7 +162,7 @@ def get_product(
     if visible_ids is not None and str(product.id) not in visible_ids:
         raise HTTPException(status_code=403, detail="you don't have access to this product")
 
-    return product
+    return _attach_sub_item_count(db, product)
 
 
 @router.patch("/{product_id}", response_model=schemas.ProductOut)
@@ -146,7 +177,7 @@ def update_product(product_id: uuid.UUID, payload: schemas.ProductUpdate, db: Se
     db.commit()
     db.refresh(product)
     index_product(product)
-    return product
+    return _attach_sub_item_count(db, product)
 
 
 @router.delete("/{product_id}", status_code=204)
@@ -179,3 +210,160 @@ def get_product_file_url(product_id: uuid.UUID, db: Session = Depends(get_db)):
     if not product or not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
     return {"url": get_presigned_url(product.image_object_key)}
+
+
+@router.get("/{product_id}/file-content")
+def get_product_file_content(product_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Internal-use endpoint — called by document-service to pull a product's
+    raw catalogue file bytes when building a per-document catalogue zip
+    (see /documents/{id}/export/catalogue there). Not meant for direct
+    browser use: no presigned convenience, no download filename handling —
+    the browser-facing equivalent is /file-url.
+    """
+    product = db.query(models.Product).filter_by(id=product_id).first()
+    if not product or not product.image_object_key:
+        raise HTTPException(status_code=404, detail="no file attached to this product")
+    file_bytes = download_file_bytes(product.image_object_key)
+    return StreamingResponse(io.BytesIO(file_bytes), media_type="application/octet-stream")
+
+
+# ---------- sub-items (components a "bundle" product is made of) ----------
+
+def _renumber_sub_items(db: Session, parent_product_id: uuid.UUID):
+    """Keeps sequence numbers contiguous (1, 2, 3…) after a removal —
+    otherwise a deleted #2 would leave a gap and #3 would stay "3" forever,
+    which would be a confusing mismatch with the zip's filenames."""
+    remaining = (
+        db.query(models.ProductSubItem)
+        .filter_by(parent_product_id=parent_product_id)
+        .order_by(models.ProductSubItem.sequence_number)
+        .all()
+    )
+    for i, item in enumerate(remaining, start=1):
+        item.sequence_number = i
+    db.commit()
+
+
+@router.get("/{product_id}/sub-items", response_model=list[schemas.SubItemOut])
+def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db)):
+    rows = (
+        db.query(models.ProductSubItem)
+        .filter_by(parent_product_id=product_id)
+        .order_by(models.ProductSubItem.sequence_number)
+        .all()
+    )
+    result = []
+    for row in rows:
+        sub_product = db.query(models.Product).filter_by(id=row.sub_product_id).first()
+        if not sub_product:
+            continue  # the referenced product was hard-deleted since — skip it rather than error
+        result.append(schemas.SubItemOut(
+            id=row.id,
+            sequence_number=row.sequence_number,
+            product_id=sub_product.id,
+            sku=sub_product.sku,
+            name=sub_product.name,
+            has_file=bool(sub_product.image_object_key),
+        ))
+    return result
+
+
+@router.post("/{product_id}/sub-items", response_model=schemas.SubItemOut, status_code=201)
+def add_sub_item(product_id: uuid.UUID, payload: schemas.SubItemAdd, db: Session = Depends(get_db)):
+    parent = db.query(models.Product).filter_by(id=product_id).first()
+    if not parent:
+        raise HTTPException(status_code=404, detail="product not found")
+
+    if payload.product_id == product_id:
+        raise HTTPException(status_code=400, detail="a product can't be its own sub-item")
+
+    sub_product = db.query(models.Product).filter_by(id=payload.product_id).first()
+    if not sub_product:
+        raise HTTPException(status_code=404, detail="that product doesn't exist")
+
+    next_seq = (
+        db.query(func.max(models.ProductSubItem.sequence_number))
+        .filter_by(parent_product_id=product_id)
+        .scalar() or 0
+    ) + 1
+
+    sub_item = models.ProductSubItem(
+        parent_product_id=product_id,
+        sub_product_id=payload.product_id,
+        sequence_number=next_seq,
+    )
+    db.add(sub_item)
+    db.commit()
+    db.refresh(sub_item)
+
+    return schemas.SubItemOut(
+        id=sub_item.id,
+        sequence_number=sub_item.sequence_number,
+        product_id=sub_product.id,
+        sku=sub_product.sku,
+        name=sub_product.name,
+        has_file=bool(sub_product.image_object_key),
+    )
+
+
+@router.delete("/{product_id}/sub-items/{sub_item_id}", status_code=204)
+def remove_sub_item(product_id: uuid.UUID, sub_item_id: uuid.UUID, db: Session = Depends(get_db)):
+    sub_item = (
+        db.query(models.ProductSubItem)
+        .filter_by(id=sub_item_id, parent_product_id=product_id)
+        .first()
+    )
+    if not sub_item:
+        raise HTTPException(status_code=404, detail="sub-item not found")
+    db.delete(sub_item)
+    db.commit()
+    _renumber_sub_items(db, product_id)
+
+
+@router.get("/{product_id}/download-bundle")
+def download_product_bundle(product_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    For a product with sub-items: fetches every sub-item's catalogue file,
+    renames each to its sequence number (1, 2, 3… keeping the original
+    extension), and streams back a single zip. For a product with no
+    sub-items, the frontend should use /file-url instead — this endpoint
+    only makes sense once there's something to bundle.
+    """
+    product = db.query(models.Product).filter_by(id=product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="product not found")
+
+    sub_items = (
+        db.query(models.ProductSubItem)
+        .filter_by(parent_product_id=product_id)
+        .order_by(models.ProductSubItem.sequence_number)
+        .all()
+    )
+    if not sub_items:
+        raise HTTPException(status_code=404, detail="this product has no sub-items to bundle")
+
+    zip_buffer = io.BytesIO()
+    added_any = False
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in sub_items:
+            sub_product = db.query(models.Product).filter_by(id=item.sub_product_id).first()
+            if not sub_product or not sub_product.image_object_key:
+                continue  # nothing to include for this one — skip rather than fail the whole zip
+            ext = ""
+            if "." in sub_product.image_object_key.rsplit("/", 1)[-1]:
+                ext = "." + sub_product.image_object_key.rsplit(".", 1)[-1]
+            file_bytes = download_file_bytes(sub_product.image_object_key)
+            zf.writestr(f"{item.sequence_number}{ext}", file_bytes)
+            added_any = True
+
+    if not added_any:
+        raise HTTPException(status_code=404, detail="none of this product's sub-items have a catalogue file")
+
+    zip_buffer.seek(0)
+    filename = f"{product.sku}-catalogue.zip"
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

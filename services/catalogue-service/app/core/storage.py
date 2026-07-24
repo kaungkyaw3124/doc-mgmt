@@ -47,3 +47,11 @@ def get_presigned_url(object_key: str, expires_in: int = 3600) -> str:
         Params={"Bucket": settings.minio_bucket, "Key": object_key},
         ExpiresIn=expires_in,
     )
+
+
+def download_file_bytes(object_key: str) -> bytes:
+    """Fetches a stored file's raw bytes — used to bundle sub-item catalogue
+    files into a zip server-side (a presigned URL doesn't help there, since
+    we need the actual content to rename+compress, not just a link)."""
+    response = s3_client.get_object(Bucket=settings.minio_bucket, Key=object_key)
+    return response["Body"].read()
