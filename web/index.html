@@ -525,6 +525,8 @@
               <button type="button" id="open-category-list-btn">Edit category</button>
             </div>
           </span>
+          <button class="btn-secondary" id="open-bulk-import-btn" style="margin-right:8px;">📥 Bulk import</button>
+          <button class="btn-secondary" id="open-cart-btn" style="margin-right:8px;">🛒 Cart <span id="cart-count-badge"></span></button>
           <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
           <button class="btn-secondary" id="toggle-product-form">+ New product</button>
         </div>
@@ -543,11 +545,11 @@
             <th>Name <button class="sort-btn" data-sort-table="products" data-sort-col="name">⇅</button></th>
             <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
             <th>Price <button class="sort-btn" data-sort-table="products" data-sort-col="price">⇅</button></th>
-            <th>Catalog</th><th>Edit</th><th>Delete</th>
+            <th>Catalog</th><th>Cart</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="products-tbody">
-          <tr class="empty-row"><td colspan="7">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="8">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1052,7 +1054,12 @@
         <div></div>
       </div>
 
-      <label>Line items</label>
+      <div class="form-row" style="align-items:center; margin-bottom:8px;">
+        <label style="margin:0;">Line items</label>
+        <div style="text-align:right;">
+          <button type="button" class="btn-secondary" id="import-from-cart-btn" style="padding:6px 12px; font-size:13px;">Import from cart</button>
+        </div>
+      </div>
       <div id="line-items"></div>
       <button type="button" class="add-line-btn" id="add-line-btn">+ Add line item</button>
 
@@ -1101,7 +1108,13 @@ Warranty: 2 years from the date of delivery</textarea>
       <label for="product-file">Catalog file (image, PDF, or spec sheet — optional)</label>
       <input type="file" id="product-file">
       <div id="product-current-file-info" style="display:none; font-size:13px; margin-top:6px;"></div>
-      <button type="submit" class="btn-primary" id="product-form-submit-btn">Create product</button>
+
+      <label for="sub-item-search" style="margin-top:14px;">Sub items (optional) — e.g. a "Desktop Computer" made of a CPU, RAM, MB, GPU</label>
+      <input type="text" id="sub-item-search" list="sub-item-datalist" placeholder="Type to search products, click a suggestion to add it…" autocomplete="off">
+      <datalist id="sub-item-datalist"></datalist>
+      <div id="sub-items-list" style="margin-top:8px;"></div>
+
+      <button type="submit" class="btn-primary" id="product-form-submit-btn" style="margin-top:14px;">Create product</button>
     </form>
   </div>
 </div>
@@ -1181,8 +1194,80 @@ Warranty: 2 years from the date of delivery</textarea>
   </div>
 </div>
 
+<!-- ============ CART MODAL ============ -->
+<div class="modal-overlay" id="cart-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="cart-modal-close">Close ✕</button>
+    <h3>Cart</h3>
+    <div id="cart-modal-banner"></div>
+    <table>
+      <thead><tr><th>Item Number</th><th>Name</th><th>Price</th><th>Remove</th></tr></thead>
+      <tbody id="cart-tbody">
+        <tr class="empty-row"><td colspan="4">Your cart is empty.</td></tr>
+      </tbody>
+    </table>
+    <button type="button" class="btn-secondary" id="empty-cart-btn" style="margin-top:14px; color:var(--danger); border-color:var(--danger);">Empty cart</button>
+  </div>
+</div>
+
+<!-- ============ VIEW DOCUMENT MODAL ============ -->
+<div class="modal-overlay" id="view-document-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="view-document-close">Close ✕</button>
+    <h3 id="view-document-title">Document</h3>
+    <div id="view-document-content"></div>
+  </div>
+</div>
+
+<!-- ============ VIEW PRODUCT MODAL ============ -->
+<div class="modal-overlay" id="view-product-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="view-product-close">Close ✕</button>
+    <h3 id="view-product-title">Product</h3>
+    <div id="view-product-content"></div>
+  </div>
+</div>
+
+<!-- ============ BULK IMPORT PRODUCTS MODAL ============ -->
+<div class="modal-overlay" id="bulk-import-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="bulk-import-close">Close ✕</button>
+    <h3>Bulk import products</h3>
+    <div id="bulk-import-banner"></div>
+    <p style="font-size:13px; color:var(--text-dim);">
+      Spreadsheet needs a header row with a <strong>Name</strong> column — <strong>Category</strong>, <strong>Price</strong>, and <strong>Description</strong> are optional.
+      Item Number is always auto-generated from the category, same as adding one product at a time.
+    </p>
+    <label for="bulk-import-excel">Product spreadsheet (.xlsx) — required</label>
+    <input type="file" id="bulk-import-excel" accept=".xlsx">
+    <p style="font-size:13px; color:var(--text-dim); margin-top:14px;">
+      Optional: a zip or rar of catalogue files named <strong>1.ext, 2.ext, 3.ext…</strong> — matched by position to your spreadsheet rows (file "1" attaches to the first row, "2" to the second, and so on).
+    </p>
+    <label for="bulk-import-zip">Catalogue files (.zip or .rar) — optional</label>
+    <input type="file" id="bulk-import-zip" accept=".zip,.rar">
+    <button type="button" class="btn-primary" id="bulk-import-submit-btn" style="margin-top:14px;">Import</button>
+    <div id="bulk-import-results" style="margin-top:16px;"></div>
+  </div>
+</div>
+
 <script>
 const API_BASE = '/api';
+
+// ---------- stale-response guarding ----------
+// If you click refresh (or switch tabs, or re-trigger a load some other
+// way) before a previous fetch for that same list has finished, an older
+// slower response could otherwise land AFTER a newer one and overwrite it
+// with stale data. Each list gets a counter: every load bumps it and
+// captures its own number, then only applies its result if no newer load
+// has started in the meantime — otherwise it just discards itself.
+const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0 };
+function startLoad(key) {
+  loadSeq[key] += 1;
+  return loadSeq[key];
+}
+function isStaleLoad(key, mySeq) {
+  return mySeq !== loadSeq[key];
+}
 let token = localStorage.getItem('ledger_token') || null;
 
 // ---------- helpers ----------
@@ -1491,6 +1576,8 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     return;
   }
   try {
+    const submitBtn = document.getElementById('doc-form-submit-btn');
+    submitBtn.disabled = true;
     const commonPayload = {
       customer_id: resolveCustomerIdFromInput(),
       project_id: document.getElementById('doc-project').value || null,
@@ -1523,6 +1610,8 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     loadDocuments();
   } catch (err) {
     showBanner('doc-modal-banner', err.message);
+  } finally {
+    document.getElementById('doc-form-submit-btn').disabled = false;
   }
 });
 
@@ -1553,10 +1642,49 @@ function startEditDocument(doc) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-async function downloadQuotation(documentId, docNumber, format) {
+async function downloadDocumentCatalogue(documentId, docNumber, btn) {
+  showBanner('documents-banner', '');
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
+  try {
+    const res = await fetch(API_BASE + '/documents/' + documentId + '/export/catalogue', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || 'Could not generate the catalogue bundle.');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = docNumber + '-catalogue.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showBanner('documents-banner', err.message);
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
+  }
+}
+
+async function downloadQuotation(documentId, docNumber, format, btn) {
   showBanner('documents-banner', '');
   const endpoint = format === 'pdf' ? '/export/quotation-pdf' : '/export/quotation';
   const extension = format === 'pdf' ? 'pdf' : 'xlsx';
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
   try {
     const res = await fetch(API_BASE + '/documents/' + documentId + endpoint, {
       headers: { 'Authorization': 'Bearer ' + token }
@@ -1576,18 +1704,82 @@ async function downloadQuotation(documentId, docNumber, format) {
     URL.revokeObjectURL(url);
   } catch (err) {
     showBanner('documents-banner', err.message);
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
   }
 }
 
 async function loadDocuments() {
   const tbody = document.getElementById('documents-tbody');
+  const mySeq = startLoad('documents');
   try {
     const docs = await apiFetch('/documents');
+    if (isStaleLoad('documents', mySeq)) return; // a newer load has since started — discard this one
     cachedDocuments = docs;
     renderDocumentsTable(docs);
   } catch (err) {
+    if (isStaleLoad('documents', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(err.message)}</td></tr>`;
   }
+}
+
+document.getElementById('view-document-close').addEventListener('click', () => {
+  document.getElementById('view-document-modal').classList.remove('active');
+});
+
+function openViewDocumentModal(doc) {
+  document.getElementById('view-document-title').textContent = 'Document — ' + doc.doc_number;
+  document.getElementById('view-document-content').innerHTML = renderDocumentDetailContent(doc);
+  document.getElementById('view-document-modal').classList.add('active');
+}
+
+function renderDocumentDetailContent(doc) {
+  const customer = cachedCustomers.find(c => c.id === doc.customer_id);
+  const project = cachedProjects.find(p => p.id === doc.project_id);
+
+  const itemRows = (doc.items || []).map(item => `
+    <tr>
+      <td>${escapeHtml(item.description || '—')}</td>
+      <td class="mono">${item.quantity != null ? item.quantity : '—'}</td>
+      <td>${escapeHtml(item.unit || '')}</td>
+      <td class="mono">${fmtMoney(item.unit_price)}</td>
+      <td class="mono">${item.tax_rate != null ? item.tax_rate : 0}%</td>
+      <td class="mono">${fmtMoney(item.line_total)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="form-row">
+      <div><strong>Type:</strong> <span class="${stampClass(doc.doc_type)}">${escapeHtml(doc.doc_type)}</span></div>
+      <div><strong>Status:</strong> <span class="${stampClass(doc.status)}">${escapeHtml(doc.status)}</span></div>
+    </div>
+    <div class="form-row">
+      <div><strong>Customer:</strong> ${customer ? escapeHtml(customer.name) : '—'}</div>
+      <div><strong>Project:</strong> ${project ? escapeHtml(project.name) : '—'}</div>
+    </div>
+    <div class="form-row">
+      <div><strong>Issue date:</strong> ${doc.issue_date ? fmtDate(doc.issue_date) : '—'}</div>
+      <div><strong>Due date:</strong> ${doc.due_date ? fmtDate(doc.due_date) : '—'}</div>
+    </div>
+    <table style="margin-top:14px;">
+      <thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th>Unit price</th><th>Tax</th><th>Line total</th></tr></thead>
+      <tbody>${itemRows || '<tr class="empty-row"><td colspan="6">No line items.</td></tr>'}</tbody>
+    </table>
+    <div style="text-align:right; margin-top:10px; font-size:14px;">
+      <div>Subtotal: <span class="mono">${fmtMoney(doc.subtotal)}</span></div>
+      <div>Tax: <span class="mono">${fmtMoney(doc.tax_total)}</span></div>
+      <div style="font-weight:600; margin-top:4px;">Total: <span class="mono">${fmtMoney(doc.total)} ${escapeHtml(doc.currency || '')}</span></div>
+    </div>
+    ${doc.terms_and_conditions ? `
+      <div style="margin-top:14px;">
+        <strong>Terms &amp; Conditions</strong>
+        <div style="white-space:pre-wrap; font-size:13px; margin-top:4px; color:var(--text-dim);">${escapeHtml(doc.terms_and_conditions)}</div>
+      </div>
+    ` : ''}
+  `;
 }
 
 function renderDocumentsTable(docs) {
@@ -1599,7 +1791,7 @@ function renderDocumentsTable(docs) {
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
   tbody.innerHTML = docs.map(d => `
     <tr>
-      <td class="mono">${escapeHtml(d.doc_number)}</td>
+      <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button></td>
       <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
       <td>${projectLabel(d.project_id)}</td>
       <td><span class="${stampClass(d.status)}">${escapeHtml(d.status)}</span></td>
@@ -1614,6 +1806,8 @@ function renderDocumentsTable(docs) {
         <button class="link-btn-inline" data-export-id="${d.id}" data-export-number="${escapeHtml(d.doc_number)}" data-export-format="xlsx">Excel</button>
         &nbsp;|&nbsp;
         <button class="link-btn-inline" data-export-id="${d.id}" data-export-number="${escapeHtml(d.doc_number)}" data-export-format="pdf">PDF</button>
+        &nbsp;|&nbsp;
+        <button class="link-btn-inline" data-catalogue-export-id="${d.id}" data-catalogue-export-number="${escapeHtml(d.doc_number)}">Catalogue</button>
       </td>
       <td>
         <button class="link-btn-inline" data-edit-doc-id="${d.id}">Edit</button>
@@ -1647,7 +1841,16 @@ function renderDocumentsTable(docs) {
     });
   });
   tbody.querySelectorAll('[data-export-id]').forEach(btn => {
-    btn.addEventListener('click', () => downloadQuotation(btn.dataset.exportId, btn.dataset.exportNumber, btn.dataset.exportFormat));
+    btn.addEventListener('click', () => downloadQuotation(btn.dataset.exportId, btn.dataset.exportNumber, btn.dataset.exportFormat, btn));
+  });
+  tbody.querySelectorAll('[data-catalogue-export-id]').forEach(btn => {
+    btn.addEventListener('click', () => downloadDocumentCatalogue(btn.dataset.catalogueExportId, btn.dataset.catalogueExportNumber, btn));
+  });
+  tbody.querySelectorAll('[data-view-doc-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const doc = cachedDocuments.find(d => d.id === btn.dataset.viewDocId);
+      if (doc) openViewDocumentModal(doc);
+    });
   });
   tbody.querySelectorAll('[data-trash-doc-id]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1739,6 +1942,7 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     description: document.getElementById('project-description').value || null
   };
   try {
+    document.getElementById('project-form-submit-btn').disabled = true;
     if (editingProjectId) {
       await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
@@ -1752,6 +1956,8 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     loadProjects();
   } catch (err) {
     showBanner('project-modal-banner', err.message);
+  } finally {
+    document.getElementById('project-form-submit-btn').disabled = false;
   }
 });
 
@@ -1817,12 +2023,15 @@ function refreshProjectPicker() {
 
 async function loadProjects() {
   const tbody = document.getElementById('projects-tbody');
+  const mySeq = startLoad('projects');
   try {
     const projects = await apiFetch('/projects');
+    if (isStaleLoad('projects', mySeq)) return;
     cachedProjects = projects;
     refreshProjectPicker();
     renderProjectsTable(projects);
   } catch (err) {
+    if (isStaleLoad('projects', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
   }
 }
@@ -1889,6 +2098,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     is_primary: document.getElementById('company-is-primary').checked
   };
   try {
+    document.getElementById('company-form-submit-btn').disabled = true;
     let company;
     if (editingCompanyId) {
       company = await apiFetch('/companies/' + editingCompanyId, { method: 'PATCH', body: JSON.stringify(payload) });
@@ -1899,11 +2109,23 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     if (logoInput.files.length > 0) {
       const formData = new FormData();
       formData.append('file', logoInput.files[0]);
-      await fetch(API_BASE + '/companies/' + company.id + '/logo', {
+      const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/logo', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
         body: formData
       });
+      if (!uploadResponse.ok) {
+        let detail = 'Logo upload failed.';
+        try {
+          const errBody = await uploadResponse.json();
+          if (errBody.detail) detail = errBody.detail;
+        } catch (parseErr) {
+          // response wasn't JSON — stick with the generic message
+        }
+        showBanner('company-modal-banner', `Company saved, but the logo didn't upload: ${detail}`);
+        loadCompanies();
+        return;
+      }
     }
 
     document.getElementById('company-form').reset();
@@ -1914,6 +2136,8 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     loadCompanies();
   } catch (err) {
     showBanner('company-modal-banner', err.message);
+  } finally {
+    document.getElementById('company-form-submit-btn').disabled = false;
   }
 });
 
@@ -1936,11 +2160,14 @@ let cachedCompanies = [];
 
 async function loadCompanies() {
   const tbody = document.getElementById('companies-tbody');
+  const mySeq = startLoad('companies');
   try {
     const companies = await apiFetch('/companies');
+    if (isStaleLoad('companies', mySeq)) return;
     cachedCompanies = companies;
     renderCompaniesTable(companies);
   } catch (err) {
+    if (isStaleLoad('companies', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
   }
 }
@@ -2010,6 +2237,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
       : null
   };
   try {
+    document.getElementById('customer-form-submit-btn').disabled = true;
     if (editingCustomerId) {
       await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
@@ -2023,6 +2251,8 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
     loadCustomers();
   } catch (err) {
     showBanner('customer-modal-banner', err.message);
+  } finally {
+    document.getElementById('customer-form-submit-btn').disabled = false;
   }
 });
 
@@ -2057,12 +2287,15 @@ function resolveCustomerIdFromInput() {
 
 async function loadCustomers() {
   const tbody = document.getElementById('customers-tbody');
+  const mySeq = startLoad('customers');
   try {
     const customers = await apiFetch('/customers');
+    if (isStaleLoad('customers', mySeq)) return;
     cachedCustomers = customers;
     refreshCustomerPicker();
     renderCustomersTable(customers);
   } catch (err) {
+    if (isStaleLoad('customers', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
   }
 }
@@ -2100,6 +2333,9 @@ document.getElementById('toggle-product-form').addEventListener('click', () => {
   document.getElementById('product-sku').disabled = false;
   document.getElementById('product-form-submit-btn').textContent = 'Create product';
   document.getElementById('product-current-file-info').style.display = 'none';
+  pendingSubItems = [];
+  refreshSubItemDatalist();
+  renderSubItemsList();
   document.getElementById('product-modal').classList.add('active');
 });
 
@@ -2109,6 +2345,191 @@ document.getElementById('product-modal-close').addEventListener('click', () => {
 
 let editingProductId = null;
 let cachedProducts = [];
+
+// ---------- cart ----------
+// Lives only in memory for this browser tab (resets on page refresh) — a
+// lightweight way to pick several products while browsing, then drop them
+// all into a new document's line items at once.
+let cartItems = [];
+
+// ---------- product sub-items (bundle components) ----------
+// Create mode: additions are held locally (pendingSubItems) until the
+// product actually exists, then flushed to the server right after
+// creation succeeds (see the submit handler). Edit mode: the product
+// already has an id, so additions/removals hit the API immediately.
+let pendingSubItems = [];        // create mode: [{id, sku, name}]
+let editingProductSubItems = []; // edit mode: [{id (sub-item row id), sequence_number, product_id, sku, name}]
+
+function refreshSubItemDatalist() {
+  const datalist = document.getElementById('sub-item-datalist');
+  if (!datalist) return;
+  const excludeId = editingProductId; // a product can't be its own sub-item
+  datalist.innerHTML = cachedProducts
+    .filter(p => p.id !== excludeId)
+    .map(p => `<option value="${escapeHtml(p.sku)} — ${escapeHtml(p.name)}">`)
+    .join('');
+}
+
+function renderSubItemsList() {
+  const container = document.getElementById('sub-items-list');
+  const items = editingProductId ? editingProductSubItems : pendingSubItems;
+
+  if (!items.length) {
+    container.innerHTML = '<span style="color:var(--text-dim); font-size:13px;">No sub-items added yet.</span>';
+    return;
+  }
+
+  if (editingProductId) {
+    container.innerHTML = items.map(item => `
+      <div class="line-item-row" style="align-items:center;">
+        <div style="flex:0 0 40px;"><span class="mono">${item.sequence_number}</span></div>
+        <div>${escapeHtml(item.sku)} — ${escapeHtml(item.name)}${item.has_file ? '' : ' <span style="color:var(--text-dim); font-size:12px;">(no catalog file)</span>'}</div>
+        <button type="button" class="remove-line" data-remove-sub-item-id="${item.id}">Remove</button>
+      </div>
+    `).join('');
+    container.querySelectorAll('[data-remove-sub-item-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await apiFetch('/products/' + editingProductId + '/sub-items/' + btn.dataset.removeSubItemId, { method: 'DELETE' });
+          await loadEditingProductSubItems();
+        } catch (err) {
+          showBanner('product-modal-banner', err.message);
+        }
+      });
+    });
+  } else {
+    container.innerHTML = items.map((item, i) => `
+      <div class="line-item-row" style="align-items:center;">
+        <div style="flex:0 0 40px;"><span class="mono">${i + 1}</span></div>
+        <div>${escapeHtml(item.sku)} — ${escapeHtml(item.name)}</div>
+        <button type="button" class="remove-line" data-remove-pending-index="${i}">Remove</button>
+      </div>
+    `).join('');
+    container.querySelectorAll('[data-remove-pending-index]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        pendingSubItems.splice(Number(btn.dataset.removePendingIndex), 1);
+        renderSubItemsList();
+      });
+    });
+  }
+}
+
+async function loadEditingProductSubItems() {
+  try {
+    editingProductSubItems = await apiFetch('/products/' + editingProductId + '/sub-items');
+  } catch (err) {
+    editingProductSubItems = [];
+  }
+  renderSubItemsList();
+}
+
+document.getElementById('sub-item-search').addEventListener('input', async (e) => {
+  const typed = e.target.value.trim();
+  if (!typed) return;
+  const match = cachedProducts.find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
+  if (!match) return;
+  if (match.id === editingProductId) {
+    showBanner('product-modal-banner', "A product can't be its own sub-item.");
+    e.target.value = '';
+    return;
+  }
+
+  e.target.value = '';
+
+  if (editingProductId) {
+    showBanner('product-modal-banner', '');
+    try {
+      await apiFetch('/products/' + editingProductId + '/sub-items', {
+        method: 'POST',
+        body: JSON.stringify({ product_id: match.id })
+      });
+      await loadEditingProductSubItems();
+    } catch (err) {
+      showBanner('product-modal-banner', err.message);
+    }
+  } else {
+    pendingSubItems.push({ id: match.id, sku: match.sku, name: match.name });
+    renderSubItemsList();
+  }
+});
+
+function addToCart(productId) {
+  if (cartItems.some(p => p.id === productId)) return; // already in cart
+  const product = cachedProducts.find(p => p.id === productId);
+  if (!product) return;
+  cartItems.push(product);
+  updateCartBadge();
+}
+
+function removeFromCart(productId) {
+  cartItems = cartItems.filter(p => p.id !== productId);
+  updateCartBadge();
+  renderCartModal();
+}
+
+function emptyCart() {
+  cartItems = [];
+  updateCartBadge();
+  renderCartModal();
+}
+
+function updateCartBadge() {
+  const badge = document.getElementById('cart-count-badge');
+  badge.textContent = cartItems.length ? `(${cartItems.length})` : '';
+}
+
+function renderCartModal() {
+  const tbody = document.getElementById('cart-tbody');
+  if (!cartItems.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Your cart is empty.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = cartItems.map(p => `
+    <tr>
+      <td class="mono">${escapeHtml(p.sku)}</td>
+      <td>${escapeHtml(p.name)}</td>
+      <td class="mono">${fmtMoney(p.unit_price)}</td>
+      <td><button class="link-btn-inline" data-remove-cart-id="${p.id}" style="color:var(--danger);">Remove</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-remove-cart-id]').forEach(btn => {
+    btn.addEventListener('click', () => removeFromCart(btn.dataset.removeCartId));
+  });
+}
+
+document.getElementById('open-cart-btn').addEventListener('click', () => {
+  showBanner('cart-modal-banner', '');
+  renderCartModal();
+  document.getElementById('cart-modal').classList.add('active');
+});
+
+document.getElementById('cart-modal-close').addEventListener('click', () => {
+  document.getElementById('cart-modal').classList.remove('active');
+});
+
+document.getElementById('empty-cart-btn').addEventListener('click', () => {
+  if (!cartItems.length) return;
+  if (!confirm('Remove all items from the cart?')) return;
+  emptyCart();
+});
+
+document.getElementById('import-from-cart-btn').addEventListener('click', () => {
+  if (!cartItems.length) {
+    showBanner('doc-modal-banner', 'Your cart is empty — add some products to it from the Products tab first.');
+    return;
+  }
+  cartItems.forEach(p => {
+    addLineItem({
+      product_id: p.id,
+      description: p.name,
+      quantity: 1,
+      unit: 'Nos',
+      unit_price: p.unit_price,
+      tax_rate: 0
+    });
+  });
+  showBanner('doc-modal-banner', '');
+});
 let cachedCategories = [];
 
 async function loadCategories() {
@@ -2249,6 +2670,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     unit_price: document.getElementById('product-price').value ? Number(document.getElementById('product-price').value) : null
   };
   try {
+    document.getElementById('product-form-submit-btn').disabled = true;
     let product;
     if (editingProductId) {
       // sku can't be changed via PATCH (it's the identity), so leave it out
@@ -2283,15 +2705,33 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
       }
     }
 
+    if (!editingProductId && pendingSubItems.length > 0) {
+      for (const item of pendingSubItems) {
+        try {
+          await apiFetch('/products/' + product.id + '/sub-items', {
+            method: 'POST',
+            body: JSON.stringify({ product_id: item.id })
+          });
+        } catch (err) {
+          showBanner('product-modal-banner', `Product saved, but a sub-item ("${item.name}") failed to attach: ${err.message}`);
+          loadProducts();
+          return;
+        }
+      }
+    }
+
     document.getElementById('product-form').reset();
     document.getElementById('product-modal').classList.remove('active');
     document.getElementById('product-form-title').textContent = 'New product';
     document.getElementById('product-sku').disabled = false;
     document.getElementById('product-form-submit-btn').textContent = 'Create product';
     editingProductId = null;
+    pendingSubItems = [];
     loadProducts();
   } catch (err) {
     showBanner('product-modal-banner', err.message);
+  } finally {
+    document.getElementById('product-form-submit-btn').disabled = false;
   }
 });
 
@@ -2313,46 +2753,270 @@ function startEditProduct(product) {
     fileInfo.style.display = 'none';
   }
   document.getElementById('product-modal').classList.add('active');
+  refreshSubItemDatalist();
+  loadEditingProductSubItems();
 }
+
+document.getElementById('open-bulk-import-btn').addEventListener('click', () => {
+  showBanner('bulk-import-banner', '');
+  document.getElementById('bulk-import-excel').value = '';
+  document.getElementById('bulk-import-zip').value = '';
+  document.getElementById('bulk-import-results').innerHTML = '';
+  document.getElementById('bulk-import-modal').classList.add('active');
+});
+
+document.getElementById('bulk-import-close').addEventListener('click', () => {
+  document.getElementById('bulk-import-modal').classList.remove('active');
+});
+
+document.getElementById('bulk-import-submit-btn').addEventListener('click', async () => {
+  const excelInput = document.getElementById('bulk-import-excel');
+  const zipInput = document.getElementById('bulk-import-zip');
+  const resultsEl = document.getElementById('bulk-import-results');
+
+  if (!excelInput.files.length) {
+    showBanner('bulk-import-banner', 'Choose a spreadsheet file first.');
+    return;
+  }
+
+  showBanner('bulk-import-banner', '');
+  resultsEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Importing…</p>';
+  const submitBtn = document.getElementById('bulk-import-submit-btn');
+  submitBtn.disabled = true;
+
+  try {
+    const formData = new FormData();
+    formData.append('excel_file', excelInput.files[0]);
+    if (zipInput.files.length) {
+      formData.append('catalogue_zip', zipInput.files[0]);
+    }
+
+    const response = await fetch(API_BASE + '/products/bulk-import', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: formData
+    });
+
+    if (!response.ok) {
+      let detail = 'Bulk import failed.';
+      try {
+        const errBody = await response.json();
+        if (errBody.detail) detail = errBody.detail;
+      } catch (parseErr) {
+        // response wasn't JSON — stick with the generic message
+      }
+      showBanner('bulk-import-banner', detail);
+      resultsEl.innerHTML = '';
+      return;
+    }
+
+    const result = await response.json();
+    const rows = result.created.map(item => `
+      <tr>
+        <td class="mono">${item.row}</td>
+        <td class="mono">${escapeHtml(item.sku)}</td>
+        <td>${escapeHtml(item.name)}</td>
+        <td>${item.has_file ? '✓' : '—'}</td>
+      </tr>
+    `).join('');
+
+    resultsEl.innerHTML = `
+      <p style="font-weight:600;">Created ${result.created.length} product${result.created.length === 1 ? '' : 's'}.</p>
+      <table>
+        <thead><tr><th>Row</th><th>Item Number</th><th>Name</th><th>File attached?</th></tr></thead>
+        <tbody>${rows || '<tr class="empty-row"><td colspan="4">Nothing was created.</td></tr>'}</tbody>
+      </table>
+      ${result.warnings.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${result.warnings.map(w => escapeHtml(w)).join('<br>')}</p>` : ''}
+    `;
+    loadProducts();
+  } catch (err) {
+    showBanner('bulk-import-banner', err.message);
+    resultsEl.innerHTML = '';
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
 
 async function loadProducts() {
   const tbody = document.getElementById('products-tbody');
+  const mySeq = startLoad('products');
   try {
     const products = await apiFetch('/products');
+    if (isStaleLoad('products', mySeq)) return;
     cachedProducts = products;
     refreshLineItemProductOptions();
     renderProductsTable(products);
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(err.message)}</td></tr>`;
+    if (isStaleLoad('products', mySeq)) return;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(err.message)}</td></tr>`;
   }
+}
+
+async function viewSingleProductFile(productId, btn) {
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
+  try {
+    const data = await apiFetch('/products/' + productId + '/file-url');
+    window.open(data.url, '_blank');
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
+  }
+}
+
+async function downloadProductBundle(productId, sku, btn) {
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) {
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+  }
+  try {
+    const response = await fetch(API_BASE + '/products/' + productId + '/download-bundle', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!response.ok) {
+      let detail = 'Could not download the bundle.';
+      try {
+        const errBody = await response.json();
+        if (errBody.detail) detail = errBody.detail;
+      } catch (parseErr) {
+        // response wasn't JSON — stick with the generic message
+      }
+      alert(detail);
+      return;
+    }
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${sku}-catalogue.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }
+  }
+}
+
+document.getElementById('view-product-close').addEventListener('click', () => {
+  document.getElementById('view-product-modal').classList.remove('active');
+});
+
+async function openViewProductModal(product) {
+  document.getElementById('view-product-title').textContent = 'Product — ' + product.sku;
+  const content = document.getElementById('view-product-content');
+  content.innerHTML = renderProductDetailContent(product) + '<p style="color:var(--text-dim); font-size:13px; margin-top:10px;">Loading sub-items…</p>';
+  document.getElementById('view-product-modal').classList.add('active');
+  wireViewProductFileButton(product);
+
+  let subItems = [];
+  try {
+    subItems = await apiFetch('/products/' + product.id + '/sub-items');
+  } catch (err) {
+    subItems = [];
+  }
+  content.innerHTML = renderProductDetailContent(product) + renderProductSubItemsReadonly(subItems);
+  wireViewProductFileButton(product);
+}
+
+function wireViewProductFileButton(product) {
+  const btn = document.getElementById('view-product-file-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (product.sub_item_count > 0) {
+      downloadProductBundle(product.id, product.sku, btn);
+    } else {
+      viewSingleProductFile(product.id, btn);
+    }
+  });
+}
+
+function renderProductDetailContent(product) {
+  const hasFileAction = product.image_object_key || product.sub_item_count > 0;
+  return `
+    <div class="form-row">
+      <div><strong>Item Number:</strong> ${escapeHtml(product.sku)}</div>
+      <div><strong>Category:</strong> ${escapeHtml(product.category || '—')}</div>
+    </div>
+    <div class="form-row">
+      <div><strong>Price:</strong> ${fmtMoney(product.unit_price)} ${escapeHtml(product.currency || '')}</div>
+      <div>${hasFileAction ? '<button type="button" class="link-btn-inline" id="view-product-file-btn">View file</button>' : ''}</div>
+    </div>
+    ${product.description ? `
+      <div style="margin-top:10px;">
+        <strong>Description</strong>
+        <div style="font-size:13px; margin-top:4px; color:var(--text-dim);">${escapeHtml(product.description)}</div>
+      </div>
+    ` : ''}
+  `;
+}
+
+function renderProductSubItemsReadonly(subItems) {
+  if (!subItems.length) return '';
+  const rows = subItems.map(item => `
+    <tr>
+      <td class="mono">${item.sequence_number}</td>
+      <td>${escapeHtml(item.sku)} — ${escapeHtml(item.name)}${item.has_file ? '' : ' <span style="color:var(--text-dim); font-size:12px;">(no catalog file)</span>'}</td>
+    </tr>
+  `).join('');
+  return `
+    <div style="margin-top:14px;">
+      <strong>Sub items</strong>
+      <table style="margin-top:6px;">
+        <thead><tr><th>#</th><th>Product</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
     <tr>
       <td class="mono">${escapeHtml(p.sku)}</td>
-      <td>${escapeHtml(p.name)}</td>
+      <td><button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button></td>
       <td>${escapeHtml(p.category || '—')}</td>
       <td class="mono">${fmtMoney(p.unit_price)}</td>
-      <td>${p.image_object_key ? `<button class="link-btn-inline" data-product-id="${p.id}">View file</button>` : '—'}</td>
+      <td>${p.sub_item_count > 0
+        ? `<button class="link-btn-inline" data-download-bundle-id="${p.id}" data-download-bundle-sku="${escapeHtml(p.sku)}">View file</button>`
+        : (p.image_object_key ? `<button class="link-btn-inline" data-product-id="${p.id}">View file</button>` : '—')}</td>
+      <td><button class="link-btn-inline" data-add-to-cart-id="${p.id}">+ Add to cart</button></td>
       <td><button class="link-btn-inline" data-edit-id="${p.id}">Edit</button></td>
       <td><button class="link-btn-inline" data-trash-product-id="${p.id}" data-trash-product-sku="${escapeHtml(p.sku)}" style="color:var(--danger);">Delete</button></td>
     </tr>
   `).join('');
-  tbody.querySelectorAll('[data-product-id]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        const data = await apiFetch('/products/' + btn.dataset.productId + '/file-url');
-        window.open(data.url, '_blank');
-      } catch (err) {
-        alert(err.message);
-      }
+  tbody.querySelectorAll('[data-add-to-cart-id]').forEach(btn => {
+    btn.addEventListener('click', () => addToCart(btn.dataset.addToCartId));
+  });
+  tbody.querySelectorAll('[data-view-product-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const product = cachedProducts.find(p => p.id === btn.dataset.viewProductId);
+      if (product) openViewProductModal(product);
     });
+  });
+  tbody.querySelectorAll('[data-product-id]').forEach(btn => {
+    btn.addEventListener('click', () => viewSingleProductFile(btn.dataset.productId, btn));
+  });
+  tbody.querySelectorAll('[data-download-bundle-id]').forEach(btn => {
+    btn.addEventListener('click', () => downloadProductBundle(btn.dataset.downloadBundleId, btn.dataset.downloadBundleSku, btn));
   });
   tbody.querySelectorAll('[data-edit-id]').forEach(btn => {
     btn.addEventListener('click', () => {
