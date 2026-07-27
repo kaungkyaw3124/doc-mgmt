@@ -4,7 +4,9 @@ services:
     environment:
       POSTGRES_DB: docmgmt
       POSTGRES_USER: docmgmt
-      POSTGRES_PASSWORD: docmgmt
+      # Override via an infra/.env file (docker-compose auto-loads it) —
+      # these defaults are only safe for local dev, not a shared host.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docmgmt}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d   # creates the "catalogue" DB on first boot
@@ -16,8 +18,8 @@ services:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - ./data/minio:/data
     ports:
@@ -51,7 +53,10 @@ services:
   meilisearch:
     image: getmeili/meilisearch:v1.10
     environment:
-      MEILI_MASTER_KEY: local_dev_master_key_change_me
+      # If you override this, also update MEILI_MASTER_KEY in each of
+      # document-service/.env, catalogue-service/.env and
+      # search-service/.env to match — they each connect with their own key.
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-local_dev_master_key_change_me}
       MEILI_ENV: development
     volumes:
       - ./data/meili:/meili_data
@@ -64,6 +69,7 @@ services:
     env_file: ../services/search-service/.env
     depends_on:
       - meilisearch
+      - document-service
     expose:
       - "8000"
     restart: unless-stopped

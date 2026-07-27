@@ -1575,8 +1575,14 @@ async function enterApp() {
     const canManageUsers = me.is_superuser || isAnyGroupAdmin;
     if (canManageUsers) {
       document.getElementById('admin-nav-item').style.display = 'block';
-      document.getElementById('groups-card').style.display = me.is_superuser ? 'block' : 'none';
+      document.getElementById('groups-card').style.display = 'block';
       const adminGroupIds = me.is_superuser ? null : me.groups.filter(g => g.is_group_admin).map(g => g.group_id);
+      // Hide the picker only when there's nothing to pick between: a
+      // superuser (or multi-group admin) needs it to choose which group to
+      // manage; a single-group admin gets that one group auto-selected by
+      // loadAdminGroups below, so the dropdown would just be clutter.
+      const showPicker = me.is_superuser || (adminGroupIds && adminGroupIds.length > 1);
+      document.getElementById('group-select-wrap').style.display = showPicker ? 'block' : 'none';
       loadAdminGroups(adminGroupIds).then(loadPendingUsers);
       document.getElementById('all-users-card').style.display = 'block';
       loadAllUsers();

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 
 from app.core.db import Base, engine, SessionLocal
@@ -5,6 +7,8 @@ from app.core.config import settings
 from app.core.security import hash_password
 from app import models
 from app.routers import auth, admin
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Auth Service", version="0.1.0")
 
@@ -15,6 +19,20 @@ app.include_router(admin.router)
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+
+    if settings.jwt_secret == "local_dev_jwt_secret_change_me":
+        logger.warning(
+            "SECURITY: jwt_secret is still set to its insecure default. "
+            "Anyone who knows this value can forge valid tokens, including "
+            "superuser tokens. Set JWT_SECRET before running outside local dev."
+        )
+    if settings.seed_admin_password == "changeme":
+        logger.warning(
+            "SECURITY: seed_admin_password is still set to its insecure default. "
+            "If the users table was empty on boot, the seeded admin account has "
+            "a guessable password — log in and change it, or set "
+            "SEED_ADMIN_PASSWORD before first boot."
+        )
 
     # Seed the first user as a superuser, but only if the users table is
     # completely empty — someone needs superuser rights to bootstrap every

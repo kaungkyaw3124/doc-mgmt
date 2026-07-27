@@ -7,16 +7,20 @@ once. Uses only the Python standard library (urllib) — nothing to pip install.
 Run directly on gpu-server (or anywhere that can reach the gateway):
     python3 seed_data.py
 
-Adjust BASE_URL / ADMIN_USERNAME / ADMIN_PASSWORD below if yours differ.
+Reads BASE_URL / ADMIN_USERNAME / ADMIN_PASSWORD from the environment if
+set (e.g. `ADMIN_PASSWORD=... python3 seed_data.py`), otherwise falls back
+to the local-dev defaults below — don't rely on those defaults against a
+shared/staging environment.
 """
 
 import json
+import os
 import urllib.request
 import urllib.error
 
-BASE_URL = "http://localhost:8080/api"
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "changeme"
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080/api")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 
 TOKEN = None
 

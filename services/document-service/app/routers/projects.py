@@ -23,8 +23,20 @@ def _parse_allowed_projects(x_allowed_projects: str | None):
     return set(x_allowed_projects.split(","))
 
 
+def _require_edit_access(x_access_level: str | None):
+    """Mirrors routers/documents.py's helper — missing header defaults to
+    "edit" (backward-compat, restrictions are opt-in)."""
+    if x_access_level == "view":
+        raise HTTPException(status_code=403, detail="your role has view-only access to documents")
+
+
 @router.post("", response_model=schemas.ProjectOut, status_code=201)
-def create_project(payload: schemas.ProjectCreate, db: Session = Depends(get_db)):
+def create_project(
+    payload: schemas.ProjectCreate,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     project = models.Project(**payload.model_dump())
     db.add(project)
     db.commit()
@@ -75,7 +87,13 @@ def get_project(
 
 
 @router.patch("/{project_id}", response_model=schemas.ProjectOut)
-def update_project(project_id: uuid.UUID, payload: schemas.ProjectUpdate, db: Session = Depends(get_db)):
+def update_project(
+    project_id: uuid.UUID,
+    payload: schemas.ProjectUpdate,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     project = db.query(models.Project).filter_by(id=project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="project not found")
@@ -89,11 +107,16 @@ def update_project(project_id: uuid.UUID, payload: schemas.ProjectUpdate, db: Se
 
 
 @router.patch("/{project_id}/trash", response_model=schemas.ProjectOut)
-def trash_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+def trash_project(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
     """Soft delete — hides it from the main list, but keeps it recoverable
     via the recycle bin. Existing documents that reference this project
     are unaffected. For a permanent purge, use DELETE /{project_id}
     instead (only called from within the recycle bin)."""
+    _require_edit_access(x_access_level)
     project = db.query(models.Project).filter_by(id=project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="project not found")
@@ -104,7 +127,12 @@ def trash_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/{project_id}/restore", response_model=schemas.ProjectOut)
-def restore_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+def restore_project(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     project = db.query(models.Project).filter_by(id=project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="project not found")
@@ -115,10 +143,15 @@ def restore_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.delete("/{project_id}", status_code=204)
-def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_project(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
     """Permanent purge — only reachable from within the recycle bin.
     Blocked (with a clear message) if any document still references this
     project, rather than failing with a raw database error."""
+    _require_edit_access(x_access_level)
     project = db.query(models.Project).filter_by(id=project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="project not found")

@@ -448,6 +448,22 @@ def delete_group(
     group = db.query(models.Group).filter_by(id=group_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="group not found")
+
+    # Strip any direct project grants members only held via this group's
+    # pool — otherwise deleting the group leaves orphaned UserProjectAccess
+    # rows behind, same cleanup revoke_group_project_access does per-project.
+    member_user_ids = [
+        m.user_id for m in db.query(models.UserGroup).filter_by(group_id=group_id).all()
+    ]
+    pool_project_ids = [
+        g.project_id for g in db.query(models.GroupProjectAccess).filter_by(group_id=group_id).all()
+    ]
+    if member_user_ids and pool_project_ids:
+        db.query(models.UserProjectAccess).filter(
+            models.UserProjectAccess.user_id.in_(member_user_ids),
+            models.UserProjectAccess.project_id.in_(pool_project_ids),
+        ).delete(synchronize_session=False)
+
     db.delete(group)
     db.commit()
 
@@ -1082,6 +1098,8 @@ def whoami(db: Session = Depends(get_db), current_user: models.User = Depends(ge
     roles = [db.query(models.Role).filter_by(id=ur.role_id).first() for ur in role_assignments]
     services = set()
     for role in roles:
+        if not role or not role.is_active or not role.group or not role.group.is_active:
+            continue  # same "active role in an active group" rule as authz.user_has_service_access
         for grant in role.access_grants:
             services.add(grant.service_name)
 

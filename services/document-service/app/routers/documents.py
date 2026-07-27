@@ -1,5 +1,7 @@
 import io
 import logging
+import os
+import re
 import uuid
 import zipfile
 from datetime import date
@@ -7,6 +9,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
 from fastapi.responses import Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -30,6 +33,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 VALID_CURRENCIES = {"USD", "MMK"}
+VALID_STATUSES = {"draft", "sent", "paid", "void", "expired"}
+
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_filename(filename: str | None) -> str:
+    """Strips any directory components (blocks path traversal via the
+    object key) and collapses everything else to a safe character set."""
+    base = os.path.basename(filename or "") or "file"
+    return _SAFE_FILENAME_RE.sub("_", base)
 
 
 def _require_edit_access(x_access_level: str | None):
@@ -173,7 +186,11 @@ def create_document(
     doc.status = "draft"
 
     db.add(doc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="doc_number already exists")
     db.refresh(doc)
     index_document(doc)
     log_action(db, doc.id, x_username, "created")
@@ -254,18 +271,26 @@ def list_documents(
 
 
 @router.get("/by-customer/{customer_id}")
-def get_documents_by_customer(customer_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_documents_by_customer(
+    customer_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     """
     Which documents belong to this customer, and which project each of
     those documents belongs to — used by the customer detail popup to
     show "used in" context.
     """
-    docs = (
-        db.query(models.Document)
-        .filter(models.Document.customer_id == customer_id)
-        .order_by(models.Document.created_at.desc())
-        .all()
-    )
+    query = db.query(models.Document).filter(models.Document.customer_id == customer_id)
+
+    allowed = _parse_allowed_projects(x_allowed_projects)
+    if allowed is not None:
+        query = query.filter(
+            (models.Document.project_id == None)  # noqa: E711
+            | (models.Document.project_id.in_(allowed))
+        )
+
+    docs = query.order_by(models.Document.created_at.desc()).all()
     if not docs:
         return []
 
@@ -287,7 +312,11 @@ def get_documents_by_customer(customer_id: uuid.UUID, db: Session = Depends(get_
 
 
 @router.get("/by-product/{product_id}")
-def get_documents_by_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_documents_by_product(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     """
     Which documents include this product as a line item, and which
     project each of those documents belongs to — used by the product
@@ -302,7 +331,14 @@ def get_documents_by_product(product_id: uuid.UUID, db: Session = Depends(get_db
     if not doc_ids:
         return []
 
-    docs = db.query(models.Document).filter(models.Document.id.in_(doc_ids)).all()
+    doc_query = db.query(models.Document).filter(models.Document.id.in_(doc_ids))
+    allowed = _parse_allowed_projects(x_allowed_projects)
+    if allowed is not None:
+        doc_query = doc_query.filter(
+            (models.Document.project_id == None)  # noqa: E711
+            | (models.Document.project_id.in_(allowed))
+        )
+    docs = doc_query.all()
     project_ids = {doc.project_id for doc in docs if doc.project_id}
     projects_by_id = {}
     if project_ids:
@@ -429,7 +465,7 @@ def update_document(
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
 
-    if payload.currency not in VALID_CURRENCIES:
+    if payload.currency is not None and payload.currency not in VALID_CURRENCIES:
         raise HTTPException(status_code=422, detail=f"currency must be one of {sorted(VALID_CURRENCIES)}")
 
     if payload.customer_id:
@@ -452,7 +488,8 @@ def update_document(
     doc.customer_id = payload.customer_id
     doc.project_id = payload.project_id
     doc.company_id = payload.company_id
-    doc.currency = payload.currency
+    if payload.currency is not None:
+        doc.currency = payload.currency
     doc.terms_and_conditions = payload.terms_and_conditions
     doc.items = line_items  # SQLAlchemy replaces the collection (old ones deleted via cascade)
     doc.subtotal = subtotal
@@ -475,6 +512,9 @@ def update_status(
     x_username: str | None = Header(default=None, alias="X-Username"),
 ):
     _require_edit_access(x_access_level)
+
+    if new_status not in VALID_STATUSES:
+        raise HTTPException(status_code=422, detail=f"status must be one of {sorted(VALID_STATUSES)}")
 
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
@@ -500,7 +540,7 @@ def upload_document_file(
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
 
-    object_key = f"{doc.doc_type}/{doc.doc_number}/{file.filename}"
+    object_key = f"{doc.doc_type}/{doc.doc_number}/{_sanitize_filename(file.filename)}"
     upload_file(file.file, object_key, content_type=file.content_type or "application/octet-stream")
 
     doc.file_object_key = object_key
@@ -526,10 +566,19 @@ def delete_document(
 
 
 @router.get("/{document_id}/file-url")
-def get_document_file_url(document_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_document_file_url(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc or not doc.file_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this document")
+
+    allowed = _parse_allowed_projects(x_allowed_projects)
+    if allowed is not None and doc.project_id is not None and str(doc.project_id) not in allowed:
+        raise HTTPException(status_code=403, detail="you don't have access to this document's project")
+
     return {"url": get_presigned_url(doc.file_object_key)}
 
 
@@ -578,10 +627,17 @@ def _guess_image_mime(object_key: str | None) -> str:
     return _IMAGE_MIME_TYPES.get(ext, "image/png")
 
 
-def _gather_export_data(document_id: uuid.UUID, db: Session):
+def _check_project_access(doc, x_allowed_projects: str | None):
+    allowed = _parse_allowed_projects(x_allowed_projects)
+    if allowed is not None and doc.project_id is not None and str(doc.project_id) not in allowed:
+        raise HTTPException(status_code=403, detail="you don't have access to this document's project")
+
+
+def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects: str | None = None):
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
+    _check_project_access(doc, x_allowed_projects)
 
     customer = None
     if doc.customer_id:
@@ -637,8 +693,12 @@ def _gather_export_data(document_id: uuid.UUID, db: Session):
 
 
 @router.get("/{document_id}/export/quotation")
-def export_quotation_xlsx(document_id: uuid.UUID, db: Session = Depends(get_db)):
-    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db)
+def export_quotation_xlsx(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
     buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime)
     filename = f"Quotation-{doc.doc_number}.xlsx"
     return Response(
@@ -649,8 +709,12 @@ def export_quotation_xlsx(document_id: uuid.UUID, db: Session = Depends(get_db))
 
 
 @router.get("/{document_id}/export/quotation-pdf")
-def export_quotation_pdf(document_id: uuid.UUID, db: Session = Depends(get_db)):
-    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db)
+def export_quotation_pdf(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
     buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime)
     filename = f"Quotation-{doc.doc_number}.pdf"
     return Response(
@@ -661,7 +725,11 @@ def export_quotation_pdf(document_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/{document_id}/export/catalogue")
-def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_db)):
+def export_document_catalogue(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     """
     Bundles the catalogue files of every product in this document into one
     zip. Products are numbered by their position among the document's
@@ -678,6 +746,7 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
+    _check_project_access(doc, x_allowed_projects)
 
     product_items = [item for item in doc.items if item.product_id]
     if not product_items:

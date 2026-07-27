@@ -1,3 +1,5 @@
+import uuid
+
 import jwt
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
@@ -22,9 +24,18 @@ def get_current_user(
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="invalid token")
 
-    user = db.query(models.User).filter_by(username=payload["sub"]).first()
+    try:
+        user_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    user = db.query(models.User).filter_by(id=user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="user no longer exists")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="account disabled")
+    if not user.is_approved:
+        raise HTTPException(status_code=403, detail="account pending approval")
     return user
 
 

@@ -1,7 +1,9 @@
 import io
+import os
+import re
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
 from PIL import Image
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,6 +19,37 @@ router = APIRouter(prefix="/companies", tags=["companies"])
 # company's letterhead looks consistent regardless of what was uploaded.
 STANDARD_LOGO_SIZE = (400, 200)
 STANDARD_SEAL_SIZE = (300, 300)
+
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+_ALLOWED_IMAGE_EXT_TO_MIME = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "svg": "image/svg+xml",
+}
+
+
+def _require_edit_access(x_access_level: str | None):
+    """Mirrors routers/documents.py's helper — missing header defaults to
+    "edit" (backward-compat, restrictions are opt-in)."""
+    if x_access_level == "view":
+        raise HTTPException(status_code=403, detail="your role has view-only access to documents")
+
+
+def _sanitize_filename(filename: str | None) -> str:
+    """Strips any directory components (blocks path traversal via the
+    object key) and collapses everything else to a safe character set."""
+    base = os.path.basename(filename or "") or "file"
+    return _SAFE_FILENAME_RE.sub("_", base)
+
+
+def _safe_content_type(filename: str) -> str:
+    """Derives Content-Type from the (sanitized) file extension instead of
+    trusting the client-supplied Content-Type header, so a browser can't be
+    tricked into rendering an uploaded file (e.g. an SVG with embedded
+    script) as something other than what the extension says it is."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return _ALLOWED_IMAGE_EXT_TO_MIME.get(ext, "application/octet-stream")
 
 
 def _standardize_image(file_bytes: bytes, filename: str, target_size: tuple[int, int]) -> tuple[bytes, str]:
@@ -53,7 +86,12 @@ def _standardize_image(file_bytes: bytes, filename: str, target_size: tuple[int,
 
 
 @router.post("", response_model=schemas.CompanyOut, status_code=201)
-def create_company(payload: schemas.CompanyCreate, db: Session = Depends(get_db)):
+def create_company(
+    payload: schemas.CompanyCreate,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     company = models.Company(**payload.model_dump())
 
     # If this is the first company ever created, or explicitly marked primary,
@@ -99,7 +137,13 @@ def get_company(company_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/{company_id}", response_model=schemas.CompanyOut)
-def update_company(company_id: uuid.UUID, payload: schemas.CompanyUpdate, db: Session = Depends(get_db)):
+def update_company(
+    company_id: uuid.UUID,
+    payload: schemas.CompanyUpdate,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
@@ -117,11 +161,16 @@ def update_company(company_id: uuid.UUID, payload: schemas.CompanyUpdate, db: Se
 
 
 @router.patch("/{company_id}/trash", response_model=schemas.CompanyOut)
-def trash_company(company_id: uuid.UUID, db: Session = Depends(get_db)):
+def trash_company(
+    company_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
     """Soft delete — hides it from the main list, but keeps it recoverable
     via the recycle bin. Existing documents that reference this company
     are unaffected. For a permanent purge, use DELETE /{company_id}
     instead (only called from within the recycle bin)."""
+    _require_edit_access(x_access_level)
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
@@ -132,7 +181,12 @@ def trash_company(company_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/{company_id}/restore", response_model=schemas.CompanyOut)
-def restore_company(company_id: uuid.UUID, db: Session = Depends(get_db)):
+def restore_company(
+    company_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
@@ -143,10 +197,15 @@ def restore_company(company_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.delete("/{company_id}", status_code=204)
-def delete_company(company_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_company(
+    company_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
     """Permanent purge — only reachable from within the recycle bin.
     Blocked (with a clear message) if any document still references this
     company, rather than failing with a raw database error."""
+    _require_edit_access(x_access_level)
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
@@ -162,14 +221,21 @@ def delete_company(company_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/{company_id}/logo")
-def upload_company_logo(company_id: uuid.UUID, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_company_logo(
+    company_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
 
     raw_bytes = file.file.read()
-    processed_bytes, filename = _standardize_image(raw_bytes, file.filename, STANDARD_LOGO_SIZE)
-    content_type = "image/png" if filename.endswith(".png") else (file.content_type or "application/octet-stream")
+    safe_name = _sanitize_filename(file.filename)
+    processed_bytes, filename = _standardize_image(raw_bytes, safe_name, STANDARD_LOGO_SIZE)
+    content_type = _safe_content_type(filename)
 
     object_key = f"company-logos/{company_id}/{filename}"
     upload_file(io.BytesIO(processed_bytes), object_key, content_type=content_type)
@@ -184,18 +250,26 @@ def get_company_logo_url(company_id: uuid.UUID, db: Session = Depends(get_db)):
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company or not company.logo_object_key:
         raise HTTPException(status_code=404, detail="no logo attached to this company")
-    return {"url": get_presigned_url(company.logo_object_key)}
+    is_svg = company.logo_object_key.lower().endswith(".svg")
+    return {"url": get_presigned_url(company.logo_object_key, force_download=is_svg)}
 
 
 @router.post("/{company_id}/seal")
-def upload_company_seal(company_id: uuid.UUID, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_company_seal(
+    company_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
 
     raw_bytes = file.file.read()
-    processed_bytes, filename = _standardize_image(raw_bytes, file.filename, STANDARD_SEAL_SIZE)
-    content_type = "image/png" if filename.endswith(".png") else (file.content_type or "application/octet-stream")
+    safe_name = _sanitize_filename(file.filename)
+    processed_bytes, filename = _standardize_image(raw_bytes, safe_name, STANDARD_SEAL_SIZE)
+    content_type = _safe_content_type(filename)
 
     object_key = f"company-seals/{company_id}/{filename}"
     upload_file(io.BytesIO(processed_bytes), object_key, content_type=content_type)
@@ -210,4 +284,5 @@ def get_company_seal_url(company_id: uuid.UUID, db: Session = Depends(get_db)):
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company or not company.seal_object_key:
         raise HTTPException(status_code=404, detail="no seal attached to this company")
-    return {"url": get_presigned_url(company.seal_object_key)}
+    is_svg = company.seal_object_key.lower().endswith(".svg")
+    return {"url": get_presigned_url(company.seal_object_key, force_download=is_svg)}
