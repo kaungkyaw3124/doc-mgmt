@@ -1,8 +1,5 @@
 import io
-<<<<<<< HEAD
-=======
 import logging
->>>>>>> testing
 import uuid
 import zipfile
 from datetime import date
@@ -83,6 +80,7 @@ def _process_items(items_payload, db: Session):
             models.LineItem(
                 product_id=item_in.product_id,
                 description=description,
+                remark=item_in.remark,
                 unit=item_in.unit,
                 quantity=item_in.quantity,
                 unit_price=unit_price,
@@ -94,13 +92,13 @@ def _process_items(items_payload, db: Session):
     return line_items, subtotal, tax_total
 
 
-def _generate_doc_number(db: Session) -> str:
+def _generate_doc_number(db: Session, company_id: uuid.UUID | None = None) -> str:
     """
-    e.g. SS-20260723/001 — {primary company's short_name}-{YYYYMMDD}/{3-digit
+    e.g. SS-20260723/001 — {chosen company's short_name}-{YYYYMMDD}/{3-digit
     sequence for that company+day, starting at 001}. Falls back to "DOC" as
-    the prefix if there's no primary company yet, or it has no short_name set.
+    the prefix if no company was chosen yet, or it has no short_name set.
     """
-    company = db.query(models.Company).filter_by(is_primary=True).first()
+    company = db.query(models.Company).filter_by(id=company_id).first() if company_id else None
     prefix = (company.short_name if company and company.short_name else "DOC").upper()
 
     today = date.today()
@@ -130,7 +128,7 @@ def create_document(
 ):
     _require_edit_access(x_access_level)
 
-    doc_number = payload.doc_number or _generate_doc_number(db)
+    doc_number = payload.doc_number or _generate_doc_number(db, payload.company_id)
 
     existing = db.query(models.Document).filter_by(doc_number=doc_number).first()
     if existing:
@@ -149,11 +147,17 @@ def create_document(
         if not project:
             raise HTTPException(status_code=400, detail=f"project {payload.project_id} not found")
 
+    if payload.company_id:
+        company = db.query(models.Company).filter_by(id=payload.company_id).first()
+        if not company:
+            raise HTTPException(status_code=400, detail=f"company {payload.company_id} not found")
+
     doc = models.Document(
         doc_type=payload.doc_type,
         doc_number=doc_number,
         customer_id=payload.customer_id,
         project_id=payload.project_id,
+        company_id=payload.company_id,
         currency=payload.currency,
         issue_date=payload.issue_date,
         due_date=payload.due_date,
@@ -249,16 +253,86 @@ def list_documents(
     return query.order_by(models.Document.created_at.desc()).all()
 
 
+@router.get("/by-customer/{customer_id}")
+def get_documents_by_customer(customer_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Which documents belong to this customer, and which project each of
+    those documents belongs to — used by the customer detail popup to
+    show "used in" context.
+    """
+    docs = (
+        db.query(models.Document)
+        .filter(models.Document.customer_id == customer_id)
+        .order_by(models.Document.created_at.desc())
+        .all()
+    )
+    if not docs:
+        return []
+
+    project_ids = {doc.project_id for doc in docs if doc.project_id}
+    projects_by_id = {}
+    if project_ids:
+        for project in db.query(models.Project).filter(models.Project.id.in_(project_ids)).all():
+            projects_by_id[project.id] = project.name
+
+    return [
+        {
+            "document_id": doc.id,
+            "doc_number": doc.doc_number,
+            "doc_type": doc.doc_type,
+            "project_name": projects_by_id.get(doc.project_id),
+        }
+        for doc in docs
+    ]
+
+
+@router.get("/by-product/{product_id}")
+def get_documents_by_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Which documents include this product as a line item, and which
+    project each of those documents belongs to — used by the product
+    detail popup to show "used in" context.
+    """
+    line_items = (
+        db.query(models.LineItem)
+        .filter(models.LineItem.product_id == product_id)
+        .all()
+    )
+    doc_ids = {item.document_id for item in line_items}
+    if not doc_ids:
+        return []
+
+    docs = db.query(models.Document).filter(models.Document.id.in_(doc_ids)).all()
+    project_ids = {doc.project_id for doc in docs if doc.project_id}
+    projects_by_id = {}
+    if project_ids:
+        for project in db.query(models.Project).filter(models.Project.id.in_(project_ids)).all():
+            projects_by_id[project.id] = project.name
+
+    return [
+        {
+            "document_id": doc.id,
+            "doc_number": doc.doc_number,
+            "doc_type": doc.doc_type,
+            "project_name": projects_by_id.get(doc.project_id),
+        }
+        for doc in sorted(docs, key=lambda d: d.created_at, reverse=True)
+    ]
+
+
 @router.get("/next-number")
-def preview_next_doc_number(db: Session = Depends(get_db)):
+def preview_next_doc_number(company_id: uuid.UUID | None = None, db: Session = Depends(get_db)):
     """
     Lets the New Document form show the real number it'll get, filled in
-    up front, instead of a placeholder hint. Since this doesn't reserve
-    the number, it's possible (rare) for it to be taken by the time the
-    document is actually submitted if two people open the form at once —
-    creation still re-generates and re-checks uniqueness at that point.
+    up front, instead of a placeholder hint. Pass company_id to preview the
+    number for that specific company's prefix (re-called whenever the
+    Company dropdown changes) — falls back to a generic "DOC" prefix if
+    none is chosen yet. Since this doesn't reserve the number, it's
+    possible (rare) for it to be taken by the time the document is
+    actually submitted if two people open the form at once — creation
+    still re-generates and re-checks uniqueness at that point.
     """
-    return {"doc_number": _generate_doc_number(db)}
+    return {"doc_number": _generate_doc_number(db, company_id)}
 
 
 @router.get("/trash", response_model=list[schemas.DocumentOut])
@@ -343,11 +417,11 @@ def update_document(
     x_username: str | None = Header(default=None, alias="X-Username"),
 ):
     """
-    Full edit of an existing document: customer, project, currency, terms,
-    and line items (line items are fully replaced, then totals recalculated —
-    same validation/product-linking rules as creating a document).
-    doc_type and doc_number are intentionally not editable here, since
-    doc_number is the document's unique identity.
+    Full edit of an existing document: customer, project, company, currency,
+    terms, and line items (line items are fully replaced, then totals
+    recalculated — same validation/product-linking rules as creating a
+    document). doc_type and doc_number are intentionally not editable here,
+    since doc_number is the document's unique identity.
     """
     _require_edit_access(x_access_level)
 
@@ -368,10 +442,16 @@ def update_document(
         if not project:
             raise HTTPException(status_code=400, detail=f"project {payload.project_id} not found")
 
+    if payload.company_id:
+        company = db.query(models.Company).filter_by(id=payload.company_id).first()
+        if not company:
+            raise HTTPException(status_code=400, detail=f"company {payload.company_id} not found")
+
     line_items, subtotal, tax_total = _process_items(payload.items, db)
 
     doc.customer_id = payload.customer_id
     doc.project_id = payload.project_id
+    doc.company_id = payload.company_id
     doc.currency = payload.currency
     doc.terms_and_conditions = payload.terms_and_conditions
     doc.items = line_items  # SQLAlchemy replaces the collection (old ones deleted via cascade)
@@ -480,6 +560,24 @@ def get_audit_log(
     ]
 
 
+_IMAGE_MIME_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "svg": "image/svg+xml",
+}
+
+
+def _guess_image_mime(object_key: str | None) -> str:
+    """Guesses the MIME type from the uploaded file's extension — used to
+    build a correct data URI. Defaults to png if we can't tell, which was
+    the previous (buggy) hardcoded behavior for every format."""
+    if not object_key or "." not in object_key.rsplit("/", 1)[-1]:
+        return "image/png"
+    ext = object_key.rsplit(".", 1)[-1].lower()
+    return _IMAGE_MIME_TYPES.get(ext, "image/png")
+
+
 def _gather_export_data(document_id: uuid.UUID, db: Session):
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
@@ -498,16 +596,21 @@ def _gather_export_data(document_id: uuid.UUID, db: Session):
     items_with_product = []
     for item in doc.items:
         product = None
+        sub_items = []
         if item.product_id:
             try:
                 product = get_product(item.product_id)
             except (ProductNotFoundError, CatalogueServiceUnavailableError):
                 product = None
-        items_with_product.append((item, product))
+            sub_items = get_product_sub_items(item.product_id)
+        items_with_product.append((item, product, sub_items))
 
     company = None
     logo_bytes = None
-    company_row = db.query(models.Company).filter_by(is_primary=True).first()
+    logo_mime = "image/png"
+    seal_bytes = None
+    seal_mime = "image/png"
+    company_row = db.query(models.Company).filter_by(id=doc.company_id).first() if doc.company_id else None
     if company_row:
         company = {
             "name": company_row.name,
@@ -520,16 +623,23 @@ def _gather_export_data(document_id: uuid.UUID, db: Session):
         if company_row.logo_object_key:
             try:
                 logo_bytes = get_file_bytes(company_row.logo_object_key)
+                logo_mime = _guess_image_mime(company_row.logo_object_key)
             except Exception:
                 logo_bytes = None  # don't let a bad logo file block the export
+        if company_row.seal_object_key:
+            try:
+                seal_bytes = get_file_bytes(company_row.seal_object_key)
+                seal_mime = _guess_image_mime(company_row.seal_object_key)
+            except Exception:
+                seal_bytes = None  # don't let a bad seal file block the export
 
-    return doc, customer, items_with_product, company, logo_bytes
+    return doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime
 
 
 @router.get("/{document_id}/export/quotation")
 def export_quotation_xlsx(document_id: uuid.UUID, db: Session = Depends(get_db)):
-    doc, customer, items_with_product, company, logo_bytes = _gather_export_data(document_id, db)
-    buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes)
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db)
+    buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime)
     filename = f"Quotation-{doc.doc_number}.xlsx"
     return Response(
         content=buffer.getvalue(),
@@ -540,8 +650,8 @@ def export_quotation_xlsx(document_id: uuid.UUID, db: Session = Depends(get_db))
 
 @router.get("/{document_id}/export/quotation-pdf")
 def export_quotation_pdf(document_id: uuid.UUID, db: Session = Depends(get_db)):
-    doc, customer, items_with_product, company, logo_bytes = _gather_export_data(document_id, db)
-    buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes)
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db)
+    buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime)
     filename = f"Quotation-{doc.doc_number}.pdf"
     return Response(
         content=buffer.getvalue(),
@@ -582,13 +692,10 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
             if sub_items:
                 bundle_bytes = get_product_download_bundle_bytes(item.product_id)
                 if not bundle_bytes:
-<<<<<<< HEAD
-=======
                     logger.warning(
                         "catalogue export: product %s (position %d) has sub-items but its bundle came back empty — skipping",
                         item.product_id, position,
                     )
->>>>>>> testing
                     continue
                 try:
                     with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as inner_zip:
@@ -597,23 +704,14 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
                             zf.writestr(f"{position}/{position}.{inner_name}", data)
                             added_any = True
                 except zipfile.BadZipFile:
-<<<<<<< HEAD
-=======
                     logger.warning(
                         "catalogue export: product %s (position %d) returned a bad zip for its sub-items bundle — skipping",
                         item.product_id, position,
                     )
->>>>>>> testing
                     continue
             else:
                 file_bytes = get_product_file_bytes(item.product_id)
                 if not file_bytes:
-<<<<<<< HEAD
-                    continue
-                try:
-                    product = get_product(item.product_id)
-                except (ProductNotFoundError, CatalogueServiceUnavailableError):
-=======
                     logger.warning(
                         "catalogue export: product %s (position %d) has no sub-items and no file to bundle — skipping",
                         item.product_id, position,
@@ -626,7 +724,6 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
                         "catalogue export: couldn't look up product %s (position %d) for its file extension — using none (%s)",
                         item.product_id, position, exc,
                     )
->>>>>>> testing
                     product = None
                 ext = ""
                 key = (product or {}).get("image_object_key") or ""
@@ -636,14 +733,6 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
                 added_any = True
 
     if not added_any:
-<<<<<<< HEAD
-        raise HTTPException(status_code=404, detail="none of this document's products have catalogue files")
-
-    zip_buffer.seek(0)
-    filename = f"{doc.doc_number}-catalogue.zip"
-    return StreamingResponse(
-        zip_buffer,
-=======
         logger.warning(
             "catalogue export: nothing was bundled for document %s (doc_number=%s) — %d product-based line item(s) checked",
             document_id, doc.doc_number, len(product_items),
@@ -653,7 +742,6 @@ def export_document_catalogue(document_id: uuid.UUID, db: Session = Depends(get_
     filename = f"{doc.doc_number}-catalogue.zip"
     return Response(
         content=zip_buffer.getvalue(),
->>>>>>> testing
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

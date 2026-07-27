@@ -24,6 +24,7 @@ class ProjectOut(BaseModel):
     name: str
     budget_year: Optional[str]
     description: Optional[str]
+    is_deleted: bool
     created_at: datetime
 
 
@@ -60,7 +61,9 @@ class CompanyOut(BaseModel):
     support_email: Optional[str]
     support_phone: Optional[str]
     logo_object_key: Optional[str]
+    seal_object_key: Optional[str]
     is_primary: bool
+    is_deleted: bool
     created_at: datetime
 
 
@@ -85,12 +88,14 @@ class CustomerOut(BaseModel):
     email: Optional[str]
     phone: Optional[str]
     billing_address: Optional[dict]
+    is_deleted: bool
     created_at: datetime
 
 
 class DocumentItemIn(BaseModel):
     product_id: Optional[uuid.UUID] = None
     description: Optional[str] = None
+    remark: Optional[str] = None
     unit: str = "Nos"
     quantity: Decimal
     unit_price: Optional[Decimal] = None
@@ -108,6 +113,7 @@ class DocumentCreate(BaseModel):
     doc_number: Optional[str] = None  # auto-generated if omitted, e.g. INV-2026-07-17
     customer_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
+    company_id: Optional[uuid.UUID] = None  # which company issues this document
     currency: str = "USD"  # "USD" or "MMK"
     issue_date: Optional[date] = None
     due_date: Optional[date] = None
@@ -119,6 +125,7 @@ class DocumentCreate(BaseModel):
 class DocumentUpdate(BaseModel):
     customer_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
+    company_id: Optional[uuid.UUID] = None
     currency: str = "USD"
     terms_and_conditions: Optional[str] = None
     items: list[DocumentItemIn] = []
@@ -131,6 +138,7 @@ class DocumentOut(BaseModel):
     doc_number: str
     customer_id: Optional[uuid.UUID]
     project_id: Optional[uuid.UUID]
+    company_id: Optional[uuid.UUID]
     status: str
     currency: str
     subtotal: Optional[Decimal]

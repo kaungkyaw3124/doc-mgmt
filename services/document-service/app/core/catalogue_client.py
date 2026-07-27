@@ -46,12 +46,8 @@ def get_product_sub_items(product_id: uuid.UUID) -> list:
         response = httpx.get(url, timeout=10.0)
         response.raise_for_status()
         return response.json()
-<<<<<<< HEAD
-    except httpx.HTTPError:
-=======
     except httpx.HTTPError as exc:
         logger.warning("get_product_sub_items(%s) failed: %s", product_id, exc)
->>>>>>> testing
         return []
 
 
@@ -60,13 +56,6 @@ def get_product_file_bytes(product_id: uuid.UUID) -> bytes | None:
     catalogue-service couldn't be reached."""
     url = f"{settings.catalogue_service_url}/products/{product_id}/file-content"
     try:
-<<<<<<< HEAD
-        response = httpx.get(url, timeout=20.0)
-        if response.status_code != 200:
-            return None
-        return response.content
-    except httpx.RequestError:
-=======
         response = httpx.get(url, timeout=45.0)
         if response.status_code != 200:
             logger.warning(
@@ -76,23 +65,12 @@ def get_product_file_bytes(product_id: uuid.UUID) -> bytes | None:
         return response.content
     except httpx.RequestError as exc:
         logger.warning("get_product_file_bytes(%s) failed: %s", product_id, exc)
->>>>>>> testing
         return None
 
 
 def get_product_download_bundle_bytes(product_id: uuid.UUID) -> bytes | None:
     """The zip of a product's sub-items' catalogue files (same one the
     product's own "View file" button downloads). None if there's nothing
-<<<<<<< HEAD
-    to bundle, or catalogue-service couldn't be reached."""
-    url = f"{settings.catalogue_service_url}/products/{product_id}/download-bundle"
-    try:
-        response = httpx.get(url, timeout=30.0)
-        if response.status_code != 200:
-            return None
-        return response.content
-    except httpx.RequestError:
-=======
     to bundle, or catalogue-service couldn't be reached.
 
     Generous timeout: this endpoint fetches every sub-item's file from
@@ -112,5 +90,4 @@ def get_product_download_bundle_bytes(product_id: uuid.UUID) -> bytes | None:
         return response.content
     except httpx.RequestError as exc:
         logger.warning("get_product_download_bundle_bytes(%s) failed: %s", product_id, exc)
->>>>>>> testing
         return None

@@ -27,29 +27,41 @@ DEFAULT_TERMS = (
 )
 
 
-def generate_quotation_xlsx(document, customer, items_with_product, company=None, logo_bytes=None) -> BytesIO:
+def generate_quotation_xlsx(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png") -> BytesIO:
     """
-    items_with_product: list of (LineItem, product_dict_or_None) tuples.
+    items_with_product: list of (LineItem, product_dict_or_None, sub_items_list) tuples.
     company: dict with keys name/position/address/contact_no/support_email/support_phone,
              or None if no company profile has been set up yet.
-    logo_bytes: raw image bytes to embed, or None.
+    logo_bytes / seal_bytes: raw image bytes to embed, or None. SVGs are
+    skipped here (not embedded) — openpyxl's image support goes through
+    PIL, which can't rasterize SVG; the PDF export handles SVG logos fine
+    since browsers/WeasyPrint render SVG natively.
     """
     wb = Workbook()
     ws = wb.active
     ws.title = "Quotation"
 
-    col_widths = [8, 26, 46, 8, 8, 16, 16]
+    col_widths = [8, 26, 46, 8, 8, 16, 16, 30]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row = 1
 
-    if logo_bytes:
+    if logo_bytes and logo_mime != "image/svg+xml":
         try:
             img = XLImage(BytesIO(logo_bytes))
             img.width = 120
             img.height = 60
             ws.add_image(img, "F1")
+        except Exception:
+            pass  # bad/unsupported image format shouldn't block the whole export
+
+    if seal_bytes and seal_mime != "image/svg+xml":
+        try:
+            seal_img = XLImage(BytesIO(seal_bytes))
+            seal_img.width = 80
+            seal_img.height = 80
+            ws.add_image(seal_img, "H1")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
 
@@ -100,7 +112,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         row += 1
     row += 1
 
-    headers = ["No", "Item", "Description", "Qty", "Unit", f"Price ({document.currency})", f"Amount ({document.currency})"]
+    headers = ["No", "Item", "Description", "Qty", "Unit", f"Price ({document.currency})", f"Amount ({document.currency})", "Remark"]
     for col, h in enumerate(headers, start=1):
         cell = ws.cell(row=row, column=col, value=h)
         cell.font = Font(name="Arial", bold=True, size=10)
@@ -109,28 +121,55 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
     row += 1
 
-    categories = {p["category"] for _, p in items_with_product if p and p.get("category")}
+    categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}
     group_label = categories.pop() if len(categories) == 1 else "Items"
-    ws.merge_cells(f"A{row}:G{row}")
+    ws.merge_cells(f"A{row}:H{row}")
     ws[f"A{row}"] = group_label
     ws[f"A{row}"].font = Font(name="Arial", bold=True, italic=True, size=10)
     row += 1
 
-    first_item_row = row
-    for idx, (item, product) in enumerate(items_with_product, start=1):
+    main_item_rows = []  # only these contribute to the Total — sub-item rows are informational, already covered by the parent's price
+    catalogue_number = 0  # matches the Catalogue zip export's numbering — only product-based items count
+    for idx, (item, product, sub_items) in enumerate(items_with_product, start=1):
         item_name = product["name"] if product else (item.description or "")
         description = (product.get("description") if product else None) or item.description or ""
         line_amount = (item.quantity or 0) * (item.unit_price or 0)
 
-        values = [idx, item_name, description, float(item.quantity), item.unit or "Nos", float(item.unit_price or 0), float(line_amount)]
+        values = [idx, item_name, description, float(item.quantity), item.unit or "Nos", float(item.unit_price or 0), float(line_amount), item.remark or (product.get("remark") if product else None) or ""]
         for col, v in enumerate(values, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.font = Font(name="Arial", size=10)
             cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=(col == 3))
+            cell.alignment = Alignment(vertical="top", wrap_text=(col in (3, 8)))
             if col in (6, 7):
                 cell.number_format = "#,##0.00"
+        main_item_rows.append(row)
         row += 1
+
+        if item.product_id:
+            catalogue_number += 1
+        if sub_items:
+            for sub in sub_items:
+                sub_label = f"{catalogue_number}.{sub['sequence_number']}"
+                sub_price = float(sub["unit_price"]) if sub.get("unit_price") is not None else ""
+                sub_values = [
+                    sub_label,
+                    f"{sub['sku']} — {sub['name']}",
+                    sub.get("description") or "",
+                    1.0,
+                    "Nos",
+                    sub_price,
+                    sub_price,
+                    "",
+                ]
+                for col, v in enumerate(sub_values, start=1):
+                    cell = ws.cell(row=row, column=col, value=v)
+                    cell.font = Font(name="Arial", size=9)
+                    cell.border = BORDER
+                    cell.alignment = Alignment(vertical="top", wrap_text=(col == 3))
+                    if col in (6, 7) and v != "":
+                        cell.number_format = "#,##0.00"
+                row += 1
     last_item_row = row - 1
 
     ws.merge_cells(f"A{row}:F{row}")
@@ -138,7 +177,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     ws[f"A{row}"].alignment = Alignment(horizontal="right")
     total_cell = ws.cell(row=row, column=7)
-    total_cell.value = f"=SUM(G{first_item_row}:G{last_item_row})" if last_item_row >= first_item_row else 0
+    total_cell.value = ("=" + "+".join(f"G{r}" for r in main_item_rows)) if main_item_rows else 0
     total_cell.font = Font(name="Arial", bold=True)
     total_cell.number_format = "#,##0.00"
     total_cell.border = BORDER
@@ -149,7 +188,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     row += 1
     terms_text = document.terms_and_conditions or DEFAULT_TERMS
     for line in terms_text.split("\n"):
-        ws.merge_cells(f"A{row}:G{row}")
+        ws.merge_cells(f"A{row}:H{row}")
         ws[f"A{row}"] = line
         ws[f"A{row}"].font = Font(name="Arial", size=10)
         row += 1

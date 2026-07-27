@@ -1,26 +1,16 @@
 import io
-<<<<<<< HEAD
-=======
 import os
->>>>>>> testing
 import re
 import shutil
 import subprocess
 import tempfile
 import uuid
 import zipfile
-<<<<<<< HEAD
-=======
 from decimal import Decimal, InvalidOperation
->>>>>>> testing
 
 import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
-<<<<<<< HEAD
-from fastapi.responses import StreamingResponse
-=======
 from fastapi.responses import Response
->>>>>>> testing
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -60,8 +50,6 @@ def _attach_sub_item_count(db: Session, product):
     return product
 
 
-<<<<<<< HEAD
-=======
 def _extract_zip_entries(file_bytes: bytes):
     try:
         zf = zipfile.ZipFile(io.BytesIO(file_bytes))
@@ -125,7 +113,6 @@ def _extract_archive_entries(filename: str | None, file_bytes: bytes):
     return _extract_zip_entries(file_bytes)
 
 
->>>>>>> testing
 def _generate_sku(db: Session, category_name: str | None) -> str:
     """
     e.g. COM-0001 for a product in the "Computer" category — using that
@@ -187,8 +174,6 @@ def list_products(
         query = query.filter(models.Product.id.in_(visible_ids))
 
     return _attach_sub_item_counts(db, query.order_by(models.Product.created_at.desc()).all())
-<<<<<<< HEAD
-=======
 
 
 @router.post("/bulk-import")
@@ -303,7 +288,6 @@ def bulk_import_products(
         warnings.append(f"{len(files_by_position)} catalogue file(s) didn't match any spreadsheet row (numbers: {leftover})")
 
     return {"created": created, "warnings": warnings}
->>>>>>> testing
 
 
 @router.get("/trash", response_model=list[schemas.ProductOut])
@@ -424,11 +408,7 @@ def get_product_file_content(product_id: uuid.UUID, db: Session = Depends(get_db
     if not product or not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
     file_bytes = download_file_bytes(product.image_object_key)
-<<<<<<< HEAD
-    return StreamingResponse(io.BytesIO(file_bytes), media_type="application/octet-stream")
-=======
     return Response(content=file_bytes, media_type="application/octet-stream")
->>>>>>> testing
 
 
 # ---------- sub-items (components a "bundle" product is made of) ----------
@@ -467,6 +447,9 @@ def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db)):
             product_id=sub_product.id,
             sku=sub_product.sku,
             name=sub_product.name,
+            description=sub_product.description,
+            unit_price=sub_product.unit_price,
+            currency=sub_product.currency,
             has_file=bool(sub_product.image_object_key),
         ))
     return result
@@ -506,6 +489,9 @@ def add_sub_item(product_id: uuid.UUID, payload: schemas.SubItemAdd, db: Session
         product_id=sub_product.id,
         sku=sub_product.sku,
         name=sub_product.name,
+        description=sub_product.description,
+        unit_price=sub_product.unit_price,
+        currency=sub_product.currency,
         has_file=bool(sub_product.image_object_key),
     )
 
@@ -565,13 +551,8 @@ def download_product_bundle(product_id: uuid.UUID, db: Session = Depends(get_db)
 
     zip_buffer.seek(0)
     filename = f"{product.sku}-catalogue.zip"
-<<<<<<< HEAD
-    return StreamingResponse(
-        zip_buffer,
-=======
     return Response(
         content=zip_buffer.getvalue(),
->>>>>>> testing
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

@@ -17,6 +17,7 @@ class Project(Base):
     name = Column(String(255), nullable=False)
     budget_year = Column(String(20))  # e.g. "2025-2026"
     description = Column(Text)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     documents = relationship("Document", back_populates="project")
@@ -34,7 +35,9 @@ class Company(Base):
     support_email = Column(String(255))
     support_phone = Column(String(50))
     logo_object_key = Column(String(500))
+    seal_object_key = Column(String(500))  # official company seal/stamp, shown on quotation exports
     is_primary = Column(Boolean, default=False, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -46,6 +49,7 @@ class Customer(Base):
     email = Column(String(255))
     phone = Column(String(50))
     billing_address = Column(JSONB)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     documents = relationship("Document", back_populates="customer")
@@ -60,6 +64,7 @@ class Document(Base):
     doc_number = Column(String(50), unique=True, nullable=False)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), index=True)  # which company issues this document — chosen per-document, no more single "primary" company
     status = Column(String(20), nullable=False, default="draft", index=True)
     currency = Column(String(3), default="USD")
     subtotal = Column(Numeric(12, 2))
@@ -87,6 +92,7 @@ class LineItem(Base):
     product_id = Column(UUID(as_uuid=True), index=True)
     sort_order = Column(Integer, default=0)  # preserves entry order — ids are random UUIDs, not sequential
     description = Column(Text)
+    remark = Column(String(500))  # per-line-item override — falls back to the product's own catalog remark if blank
     unit = Column(String(20), default="Nos")
     quantity = Column(Numeric(12, 2))
     unit_price = Column(Numeric(12, 2))

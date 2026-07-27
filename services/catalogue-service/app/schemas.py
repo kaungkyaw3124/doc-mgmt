@@ -13,6 +13,7 @@ class ProductCreate(BaseModel):
     category: Optional[str] = None
     unit_price: Optional[Decimal] = None
     currency: str = "USD"
+    remark: Optional[str] = None
     attributes: Optional[dict] = None
 
 
@@ -22,6 +23,7 @@ class ProductUpdate(BaseModel):
     category: Optional[str] = None
     unit_price: Optional[Decimal] = None
     currency: Optional[str] = None
+    remark: Optional[str] = None
     attributes: Optional[dict] = None
 
 
@@ -34,6 +36,7 @@ class ProductOut(BaseModel):
     category: Optional[str]
     unit_price: Optional[Decimal]
     currency: str
+    remark: Optional[str]
     attributes: Optional[dict]
     image_object_key: Optional[str]
     sub_item_count: int = 0
@@ -51,6 +54,9 @@ class SubItemOut(BaseModel):
     product_id: uuid.UUID
     sku: str
     name: str
+    description: Optional[str] = None
+    unit_price: Optional[Decimal] = None
+    currency: Optional[str] = None
     has_file: bool
 
 

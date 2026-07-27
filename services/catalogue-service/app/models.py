@@ -18,6 +18,7 @@ class Product(Base):
     category = Column(String(100), index=True)
     unit_price = Column(Numeric(12, 2))
     currency = Column(String(3), default="USD")
+    remark = Column(String(500))  # shows up as its own column on quotation exports, next to Amount
     attributes = Column(JSONB)              # flexible per-category fields
     image_object_key = Column(String(500))  # pointer into MinIO, reusing document-service's bucket approach
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

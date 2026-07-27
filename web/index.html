@@ -372,12 +372,15 @@
     width: 480px; max-height: 70vh; overflow-y: auto;
     box-shadow: 0 4px 20px rgba(27,42,74,0.2);
   }
-  .modal-box-wide { width: 800px; max-width: 92vw; }
+  .modal-box-wide { width: 950px; max-width: 94vw; }
   .modal-box h3 { margin-bottom: 16px; }
   .modal-close { float: right; }
 
-  .filter-bar { margin-bottom: 14px; }
-  .filter-bar input { max-width: 320px; margin-bottom: 0; }
+  .filter-bar { margin-bottom: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .filter-bar input, .filter-bar select { margin-bottom: 0; }
+  .filter-bar input[type="text"] { max-width: 280px; }
+  .filter-bar input[type="date"] { width: auto; }
+  .filter-bar .filter-date-group { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
 
   .search-bar {
     display: flex;
@@ -498,6 +501,31 @@
 
       <div class="filter-bar">
         <input type="text" id="documents-filter" placeholder="Filter by document number…">
+        <select id="documents-type-filter" style="max-width:160px;">
+          <option value="">All types</option>
+          <option value="quotation">Quotation</option>
+          <option value="invoice">Invoice</option>
+          <option value="proposal">Proposal</option>
+          <option value="catalogue">Catalogue</option>
+        </select>
+        <select id="documents-status-filter" style="max-width:160px;">
+          <option value="">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="sent">Sent</option>
+          <option value="paid">Paid</option>
+          <option value="void">Void</option>
+          <option value="expired">Expired</option>
+        </select>
+        <select id="documents-project-filter" style="max-width:200px;">
+          <option value="">All projects</option>
+        </select>
+        <div class="filter-date-group">
+          <span>Created</span>
+          <input type="date" id="documents-date-from">
+          <span>to</span>
+          <input type="date" id="documents-date-to">
+        </div>
+        <button type="button" class="btn-secondary" id="documents-reset-filters-btn">Reset filters</button>
       </div>
 
       <table>
@@ -525,10 +553,7 @@
               <button type="button" id="open-category-list-btn">Edit category</button>
             </div>
           </span>
-<<<<<<< HEAD
-=======
           <button class="btn-secondary" id="open-bulk-import-btn" style="margin-right:8px;">📥 Bulk import</button>
->>>>>>> testing
           <button class="btn-secondary" id="open-cart-btn" style="margin-right:8px;">🛒 Cart <span id="cart-count-badge"></span></button>
           <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
           <button class="btn-secondary" id="toggle-product-form">+ New product</button>
@@ -538,7 +563,17 @@
       <div id="products-banner"></div>
 
       <div class="filter-bar">
-        <input type="text" id="products-filter" placeholder="Filter by name or item number…">
+        <input type="text" id="products-filter" placeholder="Filter by name, item number, or category…">
+        <select id="products-category-filter" style="max-width:200px;">
+          <option value="">All categories</option>
+        </select>
+        <div class="filter-date-group">
+          <span>Created</span>
+          <input type="date" id="products-date-from">
+          <span>to</span>
+          <input type="date" id="products-date-to">
+        </div>
+        <button type="button" class="btn-secondary" id="products-reset-filters-btn">Reset filters</button>
       </div>
 
       <table>
@@ -548,11 +583,13 @@
             <th>Name <button class="sort-btn" data-sort-table="products" data-sort-col="name">⇅</button></th>
             <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
             <th>Price <button class="sort-btn" data-sort-table="products" data-sort-col="price">⇅</button></th>
+            <th>Created <button class="sort-btn" data-sort-table="products" data-sort-col="created">⇅</button></th>
+            <th>Modified <button class="sort-btn" data-sort-table="products" data-sort-col="modified">⇅</button></th>
             <th>Catalog</th><th>Cart</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="products-tbody">
-          <tr class="empty-row"><td colspan="8">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="10">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -564,13 +601,23 @@
           <h2>Customers</h2>
           <p>Who your documents are for.</p>
         </div>
-        <button class="btn-secondary" id="toggle-customer-form">+ New customer</button>
+        <div>
+          <button class="btn-secondary" id="toggle-customer-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="toggle-customer-form">+ New customer</button>
+        </div>
       </div>
 
       <div id="customers-banner"></div>
 
       <div class="filter-bar">
         <input type="text" id="customers-filter" placeholder="Filter by name…">
+        <div class="filter-date-group">
+          <span>Created</span>
+          <input type="date" id="customers-date-from">
+          <span>to</span>
+          <input type="date" id="customers-date-to">
+        </div>
+        <button type="button" class="btn-secondary" id="customers-reset-filters-btn">Reset filters</button>
       </div>
 
       <table>
@@ -579,11 +626,11 @@
             <th>Name <button class="sort-btn" data-sort-table="customers" data-sort-col="name">⇅</button></th>
             <th>Email</th><th>Phone</th>
             <th>Created <button class="sort-btn" data-sort-table="customers" data-sort-col="created_at">⇅</button></th>
-            <th>Edit</th>
+            <th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="customers-tbody">
-          <tr class="empty-row"><td colspan="5">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -595,21 +642,26 @@
           <h2>Projects</h2>
           <p>Group documents by project and budget year.</p>
         </div>
-        <button class="btn-secondary" id="toggle-project-form">+ New project</button>
+        <div>
+          <button class="btn-secondary" id="toggle-project-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="toggle-project-form">+ New project</button>
+        </div>
       </div>
 
       <div id="projects-banner"></div>
 
-      <div id="project-documents-panel" style="display:none;" class="card">
-        <h3 id="project-documents-title">Documents</h3>
-        <table>
-          <thead><tr><th>Number</th><th>Type</th><th>Status</th><th>Total</th><th>Created</th></tr></thead>
-          <tbody id="project-documents-tbody"></tbody>
-        </table>
-      </div>
-
       <div class="filter-bar">
         <input type="text" id="projects-filter" placeholder="Filter by name…">
+        <select id="projects-budget-year-filter" style="max-width:160px;">
+          <option value="">All budget years</option>
+        </select>
+        <div class="filter-date-group">
+          <span>Created</span>
+          <input type="date" id="projects-date-from">
+          <span>to</span>
+          <input type="date" id="projects-date-to">
+        </div>
+        <button type="button" class="btn-secondary" id="projects-reset-filters-btn">Reset filters</button>
       </div>
 
       <table>
@@ -617,11 +669,11 @@
           <tr>
             <th>Name <button class="sort-btn" data-sort-table="projects" data-sort-col="name">⇅</button></th>
             <th>Budget year <button class="sort-btn" data-sort-table="projects" data-sort-col="budget_year">⇅</button></th>
-            <th>Created</th><th>Documents</th><th>Edit</th>
+            <th>Created</th><th>Documents</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="projects-tbody">
-          <tr class="empty-row"><td colspan="5">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -633,24 +685,34 @@
           <h2>Company</h2>
           <p>Your business profile — used as the supplier on generated quotations.</p>
         </div>
-        <button class="btn-secondary" id="toggle-company-form">+ New company</button>
+        <div>
+          <button class="btn-secondary" id="toggle-company-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="toggle-company-form">+ New company</button>
+        </div>
       </div>
 
       <div id="company-banner"></div>
 
       <div class="filter-bar">
         <input type="text" id="company-filter" placeholder="Filter by name…">
+        <div class="filter-date-group">
+          <span>Created</span>
+          <input type="date" id="company-date-from">
+          <span>to</span>
+          <input type="date" id="company-date-to">
+        </div>
+        <button type="button" class="btn-secondary" id="company-reset-filters-btn">Reset filters</button>
       </div>
 
       <table>
         <thead>
           <tr>
             <th>Name <button class="sort-btn" data-sort-table="company" data-sort-col="name">⇅</button></th>
-            <th>Position</th><th>Contact No</th><th>Primary</th><th>Logo</th><th>Edit</th>
+            <th>Position</th><th>Contact No</th><th>Logo</th><th>Seal</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="companies-tbody">
-          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="7">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1000,11 +1062,12 @@
           <input type="text" id="company-phone" placeholder="+95 9 xxx xxx xxx">
         </div>
       </div>
-      <label for="company-logo">Logo (optional)</label>
-      <input type="file" id="company-logo" accept="image/*">
-      <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-top:4px;">
-        <input type="checkbox" id="company-is-primary" style="width:auto; margin:0;"> Use as primary company on quotations
-      </label>
+      <label for="company-logo">Logo (optional, .png, .jpg, or .svg)</label>
+      <input type="file" id="company-logo" accept="image/png,image/jpeg,image/svg+xml">
+      <div id="company-current-logo-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
+      <label for="company-seal">Company seal (optional, .png or .jpg)</label>
+      <input type="file" id="company-seal" accept="image/png,image/jpeg">
+      <div id="company-current-seal-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
       <button type="submit" class="btn-primary" id="company-form-submit-btn" style="margin-top:14px;">Create company</button>
     </form>
   </div>
@@ -1038,6 +1101,7 @@
           <datalist id="customer-datalist"></datalist>
           <datalist id="product-datalist"></datalist>
           <div class="hint" id="doc-customer-hint" style="display:none;">No matching customer — this document will be created without one.</div>
+          <button type="button" class="link-btn-inline" id="doc-new-customer-btn" style="margin-top:4px;">+ New customer</button>
         </div>
         <div>
           <label for="doc-currency">Currency</label>
@@ -1050,11 +1114,15 @@
       <div class="form-row">
         <div>
           <label for="doc-project">Project</label>
-          <select id="doc-project">
-            <option value="">— no project —</option>
-          </select>
+          <input type="text" id="doc-project" list="project-datalist" placeholder="Type a project name…" autocomplete="off">
+          <datalist id="project-datalist"></datalist>
+          <button type="button" class="link-btn-inline" id="doc-new-project-btn" style="margin-top:4px;">+ New project</button>
         </div>
-        <div></div>
+        <div>
+          <label for="doc-company">Company (which company issues this document)</label>
+          <input type="text" id="doc-company" list="company-datalist" placeholder="Type a company name…" autocomplete="off">
+          <datalist id="company-datalist"></datalist>
+        </div>
       </div>
 
       <div class="form-row" style="align-items:center; margin-bottom:8px;">
@@ -1108,6 +1176,8 @@ Warranty: 2 years from the date of delivery</textarea>
       </div>
       <label for="product-description">Description</label>
       <textarea id="product-description" rows="2" placeholder="Short description of this product"></textarea>
+      <label for="product-remark">Remark (shows as its own column on quotation exports)</label>
+      <textarea id="product-remark" rows="2" placeholder="Optional — e.g. lead time, warranty note, spec highlight"></textarea>
       <label for="product-file">Catalog file (image, PDF, or spec sheet — optional)</label>
       <input type="file" id="product-file">
       <div id="product-current-file-info" style="display:none; font-size:13px; margin-top:6px;"></div>
@@ -1197,6 +1267,51 @@ Warranty: 2 years from the date of delivery</textarea>
   </div>
 </div>
 
+<!-- ============ CUSTOMER RECYCLE BIN MODAL ============ -->
+<div class="modal-overlay" id="customer-trash-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="customer-trash-close">Close ✕</button>
+    <h3>Customers — recycle bin</h3>
+    <div id="customer-trash-banner"></div>
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Restore</th></tr></thead>
+      <tbody id="customer-trash-tbody">
+        <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ PROJECT RECYCLE BIN MODAL ============ -->
+<div class="modal-overlay" id="project-trash-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="project-trash-close">Close ✕</button>
+    <h3>Projects — recycle bin</h3>
+    <div id="project-trash-banner"></div>
+    <table>
+      <thead><tr><th>Name</th><th>Budget year</th><th>Restore</th></tr></thead>
+      <tbody id="project-trash-tbody">
+        <tr class="empty-row"><td colspan="3">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ COMPANY RECYCLE BIN MODAL ============ -->
+<div class="modal-overlay" id="company-trash-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="company-trash-close">Close ✕</button>
+    <h3>Companies — recycle bin</h3>
+    <div id="company-trash-banner"></div>
+    <table>
+      <thead><tr><th>Name</th><th>Position</th><th>Restore</th></tr></thead>
+      <tbody id="company-trash-tbody">
+        <tr class="empty-row"><td colspan="3">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ============ CART MODAL ============ -->
 <div class="modal-overlay" id="cart-modal">
   <div class="modal-box">
@@ -1204,7 +1319,7 @@ Warranty: 2 years from the date of delivery</textarea>
     <h3>Cart</h3>
     <div id="cart-modal-banner"></div>
     <table>
-      <thead><tr><th>Item Number</th><th>Name</th><th>Price</th><th>Remove</th></tr></thead>
+      <thead><tr><th>Item Number</th><th>Name</th><th>Qty</th><th>Price</th><th>Remove</th></tr></thead>
       <tbody id="cart-tbody">
         <tr class="empty-row"><td colspan="4">Your cart is empty.</td></tr>
       </tbody>
@@ -1231,8 +1346,27 @@ Warranty: 2 years from the date of delivery</textarea>
   </div>
 </div>
 
-<<<<<<< HEAD
-=======
+<!-- ============ VIEW CUSTOMER MODAL ============ -->
+<div class="modal-overlay" id="view-customer-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="view-customer-close">Close ✕</button>
+    <h3 id="view-customer-title">Customer</h3>
+    <div id="view-customer-content"></div>
+  </div>
+</div>
+
+<!-- ============ PROJECT DOCUMENTS MODAL ============ -->
+<div class="modal-overlay" id="project-documents-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="project-documents-close">Close ✕</button>
+    <h3 id="project-documents-title">Documents</h3>
+    <table>
+      <thead><tr><th>Number</th><th>Type</th><th>Status</th><th>Total</th><th>Created</th></tr></thead>
+      <tbody id="project-documents-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ============ BULK IMPORT PRODUCTS MODAL ============ -->
 <div class="modal-overlay" id="bulk-import-modal">
   <div class="modal-box modal-box-wide">
@@ -1255,7 +1389,6 @@ Warranty: 2 years from the date of delivery</textarea>
   </div>
 </div>
 
->>>>>>> testing
 <script>
 const API_BASE = '/api';
 
@@ -1310,6 +1443,20 @@ function gotoProject(projectId) {
   viewProjectDocuments(project);
 }
 
+function formatApiErrorDetail(detail) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    // FastAPI/Pydantic validation errors: [{type, loc: [...], msg, input}, ...]
+    return detail.map(err => {
+      if (typeof err === 'string') return err;
+      const loc = Array.isArray(err.loc) ? err.loc.filter(p => p !== 'body') : [];
+      const field = loc.length ? loc.join(' → ') : 'value';
+      return `${field}: ${err.msg || 'invalid value'}`;
+    }).join('; ');
+  }
+  return null;
+}
+
 async function apiFetch(path, options = {}) {
   const headers = Object.assign({}, options.headers, { 'Authorization': 'Bearer ' + token });
   if (options.body) headers['Content-Type'] = 'application/json';
@@ -1320,7 +1467,10 @@ async function apiFetch(path, options = {}) {
   }
   if (!res.ok) {
     let detail = 'Something went wrong.';
-    try { const body = await res.json(); detail = body.detail || detail; } catch (e) {}
+    try {
+      const body = await res.json();
+      detail = formatApiErrorDetail(body.detail) || detail;
+    } catch (e) {}
     if (res.status === 403) detail = "You don't have access to this. (" + detail + ")";
     throw new Error(detail);
   }
@@ -1478,13 +1628,17 @@ document.getElementById('doc-modal-close').addEventListener('click', () => {
   document.getElementById('doc-modal').classList.remove('active');
 });
 
-async function prefillNextDocNumber() {
+async function prefillNextDocNumber(forceOverwrite = false) {
   try {
-    const result = await apiFetch('/documents/next-number');
+    const companyId = resolveDocCompanyIdFromInput();
+    const qs = companyId ? ('?company_id=' + encodeURIComponent(companyId)) : '';
+    const result = await apiFetch('/documents/next-number' + qs);
     // Only fill it in if the user hasn't already started typing their own
-    // while this was loading, and hasn't switched to editing a document.
+    // while this was loading, and hasn't switched to editing a document —
+    // unless forceOverwrite is set (used when the Company selection changes,
+    // since the number's prefix should then match the newly chosen company).
     const field = document.getElementById('doc-number');
-    if (!field.value && !editingDocumentId) {
+    if ((forceOverwrite || !field.value) && !editingDocumentId) {
       field.value = result.doc_number;
     }
   } catch (err) {
@@ -1492,6 +1646,13 @@ async function prefillNextDocNumber() {
     // generate a number at submit time either way.
   }
 }
+
+document.getElementById('doc-company').addEventListener('change', () => {
+  if (!editingDocumentId) prefillNextDocNumber(true);
+});
+document.getElementById('doc-company').addEventListener('input', () => {
+  if (!editingDocumentId) prefillNextDocNumber(true);
+});
 
 let editingDocumentId = null;
 let cachedDocuments = [];
@@ -1512,16 +1673,19 @@ function addLineItem(prefill) {
     }
   }
 
+  const safeVal = (v, fallback = '') => (v === undefined || v === null) ? fallback : v;
+
   div.innerHTML = `
     <div style="flex: 1.4;">
       <label>Product (optional)</label>
       <input type="text" class="li-product-search" list="product-datalist" placeholder="Type to search products…" autocomplete="off" value="${escapeHtml(prefillProductDisplay)}">
     </div>
-    <div><label>Description</label><input type="text" class="li-desc" placeholder="Widget A" value="${prefill ? escapeHtml(prefill.description || '') : ''}" ${prefill && prefill.product_id ? 'disabled' : ''}></div>
-    <div style="max-width:70px;"><label>Qty</label><input type="text" class="li-qty" placeholder="1" value="${prefill ? prefill.quantity : ''}"></div>
+    <input type="hidden" class="li-desc" value="${prefill ? escapeHtml(prefill.description || '') : ''}">
+    <div style="max-width:70px;"><label>Qty</label><input type="text" class="li-qty" placeholder="1" value="${prefill ? safeVal(prefill.quantity) : ''}"></div>
     <div style="max-width:80px;"><label>Unit</label><input type="text" class="li-unit" placeholder="Nos" value="${prefill ? escapeHtml(prefill.unit || 'Nos') : 'Nos'}"></div>
-    <div><label>Unit price</label><input type="text" class="li-price" placeholder="20.00" value="${prefill ? prefill.unit_price : ''}"></div>
-    <div style="max-width:70px;"><label>Tax %</label><input type="text" class="li-tax" placeholder="0" value="${prefill ? prefill.tax_rate : ''}"></div>
+    <div><label>Unit price</label><input type="text" class="li-price" placeholder="20.00" value="${prefill ? safeVal(prefill.unit_price) : ''}"></div>
+    <div><label>Remark</label><input type="text" class="li-remark" placeholder="Optional note" value="${prefill ? escapeHtml(prefill.remark || '') : ''}"></div>
+    <div style="max-width:70px;"><label>Tax %</label><input type="text" class="li-tax" placeholder="0" value="${prefill ? safeVal(prefill.tax_rate, 0) : ''}"></div>
     <button type="button" class="remove-line" data-line-id="${id}">Remove</button>
   `;
   document.getElementById('line-items').appendChild(div);
@@ -1530,15 +1694,17 @@ function addLineItem(prefill) {
     const typed = e.target.value.trim();
     const descInput = div.querySelector('.li-desc');
     const priceInput = div.querySelector('.li-price');
+    const qtyInput = div.querySelector('.li-qty');
+    const remarkInput = div.querySelector('.li-remark');
     const match = typed && cachedProducts.find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
     if (match) {
       div.dataset.resolvedProductId = match.id;
       descInput.value = match.name;
-      descInput.disabled = true;
       if (match.unit_price) priceInput.value = match.unit_price;
+      if (!qtyInput.value) qtyInput.value = '1';
+      if (!remarkInput.value && match.remark) remarkInput.value = match.remark;
     } else {
       delete div.dataset.resolvedProductId;
-      descInput.disabled = false;
       if (!typed) descInput.value = '';
     }
   });
@@ -1562,21 +1728,40 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showBanner('doc-modal-banner', '');
   const items = [];
-  document.querySelectorAll('#line-items .line-item-row').forEach(row => {
+  const incompleteRows = [];
+  document.querySelectorAll('#line-items .line-item-row').forEach((row, rowIndex) => {
     const product_id = row.dataset.resolvedProductId || null;
-    const description = row.querySelector('.li-desc').value;
+    let description = row.querySelector('.li-desc').value;
+    const remark = row.querySelector('.li-remark').value;
     const quantity = row.querySelector('.li-qty').value;
     const unit = row.querySelector('.li-unit').value || 'Nos';
     const unit_price = row.querySelector('.li-price').value;
     const tax_rate = row.querySelector('.li-tax').value || '0';
-    if (!quantity) return;
-    if (!product_id && (!description || !unit_price)) return; // free-text items still need these
+
+    const hasSomeData = product_id || description || remark || unit_price;
+    if (!hasSomeData) return; // a genuinely blank/unused row — fine to ignore silently
+
+    if (!quantity) {
+      incompleteRows.push(`Row ${rowIndex + 1}: needs a quantity`);
+      return;
+    }
+    if (!product_id && (!remark || !unit_price)) {
+      incompleteRows.push(`Row ${rowIndex + 1}: needs either a product, or both a remark and unit price`);
+      return;
+    }
+    if (!product_id && !description) description = remark; // free-text row — use the remark as its name/description too, so exports aren't blank
+
     const item = { quantity: Number(quantity), tax_rate: Number(tax_rate), unit };
     if (product_id) item.product_id = product_id;
     if (description) item.description = description;
+    if (remark) item.remark = remark;
     if (unit_price) item.unit_price = Number(unit_price);
     items.push(item);
   });
+  if (incompleteRows.length > 0) {
+    showBanner('doc-modal-banner', 'Fix these before saving — nothing was changed: ' + incompleteRows.join('; '));
+    return;
+  }
   if (items.length === 0) {
     showBanner('doc-modal-banner', 'Add at least one line item: either pick a product, or fill in description + quantity + price.');
     return;
@@ -1586,7 +1771,8 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     submitBtn.disabled = true;
     const commonPayload = {
       customer_id: resolveCustomerIdFromInput(),
-      project_id: document.getElementById('doc-project').value || null,
+      project_id: resolveDocProjectIdFromInput(),
+      company_id: resolveDocCompanyIdFromInput(),
       currency: document.getElementById('doc-currency').value,
       terms_and_conditions: document.getElementById('doc-terms').value || null,
       items
@@ -1637,7 +1823,12 @@ function startEditDocument(doc) {
   document.getElementById('doc-customer-hint').style.display = 'none';
 
   document.getElementById('doc-currency').value = doc.currency || 'USD';
-  document.getElementById('doc-project').value = doc.project_id || '';
+  const docProject = cachedProjects.find(p => p.id === doc.project_id);
+  document.getElementById('doc-project').value = docProject
+    ? `${docProject.name}${docProject.budget_year ? ' (' + docProject.budget_year + ')' : ''}`
+    : '';
+  const docCompany = cachedCompanies.find(c => c.id === doc.company_id);
+  document.getElementById('doc-company').value = docCompany ? docCompany.name : '';
   document.getElementById('doc-terms').value = doc.terms_and_conditions || '';
 
   document.getElementById('line-items').innerHTML = '';
@@ -1648,10 +1839,6 @@ function startEditDocument(doc) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-<<<<<<< HEAD
-async function downloadDocumentCatalogue(documentId, docNumber) {
-  showBanner('documents-banner', '');
-=======
 async function downloadDocumentCatalogue(documentId, docNumber, btn) {
   showBanner('documents-banner', '');
   const originalLabel = btn ? btn.textContent : null;
@@ -1659,7 +1846,6 @@ async function downloadDocumentCatalogue(documentId, docNumber, btn) {
     btn.textContent = 'Preparing…';
     btn.disabled = true;
   }
->>>>>>> testing
   try {
     const res = await fetch(API_BASE + '/documents/' + documentId + '/export/catalogue', {
       headers: { 'Authorization': 'Bearer ' + token }
@@ -1679,12 +1865,6 @@ async function downloadDocumentCatalogue(documentId, docNumber, btn) {
     URL.revokeObjectURL(url);
   } catch (err) {
     showBanner('documents-banner', err.message);
-<<<<<<< HEAD
-  }
-}
-
-async function downloadQuotation(documentId, docNumber, format) {
-=======
   } finally {
     if (btn) {
       btn.textContent = originalLabel;
@@ -1694,7 +1874,6 @@ async function downloadQuotation(documentId, docNumber, format) {
 }
 
 async function downloadQuotation(documentId, docNumber, format, btn) {
->>>>>>> testing
   showBanner('documents-banner', '');
   const endpoint = format === 'pdf' ? '/export/quotation-pdf' : '/export/quotation';
   const extension = format === 'pdf' ? 'pdf' : 'xlsx';
@@ -1737,7 +1916,7 @@ async function loadDocuments() {
     const docs = await apiFetch('/documents');
     if (isStaleLoad('documents', mySeq)) return; // a newer load has since started — discard this one
     cachedDocuments = docs;
-    renderDocumentsTable(docs);
+    applyFilterAndSort('documents');
   } catch (err) {
     if (isStaleLoad('documents', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(err.message)}</td></tr>`;
@@ -1748,26 +1927,67 @@ document.getElementById('view-document-close').addEventListener('click', () => {
   document.getElementById('view-document-modal').classList.remove('active');
 });
 
-function openViewDocumentModal(doc) {
+async function openViewDocumentModal(doc) {
   document.getElementById('view-document-title').textContent = 'Document — ' + doc.doc_number;
-  document.getElementById('view-document-content').innerHTML = renderDocumentDetailContent(doc);
+  document.getElementById('view-document-content').innerHTML = renderDocumentDetailContent(doc, {});
   document.getElementById('view-document-modal').classList.add('active');
+
+  // Fetch sub-items for every product-based line item (in parallel), then
+  // re-render with them included — same "position" numbering the
+  // Catalogue zip export uses, so what you see here matches what you'd
+  // get in that download.
+  const subItemsByProductId = {};
+  const productIds = [...new Set((doc.items || []).filter(i => i.product_id).map(i => i.product_id))];
+  await Promise.all(productIds.map(async (pid) => {
+    try {
+      const subItems = await apiFetch('/products/' + pid + '/sub-items');
+      if (subItems.length) subItemsByProductId[pid] = subItems;
+    } catch (err) {
+      // non-fatal — that item's row just won't show a sub-items list
+    }
+  }));
+
+  document.getElementById('view-document-content').innerHTML = renderDocumentDetailContent(doc, subItemsByProductId);
 }
 
-function renderDocumentDetailContent(doc) {
+function renderDocumentDetailContent(doc, subItemsByProductId) {
   const customer = cachedCustomers.find(c => c.id === doc.customer_id);
   const project = cachedProjects.find(p => p.id === doc.project_id);
 
-  const itemRows = (doc.items || []).map(item => `
-    <tr>
-      <td>${escapeHtml(item.description || '—')}</td>
-      <td class="mono">${item.quantity != null ? item.quantity : '—'}</td>
-      <td>${escapeHtml(item.unit || '')}</td>
-      <td class="mono">${fmtMoney(item.unit_price)}</td>
-      <td class="mono">${item.tax_rate != null ? item.tax_rate : 0}%</td>
-      <td class="mono">${fmtMoney(item.line_total)}</td>
-    </tr>
-  `).join('');
+  let catalogueNumber = 0; // matches the Catalogue zip export's numbering — only product-based items count
+  const itemRows = (doc.items || []).map(item => {
+    if (item.product_id) catalogueNumber++;
+    const subItems = item.product_id ? subItemsByProductId[item.product_id] : null;
+
+    const mainRow = `
+      <tr>
+        <td>${escapeHtml(item.description || '—')}${item.product_id ? ` <span class="mono" style="color:var(--text-dim); font-size:12px;">(#${catalogueNumber})</span>` : ''}</td>
+        <td class="mono">${item.quantity != null ? item.quantity : '—'}</td>
+        <td>${escapeHtml(item.unit || '')}</td>
+        <td class="mono">${fmtMoney(item.unit_price)}</td>
+        <td class="mono">${item.tax_rate != null ? item.tax_rate : 0}%</td>
+        <td class="mono">${fmtMoney(item.line_total)}</td>
+      </tr>
+    `;
+
+    if (!subItems) return mainRow;
+
+    const subRows = subItems.map(sub => `
+      <tr style="background:var(--paper-dim);">
+        <td style="padding-left:28px; font-size:13px;">
+          <span class="mono" style="color:var(--text-dim);">${catalogueNumber}.${sub.sequence_number}</span>
+          ${escapeHtml(sub.sku)} — ${escapeHtml(sub.name)}${sub.has_file ? '' : ' <span style="color:var(--text-dim); font-size:12px;">(no catalog file)</span>'}
+        </td>
+        <td class="mono" style="font-size:13px;">1.00</td>
+        <td style="font-size:13px;">Nos</td>
+        <td class="mono" style="font-size:13px;">${sub.unit_price != null ? fmtMoney(sub.unit_price) : '—'}</td>
+        <td style="font-size:13px;">—</td>
+        <td class="mono" style="font-size:13px;">${sub.unit_price != null ? fmtMoney(sub.unit_price) : '—'}</td>
+      </tr>
+    `).join('');
+
+    return mainRow + subRows;
+  }).join('');
 
   return `
     <div class="form-row">
@@ -1870,15 +2090,6 @@ function renderDocumentsTable(docs) {
       if (doc) openViewDocumentModal(doc);
     });
   });
-  tbody.querySelectorAll('[data-catalogue-export-id]').forEach(btn => {
-    btn.addEventListener('click', () => downloadDocumentCatalogue(btn.dataset.catalogueExportId, btn.dataset.catalogueExportNumber));
-  });
-  tbody.querySelectorAll('[data-view-doc-id]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const doc = cachedDocuments.find(d => d.id === btn.dataset.viewDocId);
-      if (doc) openViewDocumentModal(doc);
-    });
-  });
   tbody.querySelectorAll('[data-trash-doc-id]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm(`Move "${btn.dataset.trashDocNumber}" to the recycle bin? You can restore it from there later.`)) return;
@@ -1893,11 +2104,30 @@ function renderDocumentsTable(docs) {
   });
 }
 
-document.getElementById('documents-filter').addEventListener('input', (e) => {
-  const q = e.target.value.trim().toLowerCase();
-  const filtered = q ? cachedDocuments.filter(d => d.doc_number.toLowerCase().includes(q)) : cachedDocuments;
-  renderDocumentsTable(filtered);
+document.getElementById('documents-filter').addEventListener('input', () => applyFilterAndSort('documents'));
+document.getElementById('documents-type-filter').addEventListener('change', () => applyFilterAndSort('documents'));
+document.getElementById('documents-status-filter').addEventListener('change', () => applyFilterAndSort('documents'));
+document.getElementById('documents-project-filter').addEventListener('change', () => applyFilterAndSort('documents'));
+document.getElementById('documents-date-from').addEventListener('change', () => applyFilterAndSort('documents'));
+document.getElementById('documents-date-to').addEventListener('change', () => applyFilterAndSort('documents'));
+document.getElementById('documents-reset-filters-btn').addEventListener('click', () => {
+  document.getElementById('documents-filter').value = '';
+  document.getElementById('documents-type-filter').value = '';
+  document.getElementById('documents-status-filter').value = '';
+  document.getElementById('documents-project-filter').value = '';
+  document.getElementById('documents-date-from').value = '';
+  document.getElementById('documents-date-to').value = '';
+  applyFilterAndSort('documents');
 });
+
+function refreshDocumentsProjectFilter() {
+  const select = document.getElementById('documents-project-filter');
+  if (!select) return;
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">All projects</option>' +
+    cachedProjects.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  if (currentValue) select.value = currentValue;
+}
 
 document.getElementById('open-document-trash-btn').addEventListener('click', async () => {
   showBanner('document-trash-banner', '');
@@ -1947,6 +2177,20 @@ async function loadDocumentTrash() {
 let editingProjectId = null;
 let cachedProjects = [];
 
+let reopenDocModalAfterProject = false;
+
+document.getElementById('doc-new-project-btn').addEventListener('click', () => {
+  reopenDocModalAfterProject = true;
+  document.getElementById('doc-modal').classList.remove('active');
+
+  editingProjectId = null;
+  document.getElementById('project-form').reset();
+  document.getElementById('project-form-title').textContent = 'New project';
+  document.getElementById('project-form-submit-btn').textContent = 'Create project';
+  showBanner('project-modal-banner', '');
+  document.getElementById('project-modal').classList.add('active');
+});
+
 document.getElementById('toggle-project-form').addEventListener('click', () => {
   editingProjectId = null;
   document.getElementById('project-form').reset();
@@ -1958,6 +2202,10 @@ document.getElementById('toggle-project-form').addEventListener('click', () => {
 
 document.getElementById('project-modal-close').addEventListener('click', () => {
   document.getElementById('project-modal').classList.remove('active');
+  if (reopenDocModalAfterProject) {
+    reopenDocModalAfterProject = false;
+    document.getElementById('doc-modal').classList.add('active');
+  }
 });
 
 document.getElementById('project-form').addEventListener('submit', async (e) => {
@@ -1970,17 +2218,26 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
   };
   try {
     document.getElementById('project-form-submit-btn').disabled = true;
+    let created = null;
     if (editingProjectId) {
       await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
-      await apiFetch('/projects', { method: 'POST', body: JSON.stringify(payload) });
+      created = await apiFetch('/projects', { method: 'POST', body: JSON.stringify(payload) });
     }
     document.getElementById('project-form').reset();
     document.getElementById('project-modal').classList.remove('active');
     document.getElementById('project-form-title').textContent = 'New project';
     document.getElementById('project-form-submit-btn').textContent = 'Create project';
     editingProjectId = null;
-    loadProjects();
+    await loadProjects();
+
+    if (reopenDocModalAfterProject) {
+      reopenDocModalAfterProject = false;
+      if (created) {
+        document.getElementById('doc-project').value = created.name + (created.budget_year ? ' (' + created.budget_year + ')' : '');
+      }
+      document.getElementById('doc-modal').classList.add('active');
+    }
   } catch (err) {
     showBanner('project-modal-banner', err.message);
   } finally {
@@ -1999,13 +2256,11 @@ function startEditProject(project) {
 }
 
 async function viewProjectDocuments(project) {
-  const panel = document.getElementById('project-documents-panel');
   const tbody = document.getElementById('project-documents-tbody');
   document.getElementById('project-documents-title').textContent =
     'Documents — ' + project.name + (project.budget_year ? ' (' + project.budget_year + ')' : '');
-  panel.style.display = 'block';
+  document.getElementById('project-documents-modal').classList.add('active');
   tbody.innerHTML = '<tr class="empty-row"><td colspan="5">Loading…</td></tr>';
-  window.scrollTo({ top: 0, behavior: 'smooth' });
   try {
     const docs = await apiFetch('/projects/' + project.id + '/documents');
     if (!docs.length) {
@@ -2026,15 +2281,31 @@ async function viewProjectDocuments(project) {
   }
 }
 
+document.getElementById('project-documents-close').addEventListener('click', () => {
+  document.getElementById('project-documents-modal').classList.remove('active');
+});
+
+function refreshDocCompanyPicker() {
+  const datalist = document.getElementById('company-datalist');
+  if (datalist) {
+    datalist.innerHTML = cachedCompanies.map(c => `<option value="${escapeHtml(c.name)}">`).join('');
+  }
+}
+
+function resolveDocCompanyIdFromInput() {
+  const input = document.getElementById('doc-company');
+  const typed = input.value.trim();
+  if (!typed) return null;
+  const match = cachedCompanies.find(c => c.name.toLowerCase() === typed.toLowerCase());
+  return match ? match.id : null;
+}
+
 function refreshProjectPicker() {
-  const select = document.getElementById('doc-project');
-  if (select) {
-    const currentValue = select.value;
-    const options = cachedProjects.map(p =>
-      `<option value="${p.id}">${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}</option>`
+  const datalist = document.getElementById('project-datalist');
+  if (datalist) {
+    datalist.innerHTML = cachedProjects.map(p =>
+      `<option value="${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}">`
     ).join('');
-    select.innerHTML = `<option value="">— no project —</option>${options}`;
-    if (currentValue) select.value = currentValue;
   }
 
   const searchSelect = document.getElementById('search-project-filter');
@@ -2048,6 +2319,17 @@ function refreshProjectPicker() {
   }
 }
 
+function resolveDocProjectIdFromInput() {
+  const input = document.getElementById('doc-project');
+  const typed = input.value.trim();
+  if (!typed) return null;
+  const match = cachedProjects.find(p => {
+    const label = `${p.name}${p.budget_year ? ' (' + p.budget_year + ')' : ''}`;
+    return label.toLowerCase() === typed.toLowerCase() || p.name.toLowerCase() === typed.toLowerCase();
+  });
+  return match ? match.id : null;
+}
+
 async function loadProjects() {
   const tbody = document.getElementById('projects-tbody');
   const mySeq = startLoad('projects');
@@ -2056,7 +2338,9 @@ async function loadProjects() {
     if (isStaleLoad('projects', mySeq)) return;
     cachedProjects = projects;
     refreshProjectPicker();
-    renderProjectsTable(projects);
+    refreshDocumentsProjectFilter();
+    refreshProjectBudgetYearFilter();
+    applyFilterAndSort('projects');
   } catch (err) {
     if (isStaleLoad('projects', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
@@ -2066,7 +2350,7 @@ async function loadProjects() {
 function renderProjectsTable(projects) {
   const tbody = document.getElementById('projects-tbody');
   if (!projects.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No projects match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No projects match.</td></tr>';
     return;
   }
   tbody.innerHTML = projects.map(p => `
@@ -2076,6 +2360,7 @@ function renderProjectsTable(projects) {
       <td>${fmtDate(p.created_at)}</td>
       <td><button class="link-btn-inline" data-view-project-id="${p.id}">View documents</button></td>
       <td><button class="link-btn-inline" data-edit-project-id="${p.id}">Edit</button></td>
+      <td><button class="link-btn-inline" data-trash-project-id="${p.id}" data-trash-project-name="${escapeHtml(p.name)}" style="color:var(--danger);">Delete</button></td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-view-project-id]').forEach(btn => {
@@ -2090,9 +2375,41 @@ function renderProjectsTable(projects) {
       if (project) startEditProject(project);
     });
   });
+  tbody.querySelectorAll('[data-trash-project-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Move "${btn.dataset.trashProjectName}" to the recycle bin? You can restore it from there later.`)) return;
+      showBanner('projects-banner', '');
+      try {
+        await apiFetch('/projects/' + btn.dataset.trashProjectId + '/trash', { method: 'PATCH' });
+        loadProjects();
+      } catch (err) {
+        showBanner('projects-banner', err.message);
+      }
+    });
+  });
 }
 
 document.getElementById('projects-filter').addEventListener('input', () => applyFilterAndSort('projects'));
+document.getElementById('projects-budget-year-filter').addEventListener('change', () => applyFilterAndSort('projects'));
+document.getElementById('projects-date-from').addEventListener('change', () => applyFilterAndSort('projects'));
+document.getElementById('projects-date-to').addEventListener('change', () => applyFilterAndSort('projects'));
+document.getElementById('projects-reset-filters-btn').addEventListener('click', () => {
+  document.getElementById('projects-filter').value = '';
+  document.getElementById('projects-budget-year-filter').value = '';
+  document.getElementById('projects-date-from').value = '';
+  document.getElementById('projects-date-to').value = '';
+  applyFilterAndSort('projects');
+});
+
+function refreshProjectBudgetYearFilter() {
+  const select = document.getElementById('projects-budget-year-filter');
+  if (!select) return;
+  const currentValue = select.value;
+  const years = [...new Set(cachedProjects.map(p => p.budget_year).filter(Boolean))].sort();
+  select.innerHTML = '<option value="">All budget years</option>' +
+    years.map(y => `<option value="${escapeHtml(y)}">${escapeHtml(y)}</option>`).join('');
+  if (currentValue && years.includes(currentValue)) select.value = currentValue;
+}
 
 // ---------- company ----------
 let editingCompanyId = null;
@@ -2102,6 +2419,8 @@ document.getElementById('toggle-company-form').addEventListener('click', () => {
   document.getElementById('company-form').reset();
   document.getElementById('company-form-title').textContent = 'New company';
   document.getElementById('company-form-submit-btn').textContent = 'Create company';
+  document.getElementById('company-current-logo-info').style.display = 'none';
+  document.getElementById('company-current-seal-info').style.display = 'none';
   showBanner('company-modal-banner', '');
   document.getElementById('company-modal').classList.add('active');
 });
@@ -2114,6 +2433,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
   e.preventDefault();
   showBanner('company-modal-banner', '');
   const logoInput = document.getElementById('company-logo');
+  const sealInput = document.getElementById('company-seal');
   const payload = {
     name: document.getElementById('company-name').value,
     short_name: document.getElementById('company-short-name').value || null,
@@ -2121,8 +2441,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     address: document.getElementById('company-address').value || null,
     contact_no: document.getElementById('company-contact').value || null,
     support_email: document.getElementById('company-email').value || null,
-    support_phone: document.getElementById('company-phone').value || null,
-    is_primary: document.getElementById('company-is-primary').checked
+    support_phone: document.getElementById('company-phone').value || null
   };
   try {
     document.getElementById('company-form-submit-btn').disabled = true;
@@ -2155,6 +2474,28 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       }
     }
 
+    if (sealInput.files.length > 0) {
+      const formData = new FormData();
+      formData.append('file', sealInput.files[0]);
+      const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/seal', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: formData
+      });
+      if (!uploadResponse.ok) {
+        let detail = 'Seal upload failed.';
+        try {
+          const errBody = await uploadResponse.json();
+          if (errBody.detail) detail = errBody.detail;
+        } catch (parseErr) {
+          // response wasn't JSON — stick with the generic message
+        }
+        showBanner('company-modal-banner', `Company saved, but the seal didn't upload: ${detail}`);
+        loadCompanies();
+        return;
+      }
+    }
+
     document.getElementById('company-form').reset();
     document.getElementById('company-modal').classList.remove('active');
     document.getElementById('company-form-title').textContent = 'New company';
@@ -2180,7 +2521,36 @@ function startEditCompany(company) {
   document.getElementById('company-contact').value = company.contact_no || '';
   document.getElementById('company-email').value = company.support_email || '';
   document.getElementById('company-phone').value = company.support_phone || '';
-  document.getElementById('company-is-primary').checked = company.is_primary;
+
+  document.getElementById('company-logo').value = '';
+  document.getElementById('company-seal').value = '';
+
+  const logoInfo = document.getElementById('company-current-logo-info');
+  if (company.logo_object_key) {
+    logoInfo.innerHTML = 'A logo is already attached. <button type="button" class="link-btn-inline" data-view-current-logo="' + company.id + '">View it</button> — choosing a new file will replace it.';
+    logoInfo.style.display = 'block';
+    logoInfo.querySelector('[data-view-current-logo]').addEventListener('click', () => viewCompanyImage(company.id, 'logo'));
+  } else {
+    logoInfo.style.display = 'none';
+  }
+
+  const sealInfo = document.getElementById('company-current-seal-info');
+  if (company.seal_object_key) {
+    sealInfo.innerHTML = 'A seal is already attached. <button type="button" class="link-btn-inline" data-view-current-seal="' + company.id + '">View it</button> — choosing a new file will replace it.';
+    sealInfo.style.display = 'block';
+    sealInfo.querySelector('[data-view-current-seal]').addEventListener('click', () => viewCompanyImage(company.id, 'seal'));
+  } else {
+    sealInfo.style.display = 'none';
+  }
+}
+
+async function viewCompanyImage(companyId, kind) {
+  try {
+    const data = await apiFetch('/companies/' + companyId + '/' + kind + '-url');
+    window.open(data.url, '_blank');
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 let cachedCompanies = [];
@@ -2192,7 +2562,8 @@ async function loadCompanies() {
     const companies = await apiFetch('/companies');
     if (isStaleLoad('companies', mySeq)) return;
     cachedCompanies = companies;
-    renderCompaniesTable(companies);
+    applyFilterAndSort('company');
+    refreshDocCompanyPicker();
   } catch (err) {
     if (isStaleLoad('companies', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
@@ -2202,7 +2573,7 @@ async function loadCompanies() {
 function renderCompaniesTable(companies) {
   const tbody = document.getElementById('companies-tbody');
   if (!companies.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No company matches.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No company matches.</td></tr>';
     return;
   }
   tbody.innerHTML = companies.map(c => `
@@ -2210,9 +2581,10 @@ function renderCompaniesTable(companies) {
       <td>${escapeHtml(c.name)}</td>
       <td>${escapeHtml(c.position || '—')}</td>
       <td>${escapeHtml(c.contact_no || '—')}</td>
-      <td>${c.is_primary ? '<span class="stamp stamp-paid">Primary</span>' : '—'}</td>
       <td>${c.logo_object_key ? `<button class="link-btn-inline" data-logo-id="${c.id}">View logo</button>` : '—'}</td>
+      <td>${c.seal_object_key ? `<button class="link-btn-inline" data-seal-id="${c.id}">View seal</button>` : '—'}</td>
       <td><button class="link-btn-inline" data-edit-company-id="${c.id}">Edit</button></td>
+      <td><button class="link-btn-inline" data-trash-company-id="${c.id}" data-trash-company-name="${escapeHtml(c.name)}" style="color:var(--danger);">Delete</button></td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-logo-id]').forEach(btn => {
@@ -2225,19 +2597,63 @@ function renderCompaniesTable(companies) {
       }
     });
   });
+  tbody.querySelectorAll('[data-seal-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        const data = await apiFetch('/companies/' + btn.dataset.sealId + '/seal-url');
+        window.open(data.url, '_blank');
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
   tbody.querySelectorAll('[data-edit-company-id]').forEach(btn => {
     btn.addEventListener('click', () => {
       const company = cachedCompanies.find(c => c.id === btn.dataset.editCompanyId);
       if (company) startEditCompany(company);
     });
   });
+  tbody.querySelectorAll('[data-trash-company-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Move "${btn.dataset.trashCompanyName}" to the recycle bin? You can restore it from there later.`)) return;
+      showBanner('company-banner', '');
+      try {
+        await apiFetch('/companies/' + btn.dataset.trashCompanyId + '/trash', { method: 'PATCH' });
+        loadCompanies();
+      } catch (err) {
+        showBanner('company-banner', err.message);
+      }
+    });
+  });
 }
 
 document.getElementById('company-filter').addEventListener('input', () => applyFilterAndSort('company'));
+document.getElementById('company-date-from').addEventListener('change', () => applyFilterAndSort('company'));
+document.getElementById('company-date-to').addEventListener('change', () => applyFilterAndSort('company'));
+document.getElementById('company-reset-filters-btn').addEventListener('click', () => {
+  document.getElementById('company-filter').value = '';
+  document.getElementById('company-date-from').value = '';
+  document.getElementById('company-date-to').value = '';
+  applyFilterAndSort('company');
+});
 
 // ---------- customers ----------
 let cachedCustomers = [];
 let editingCustomerId = null;
+
+let reopenDocModalAfterCustomer = false;
+
+document.getElementById('doc-new-customer-btn').addEventListener('click', () => {
+  reopenDocModalAfterCustomer = true;
+  document.getElementById('doc-modal').classList.remove('active');
+
+  editingCustomerId = null;
+  document.getElementById('customer-form').reset();
+  document.getElementById('customer-form-title').textContent = 'New customer';
+  document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
+  showBanner('customer-modal-banner', '');
+  document.getElementById('customer-modal').classList.add('active');
+});
 
 document.getElementById('toggle-customer-form').addEventListener('click', () => {
   editingCustomerId = null;
@@ -2250,6 +2666,10 @@ document.getElementById('toggle-customer-form').addEventListener('click', () => 
 
 document.getElementById('customer-modal-close').addEventListener('click', () => {
   document.getElementById('customer-modal').classList.remove('active');
+  if (reopenDocModalAfterCustomer) {
+    reopenDocModalAfterCustomer = false;
+    document.getElementById('doc-modal').classList.add('active');
+  }
 });
 
 document.getElementById('customer-form').addEventListener('submit', async (e) => {
@@ -2265,17 +2685,27 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
   };
   try {
     document.getElementById('customer-form-submit-btn').disabled = true;
+    let created = null;
     if (editingCustomerId) {
       await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
-      await apiFetch('/customers', { method: 'POST', body: JSON.stringify(payload) });
+      created = await apiFetch('/customers', { method: 'POST', body: JSON.stringify(payload) });
     }
     document.getElementById('customer-form').reset();
     document.getElementById('customer-modal').classList.remove('active');
     document.getElementById('customer-form-title').textContent = 'New customer';
     document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
     editingCustomerId = null;
-    loadCustomers();
+    await loadCustomers();
+
+    if (reopenDocModalAfterCustomer) {
+      reopenDocModalAfterCustomer = false;
+      if (created) {
+        document.getElementById('doc-customer').value = created.name;
+        document.getElementById('doc-customer-hint').style.display = 'none';
+      }
+      document.getElementById('doc-modal').classList.add('active');
+    }
   } catch (err) {
     showBanner('customer-modal-banner', err.message);
   } finally {
@@ -2320,7 +2750,7 @@ async function loadCustomers() {
     if (isStaleLoad('customers', mySeq)) return;
     cachedCustomers = customers;
     refreshCustomerPicker();
-    renderCustomersTable(customers);
+    applyFilterAndSort('customers');
   } catch (err) {
     if (isStaleLoad('customers', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
@@ -2330,27 +2760,54 @@ async function loadCustomers() {
 function renderCustomersTable(customers) {
   const tbody = document.getElementById('customers-tbody');
   if (!customers.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No customers match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No customers match.</td></tr>';
     return;
   }
   tbody.innerHTML = customers.map(c => `
     <tr>
-      <td>${escapeHtml(c.name)}</td>
+      <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button></td>
       <td>${escapeHtml(c.email || '—')}</td>
       <td>${escapeHtml(c.phone || '—')}</td>
       <td>${fmtDate(c.created_at)}</td>
       <td><button class="link-btn-inline" data-edit-customer-id="${c.id}">Edit</button></td>
+      <td><button class="link-btn-inline" data-trash-customer-id="${c.id}" data-trash-customer-name="${escapeHtml(c.name)}" style="color:var(--danger);">Delete</button></td>
     </tr>
   `).join('');
+  tbody.querySelectorAll('[data-view-customer-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const customer = cachedCustomers.find(c => c.id === btn.dataset.viewCustomerId);
+      if (customer) openViewCustomerModal(customer);
+    });
+  });
   tbody.querySelectorAll('[data-edit-customer-id]').forEach(btn => {
     btn.addEventListener('click', () => {
       const customer = cachedCustomers.find(c => c.id === btn.dataset.editCustomerId);
       if (customer) startEditCustomer(customer);
     });
   });
+  tbody.querySelectorAll('[data-trash-customer-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Move "${btn.dataset.trashCustomerName}" to the recycle bin? You can restore it from there later.`)) return;
+      showBanner('customers-banner', '');
+      try {
+        await apiFetch('/customers/' + btn.dataset.trashCustomerId + '/trash', { method: 'PATCH' });
+        loadCustomers();
+      } catch (err) {
+        showBanner('customers-banner', err.message);
+      }
+    });
+  });
 }
 
 document.getElementById('customers-filter').addEventListener('input', () => applyFilterAndSort('customers'));
+document.getElementById('customers-date-from').addEventListener('change', () => applyFilterAndSort('customers'));
+document.getElementById('customers-date-to').addEventListener('change', () => applyFilterAndSort('customers'));
+document.getElementById('customers-reset-filters-btn').addEventListener('click', () => {
+  document.getElementById('customers-filter').value = '';
+  document.getElementById('customers-date-from').value = '';
+  document.getElementById('customers-date-to').value = '';
+  applyFilterAndSort('customers');
+});
 
 // ---------- products ----------
 document.getElementById('toggle-product-form').addEventListener('click', () => {
@@ -2481,10 +2938,16 @@ document.getElementById('sub-item-search').addEventListener('input', async (e) =
 });
 
 function addToCart(productId) {
-  if (cartItems.some(p => p.id === productId)) return; // already in cart
+  const existing = cartItems.find(p => p.id === productId);
+  if (existing) {
+    existing.quantity += 1;
+    updateCartBadge();
+    renderCartModal();
+    return;
+  }
   const product = cachedProducts.find(p => p.id === productId);
   if (!product) return;
-  cartItems.push(product);
+  cartItems.push(Object.assign({}, product, { quantity: 1 }));
   updateCartBadge();
 }
 
@@ -2502,25 +2965,37 @@ function emptyCart() {
 
 function updateCartBadge() {
   const badge = document.getElementById('cart-count-badge');
-  badge.textContent = cartItems.length ? `(${cartItems.length})` : '';
+  const totalQty = cartItems.reduce((sum, p) => sum + (p.quantity || 1), 0);
+  badge.textContent = totalQty ? `(${totalQty})` : '';
 }
 
 function renderCartModal() {
   const tbody = document.getElementById('cart-tbody');
   if (!cartItems.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Your cart is empty.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">Your cart is empty.</td></tr>';
     return;
   }
   tbody.innerHTML = cartItems.map(p => `
     <tr>
       <td class="mono">${escapeHtml(p.sku)}</td>
       <td>${escapeHtml(p.name)}</td>
+      <td><input type="number" min="1" step="1" class="cart-qty-input" data-qty-id="${p.id}" value="${p.quantity || 1}" style="width:64px;"></td>
       <td class="mono">${fmtMoney(p.unit_price)}</td>
       <td><button class="link-btn-inline" data-remove-cart-id="${p.id}" style="color:var(--danger);">Remove</button></td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-remove-cart-id]').forEach(btn => {
     btn.addEventListener('click', () => removeFromCart(btn.dataset.removeCartId));
+  });
+  tbody.querySelectorAll('[data-qty-id]').forEach(input => {
+    input.addEventListener('change', () => {
+      const item = cartItems.find(p => p.id === input.dataset.qtyId);
+      if (!item) return;
+      const newQty = Math.max(1, parseInt(input.value, 10) || 1);
+      item.quantity = newQty;
+      input.value = newQty;
+      updateCartBadge();
+    });
   });
 }
 
@@ -2549,7 +3024,7 @@ document.getElementById('import-from-cart-btn').addEventListener('click', () => 
     addLineItem({
       product_id: p.id,
       description: p.name,
-      quantity: 1,
+      quantity: p.quantity || 1,
       unit: 'Nos',
       unit_price: p.unit_price,
       tax_rate: 0
@@ -2694,6 +3169,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     name: document.getElementById('product-name').value,
     category: document.getElementById('product-category').value || null,
     description: document.getElementById('product-description').value || null,
+    remark: document.getElementById('product-remark').value || null,
     unit_price: document.getElementById('product-price').value ? Number(document.getElementById('product-price').value) : null
   };
   try {
@@ -2770,6 +3246,7 @@ function startEditProduct(product) {
   document.getElementById('product-name').value = product.name;
   document.getElementById('product-category').value = product.category || '';
   document.getElementById('product-description').value = product.description || '';
+  document.getElementById('product-remark').value = product.remark || '';
   document.getElementById('product-price').value = product.unit_price || '';
   document.getElementById('product-form-submit-btn').textContent = 'Save changes';
   const fileInfo = document.getElementById('product-current-file-info');
@@ -2872,34 +3349,35 @@ async function loadProducts() {
     if (isStaleLoad('products', mySeq)) return;
     cachedProducts = products;
     refreshLineItemProductOptions();
-    renderProductsTable(products);
+    refreshProductCategoryFilter();
+    applyFilterAndSort('products');
   } catch (err) {
     if (isStaleLoad('products', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
-<<<<<<< HEAD
-async function viewSingleProductFile(productId) {
-=======
+function refreshProductCategoryFilter() {
+  const select = document.getElementById('products-category-filter');
+  if (!select) return;
+  const currentValue = select.value;
+  const categories = [...new Set(cachedProducts.map(p => p.category).filter(Boolean))].sort();
+  select.innerHTML = '<option value="">All categories</option>' +
+    categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  if (currentValue && categories.includes(currentValue)) select.value = currentValue;
+}
+
 async function viewSingleProductFile(productId, btn) {
   const originalLabel = btn ? btn.textContent : null;
   if (btn) {
     btn.textContent = 'Preparing…';
     btn.disabled = true;
   }
->>>>>>> testing
   try {
     const data = await apiFetch('/products/' + productId + '/file-url');
     window.open(data.url, '_blank');
   } catch (err) {
     alert(err.message);
-<<<<<<< HEAD
-  }
-}
-
-async function downloadProductBundle(productId, sku) {
-=======
   } finally {
     if (btn) {
       btn.textContent = originalLabel;
@@ -2914,7 +3392,6 @@ async function downloadProductBundle(productId, sku, btn) {
     btn.textContent = 'Preparing…';
     btn.disabled = true;
   }
->>>>>>> testing
   try {
     const response = await fetch(API_BASE + '/products/' + productId + '/download-bundle', {
       headers: { 'Authorization': 'Bearer ' + token }
@@ -2941,14 +3418,11 @@ async function downloadProductBundle(productId, sku, btn) {
     window.URL.revokeObjectURL(url);
   } catch (err) {
     alert(err.message);
-<<<<<<< HEAD
-=======
   } finally {
     if (btn) {
       btn.textContent = originalLabel;
       btn.disabled = false;
     }
->>>>>>> testing
   }
 }
 
@@ -2956,21 +3430,72 @@ document.getElementById('view-product-close').addEventListener('click', () => {
   document.getElementById('view-product-modal').classList.remove('active');
 });
 
+document.getElementById('view-customer-close').addEventListener('click', () => {
+  document.getElementById('view-customer-modal').classList.remove('active');
+});
+
+async function openViewCustomerModal(customer) {
+  document.getElementById('view-customer-title').textContent = 'Customer — ' + customer.name;
+  const content = document.getElementById('view-customer-content');
+  content.innerHTML = renderCustomerDetailContent(customer) + '<p style="color:var(--text-dim); font-size:13px; margin-top:10px;">Loading…</p>';
+  document.getElementById('view-customer-modal').classList.add('active');
+
+  let usedIn = [];
+  try {
+    usedIn = await apiFetch('/documents/by-customer/' + customer.id);
+  } catch (err) {
+    usedIn = [];
+  }
+  content.innerHTML = renderCustomerDetailContent(customer) + renderUsedInDocuments(usedIn, 'No documents for this customer yet.');
+}
+
+function renderCustomerDetailContent(customer) {
+  return `
+    <div class="form-row">
+      <div><strong>Email:</strong> ${escapeHtml(customer.email || '—')}</div>
+      <div><strong>Phone:</strong> ${escapeHtml(customer.phone || '—')}</div>
+    </div>
+    <div class="form-row">
+      <div><strong>Created:</strong> ${fmtDate(customer.created_at)}</div>
+      <div></div>
+    </div>
+  `;
+}
+
 async function openViewProductModal(product) {
   document.getElementById('view-product-title').textContent = 'Product — ' + product.sku;
   const content = document.getElementById('view-product-content');
-  content.innerHTML = renderProductDetailContent(product) + '<p style="color:var(--text-dim); font-size:13px; margin-top:10px;">Loading sub-items…</p>';
+  content.innerHTML = renderProductDetailContent(product) + '<p style="color:var(--text-dim); font-size:13px; margin-top:10px;">Loading…</p>';
   document.getElementById('view-product-modal').classList.add('active');
   wireViewProductFileButton(product);
 
   let subItems = [];
+  let usedIn = [];
   try {
     subItems = await apiFetch('/products/' + product.id + '/sub-items');
   } catch (err) {
     subItems = [];
   }
-  content.innerHTML = renderProductDetailContent(product) + renderProductSubItemsReadonly(subItems);
+  try {
+    usedIn = await apiFetch('/documents/by-product/' + product.id);
+  } catch (err) {
+    usedIn = [];
+  }
+  content.innerHTML = renderProductDetailContent(product) + renderUsedInDocuments(usedIn) + renderProductSubItemsReadonly(subItems);
   wireViewProductFileButton(product);
+}
+
+function renderUsedInDocuments(usedIn, emptyLabel) {
+  if (!usedIn.length) {
+    return `<div style="margin-top:14px;"><strong>Used in</strong><div style="font-size:13px; color:var(--text-dim); margin-top:4px;">${emptyLabel || 'Not used in any document yet.'}</div></div>`;
+  }
+  const rows = usedIn.map(u => `
+    <div style="font-size:13px; padding:3px 0;">
+      <span class="${stampClass(u.doc_type)}">${escapeHtml(u.doc_type)}</span>
+      ${escapeHtml(u.doc_number)}${u.project_name ? ' — ' + escapeHtml(u.project_name) + ' project' : ''}
+    </div>
+  `).join('');
+  return `<div style="margin-top:14px;"><strong>Used in</strong><div style="margin-top:4px;">${rows}</div></div>`;
 }
 
 function wireViewProductFileButton(product) {
@@ -2978,15 +3503,9 @@ function wireViewProductFileButton(product) {
   if (!btn) return;
   btn.addEventListener('click', () => {
     if (product.sub_item_count > 0) {
-<<<<<<< HEAD
-      downloadProductBundle(product.id, product.sku);
-    } else {
-      viewSingleProductFile(product.id);
-=======
       downloadProductBundle(product.id, product.sku, btn);
     } else {
       viewSingleProductFile(product.id, btn);
->>>>>>> testing
     }
   });
 }
@@ -3006,6 +3525,12 @@ function renderProductDetailContent(product) {
       <div style="margin-top:10px;">
         <strong>Description</strong>
         <div style="font-size:13px; margin-top:4px; color:var(--text-dim);">${escapeHtml(product.description)}</div>
+      </div>
+    ` : ''}
+    ${product.remark ? `
+      <div style="margin-top:10px;">
+        <strong>Remark</strong>
+        <div style="font-size:13px; margin-top:4px; color:var(--text-dim);">${escapeHtml(product.remark)}</div>
       </div>
     ` : ''}
   `;
@@ -3033,7 +3558,7 @@ function renderProductSubItemsReadonly(subItems) {
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
@@ -3042,6 +3567,8 @@ function renderProductsTable(products) {
       <td><button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button></td>
       <td>${escapeHtml(p.category || '—')}</td>
       <td class="mono">${fmtMoney(p.unit_price)}</td>
+      <td>${fmtDate(p.created_at)}</td>
+      <td>${fmtDate(p.updated_at)}</td>
       <td>${p.sub_item_count > 0
         ? `<button class="link-btn-inline" data-download-bundle-id="${p.id}" data-download-bundle-sku="${escapeHtml(p.sku)}">View file</button>`
         : (p.image_object_key ? `<button class="link-btn-inline" data-product-id="${p.id}">View file</button>` : '—')}</td>
@@ -3060,17 +3587,10 @@ function renderProductsTable(products) {
     });
   });
   tbody.querySelectorAll('[data-product-id]').forEach(btn => {
-<<<<<<< HEAD
-    btn.addEventListener('click', () => viewSingleProductFile(btn.dataset.productId));
-  });
-  tbody.querySelectorAll('[data-download-bundle-id]').forEach(btn => {
-    btn.addEventListener('click', () => downloadProductBundle(btn.dataset.downloadBundleId, btn.dataset.downloadBundleSku));
-=======
     btn.addEventListener('click', () => viewSingleProductFile(btn.dataset.productId, btn));
   });
   tbody.querySelectorAll('[data-download-bundle-id]').forEach(btn => {
     btn.addEventListener('click', () => downloadProductBundle(btn.dataset.downloadBundleId, btn.dataset.downloadBundleSku, btn));
->>>>>>> testing
   });
   tbody.querySelectorAll('[data-edit-id]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -3093,6 +3613,16 @@ function renderProductsTable(products) {
 }
 
 document.getElementById('products-filter').addEventListener('input', () => applyFilterAndSort('products'));
+document.getElementById('products-category-filter').addEventListener('change', () => applyFilterAndSort('products'));
+document.getElementById('products-date-from').addEventListener('change', () => applyFilterAndSort('products'));
+document.getElementById('products-date-to').addEventListener('change', () => applyFilterAndSort('products'));
+document.getElementById('products-reset-filters-btn').addEventListener('click', () => {
+  document.getElementById('products-filter').value = '';
+  document.getElementById('products-category-filter').value = '';
+  document.getElementById('products-date-from').value = '';
+  document.getElementById('products-date-to').value = '';
+  applyFilterAndSort('products');
+});
 
 document.getElementById('open-product-trash-btn').addEventListener('click', async () => {
   showBanner('product-trash-banner', '');
@@ -3138,6 +3668,136 @@ async function loadProductTrash() {
   }
 }
 
+document.getElementById('toggle-customer-trash-btn').addEventListener('click', async () => {
+  showBanner('customer-trash-banner', '');
+  document.getElementById('customer-trash-modal').classList.add('active');
+  await loadCustomerTrash();
+});
+
+document.getElementById('customer-trash-close').addEventListener('click', () => {
+  document.getElementById('customer-trash-modal').classList.remove('active');
+});
+
+async function loadCustomerTrash() {
+  const tbody = document.getElementById('customer-trash-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  try {
+    const customers = await apiFetch('/customers/trash');
+    if (!customers.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Recycle bin is empty.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = customers.map(c => `
+      <tr>
+        <td>${escapeHtml(c.name)}</td>
+        <td>${escapeHtml(c.email || '—')}</td>
+        <td>${escapeHtml(c.phone || '—')}</td>
+        <td><button class="link-btn-inline" data-restore-customer-id="${c.id}">Restore</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('[data-restore-customer-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('customer-trash-banner', '');
+        try {
+          await apiFetch('/customers/' + btn.dataset.restoreCustomerId + '/restore', { method: 'PATCH' });
+          await loadCustomerTrash();
+          loadCustomers();
+        } catch (err) {
+          showBanner('customer-trash-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+document.getElementById('toggle-project-trash-btn').addEventListener('click', async () => {
+  showBanner('project-trash-banner', '');
+  document.getElementById('project-trash-modal').classList.add('active');
+  await loadProjectTrash();
+});
+
+document.getElementById('project-trash-close').addEventListener('click', () => {
+  document.getElementById('project-trash-modal').classList.remove('active');
+});
+
+async function loadProjectTrash() {
+  const tbody = document.getElementById('project-trash-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Loading…</td></tr>';
+  try {
+    const projects = await apiFetch('/projects/trash');
+    if (!projects.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Recycle bin is empty.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = projects.map(p => `
+      <tr>
+        <td>${escapeHtml(p.name)}</td>
+        <td class="mono">${escapeHtml(p.budget_year || '—')}</td>
+        <td><button class="link-btn-inline" data-restore-project-id="${p.id}">Restore</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('[data-restore-project-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('project-trash-banner', '');
+        try {
+          await apiFetch('/projects/' + btn.dataset.restoreProjectId + '/restore', { method: 'PATCH' });
+          await loadProjectTrash();
+          loadProjects();
+        } catch (err) {
+          showBanner('project-trash-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+document.getElementById('toggle-company-trash-btn').addEventListener('click', async () => {
+  showBanner('company-trash-banner', '');
+  document.getElementById('company-trash-modal').classList.add('active');
+  await loadCompanyTrash();
+});
+
+document.getElementById('company-trash-close').addEventListener('click', () => {
+  document.getElementById('company-trash-modal').classList.remove('active');
+});
+
+async function loadCompanyTrash() {
+  const tbody = document.getElementById('company-trash-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Loading…</td></tr>';
+  try {
+    const companies = await apiFetch('/companies/trash');
+    if (!companies.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Recycle bin is empty.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = companies.map(c => `
+      <tr>
+        <td>${escapeHtml(c.name)}</td>
+        <td>${escapeHtml(c.position || '—')}</td>
+        <td><button class="link-btn-inline" data-restore-company-id="${c.id}">Restore</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('[data-restore-company-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('company-trash-banner', '');
+        try {
+          await apiFetch('/companies/' + btn.dataset.restoreCompanyId + '/restore', { method: 'PATCH' });
+          await loadCompanyTrash();
+          loadCompanies();
+        } catch (err) {
+          showBanner('company-trash-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
 // ---------- generic 3-state column sorting (asc -> desc -> back to normal) ----------
 // Used by Products, Customers, Projects, and Company tables — each already
 // caches its full list and has a render*Table(list) function from the filter
@@ -3145,6 +3805,7 @@ async function loadProductTrash() {
 
 const sortState = {
   products: { column: null, dir: null },
+  documents: { column: null, dir: null },
   customers: { column: null, dir: null },
   projects: { column: null, dir: null },
   company: { column: null, dir: null },
@@ -3155,6 +3816,8 @@ const sortAccessors = {
     name: p => (p.name || '').toLowerCase(),
     category: p => (p.category || '').toLowerCase(),
     price: p => Number(p.unit_price) || 0,
+    created: p => new Date(p.created_at).getTime(),
+    modified: p => new Date(p.updated_at).getTime(),
   },
   customers: {
     name: c => (c.name || '').toLowerCase(),
@@ -3167,32 +3830,59 @@ const sortAccessors = {
   company: {
     name: c => (c.name || '').toLowerCase(),
   },
+  documents: {
+    doc_number: d => (d.doc_number || '').toLowerCase(),
+    total: d => Number(d.total) || 0,
+    created_at: d => new Date(d.created_at).getTime(),
+  },
 };
 
 const tableConfig = {
   products: {
     cache: () => cachedProducts,
     filterInputId: 'products-filter',
-    matchFn: (p, q) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q),
+    matchFn: (p, q) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q),
     render: renderProductsTable,
+    extraFilters: [
+      { selectId: 'products-category-filter', matchFn: (p, val) => (p.category || '') === val },
+    ],
+    dateFilter: { fromId: 'products-date-from', toId: 'products-date-to', field: 'created_at' },
+  },
+  documents: {
+    cache: () => cachedDocuments,
+    filterInputId: 'documents-filter',
+    matchFn: (d, q) => d.doc_number.toLowerCase().includes(q),
+    render: renderDocumentsTable,
+    extraFilters: [
+      { selectId: 'documents-type-filter', matchFn: (d, val) => d.doc_type === val },
+      { selectId: 'documents-status-filter', matchFn: (d, val) => d.status === val },
+      { selectId: 'documents-project-filter', matchFn: (d, val) => d.project_id === val },
+    ],
+    dateFilter: { fromId: 'documents-date-from', toId: 'documents-date-to', field: 'created_at' },
   },
   customers: {
     cache: () => cachedCustomers,
     filterInputId: 'customers-filter',
     matchFn: (c, q) => c.name.toLowerCase().includes(q),
     render: renderCustomersTable,
+    dateFilter: { fromId: 'customers-date-from', toId: 'customers-date-to', field: 'created_at' },
   },
   projects: {
     cache: () => cachedProjects,
     filterInputId: 'projects-filter',
     matchFn: (p, q) => p.name.toLowerCase().includes(q),
     render: renderProjectsTable,
+    extraFilters: [
+      { selectId: 'projects-budget-year-filter', matchFn: (p, val) => (p.budget_year || '') === val },
+    ],
+    dateFilter: { fromId: 'projects-date-from', toId: 'projects-date-to', field: 'created_at' },
   },
   company: {
     cache: () => cachedCompanies,
     filterInputId: 'company-filter',
     matchFn: (c, q) => c.name.toLowerCase().includes(q),
     render: renderCompaniesTable,
+    dateFilter: { fromId: 'company-date-from', toId: 'company-date-to', field: 'created_at' },
   },
 };
 
@@ -3200,6 +3890,26 @@ function applyFilterAndSort(tableName) {
   const config = tableConfig[tableName];
   const q = document.getElementById(config.filterInputId).value.trim().toLowerCase();
   let list = q ? config.cache().filter(item => config.matchFn(item, q)) : config.cache().slice();
+
+  if (config.extraFilters) {
+    for (const ef of config.extraFilters) {
+      const val = document.getElementById(ef.selectId).value;
+      if (val) list = list.filter(item => ef.matchFn(item, val));
+    }
+  }
+
+  if (config.dateFilter) {
+    const fromVal = document.getElementById(config.dateFilter.fromId).value;
+    const toVal = document.getElementById(config.dateFilter.toId).value;
+    if (fromVal) {
+      const fromTime = new Date(fromVal).getTime();
+      list = list.filter(item => new Date(item[config.dateFilter.field]).getTime() >= fromTime);
+    }
+    if (toVal) {
+      const toTime = new Date(toVal).getTime() + 24 * 60 * 60 * 1000 - 1; // include the whole "to" day
+      list = list.filter(item => new Date(item[config.dateFilter.field]).getTime() <= toTime);
+    }
+  }
 
   const state = sortState[tableName];
   if (state.column && state.dir) {

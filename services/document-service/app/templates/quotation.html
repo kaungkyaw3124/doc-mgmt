@@ -3,11 +3,41 @@
 <head>
 <meta charset="UTF-8">
 <style>
-  @page { size: A4; margin: 2cm; }
+  @page {
+    size: A4;
+    /* Reserve room at the top/bottom of every page for the repeating
+       header/footer (see .pdf-header/.pdf-footer below). Sized generously —
+       a long wrapping supplier address can make the header quite tall, and
+       CSS paged-media margin boxes are a FIXED height (content that
+       overflows them collides with the body below), so it's safer to
+       reserve more than needed than to risk that overlap. Bumped up
+       further to fit the extra top spacing above the logo/seal row. */
+    /* This has overflowed twice now at smaller values (6.5cm, then 10cm,
+       then 12.5cm) — the actual header content (logo+seal row, title,
+       date, and a supplier address that can wrap to many lines) keeps
+       coming out taller than estimated. Being deliberately generous here
+       instead of guessing again; the trade-off is more blank space at
+       the top of documents with a short address, which is far better
+       than text colliding with the items table. */
+    margin: 13cm 2cm 3cm 2cm;
+    @top-center { content: element(pdfHeader); vertical-align: top; }
+    @bottom-center { content: element(pdfFooter); vertical-align: top; }
+  }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #1a1a1a; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
-  .title { font-size: 22pt; font-weight: bold; }
-  .logo { max-width: 140px; max-height: 70px; }
+
+  /* `position: running()` pulls this block out of normal body flow and
+     into the @page top/bottom margin boxes above — WeasyPrint then repeats
+     it on every page automatically. */
+  .pdf-header { position: running(pdfHeader); width: 17cm; padding-top: 30px; }
+  .pdf-footer { position: running(pdfFooter); width: 17cm; }
+
+  .header-top {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 26px; min-height: 100px;
+  }
+  .logo { max-width: 200px; max-height: 100px; }
+  .seal { max-width: 130px; max-height: 130px; }
+  .title { font-size: 22pt; font-weight: bold; margin-bottom: 8px; }
   .date-line { margin-bottom: 14px; }
   .parties { display: flex; justify-content: space-between; margin-bottom: 18px; }
   .party { width: 48%; }
@@ -22,54 +52,65 @@
   }
   table.items td { border: 1px solid #999; padding: 6px; font-size: 9.5pt; vertical-align: top; }
   table.items td.num { text-align: right; }
+  table.items tr { break-inside: avoid; page-break-inside: avoid; }
   .group-header { font-style: italic; font-weight: bold; background: #fafafa; }
   .total-row td { font-weight: bold; border-top: 2px solid #333; }
+  tr.sub-item td { font-size: 8.5pt; }
+  tr.sub-item td.sub-label { text-align: right; }
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
 
-  .footer { margin-top: 20px; }
   .footer h3 { font-size: 11pt; margin-bottom: 6px; }
 </style>
 </head>
 <body>
 
-  <div class="header">
+  <div class="pdf-header">
+    <div class="header-top">
+      <div>{% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
+      <div>{% if seal_data_uri %}<img class="seal" src="{{ seal_data_uri }}">{% endif %}</div>
+    </div>
     <div class="title">QUOTATION</div>
-    {% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}
-  </div>
-  <div class="date-line"><strong>Date:</strong> {{ issue_date }}</div>
+    <div class="date-line"><strong>Date:</strong> {{ issue_date }}</div>
 
-  <div class="parties">
-    <div class="party">
-      <h3>SUPPLIER</h3>
-      <table>
-        <tr><td class="label">Name</td><td>{{ company.name if company else "—" }}</td></tr>
-        <tr><td class="label">Position</td><td>{{ company.position if company else "" }}</td></tr>
-        <tr><td class="label">Address</td><td>{{ company.address if company else "" }}</td></tr>
-        <tr><td class="label">Contact No</td><td>{{ company.contact_no if company else "" }}</td></tr>
-      </table>
+    <div class="parties">
+      <div class="party">
+        <h3>SUPPLIER</h3>
+        <table>
+          <tr><td class="label">Name</td><td>{{ company.name if company else "—" }}</td></tr>
+          <tr><td class="label">Position</td><td>{{ company.position if company else "" }}</td></tr>
+          <tr><td class="label">Address</td><td>{{ company.address if company else "" }}</td></tr>
+          <tr><td class="label">Contact No</td><td>{{ company.contact_no if company else "" }}</td></tr>
+        </table>
+      </div>
+      <div class="party">
+        <h3>END USER</h3>
+        <table>
+          <tr><td class="label">Customer ID</td><td>{{ customer.id if customer else "—" }}</td></tr>
+          <tr><td class="label">Quotation ID</td><td>{{ doc_number }}</td></tr>
+          <tr><td class="label">Organization</td><td>{{ customer.name if customer else "—" }}</td></tr>
+          <tr><td class="label">Address</td><td>{{ customer_address }}</td></tr>
+        </table>
+      </div>
     </div>
-    <div class="party">
-      <h3>END USER</h3>
-      <table>
-        <tr><td class="label">Customer ID</td><td>{{ customer.id if customer else "—" }}</td></tr>
-        <tr><td class="label">Quotation ID</td><td>{{ doc_number }}</td></tr>
-        <tr><td class="label">Organization</td><td>{{ customer.name if customer else "—" }}</td></tr>
-        <tr><td class="label">Address</td><td>{{ customer_address }}</td></tr>
-      </table>
-    </div>
+  </div>
+
+  <div class="pdf-footer">
+    <h3>Customer Service</h3>
+    <div>Email: {{ company.support_email if company else "" }}</div>
+    <div>Phone: {{ company.support_phone if company else "" }}</div>
   </div>
 
   <table class="items">
     <thead>
       <tr>
         <th>No</th><th>Item</th><th>Description</th><th>Qty</th><th>Unit</th>
-        <th>Price ({{ currency }})</th><th>Amount ({{ currency }})</th>
+        <th>Price ({{ currency }})</th><th>Amount ({{ currency }})</th><th>Remark</th>
       </tr>
     </thead>
     <tbody>
-      <tr class="group-header"><td colspan="7">{{ group_label }}</td></tr>
+      <tr class="group-header"><td colspan="8">{{ group_label }}</td></tr>
       {% for item in items %}
       <tr>
         <td class="num">{{ loop.index }}</td>
@@ -79,11 +120,25 @@
         <td>{{ item.unit }}</td>
         <td class="num">{{ item.price }}</td>
         <td class="num">{{ item.amount }}</td>
+        <td>{{ item.remark }}</td>
       </tr>
+      {% for sub in item.sub_items %}
+      <tr class="sub-item">
+        <td class="sub-label">{{ sub.label }}</td>
+        <td>{{ sub.sku }} — {{ sub.name }}</td>
+        <td>{{ sub.description }}</td>
+        <td class="num">1.0</td>
+        <td>Nos</td>
+        <td class="num">{{ sub.price }}</td>
+        <td class="num">{{ sub.amount }}</td>
+        <td></td>
+      </tr>
+      {% endfor %}
       {% endfor %}
       <tr class="total-row">
         <td colspan="6" style="text-align:right;">Total:</td>
         <td class="num">{{ total }}</td>
+        <td></td>
       </tr>
     </tbody>
   </table>
@@ -91,12 +146,6 @@
   <div class="terms">
     <h3>Terms and Conditions</h3>
     <p>{{ terms_text }}</p>
-  </div>
-
-  <div class="footer">
-    <h3>Customer Service</h3>
-    <div>Email: {{ company.support_email if company else "" }}</div>
-    <div>Phone: {{ company.support_phone if company else "" }}</div>
   </div>
 
 </body>

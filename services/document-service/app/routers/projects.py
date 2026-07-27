@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Header
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -36,7 +37,20 @@ def list_projects(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
-    query = db.query(models.Project)
+    query = db.query(models.Project).filter(models.Project.is_deleted == False)  # noqa: E712
+    allowed = _parse_allowed_projects(x_allowed_projects)
+    if allowed is not None:
+        query = query.filter(models.Project.id.in_(allowed))
+    return query.order_by(models.Project.created_at.desc()).all()
+
+
+@router.get("/trash", response_model=list[schemas.ProjectOut])
+def list_trashed_projects(
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    """The recycle bin — soft-deleted projects, same project-visibility rule as the main list."""
+    query = db.query(models.Project).filter(models.Project.is_deleted == True)  # noqa: E712
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None:
         query = query.filter(models.Project.id.in_(allowed))
@@ -72,6 +86,51 @@ def update_project(project_id: uuid.UUID, payload: schemas.ProjectUpdate, db: Se
     db.commit()
     db.refresh(project)
     return project
+
+
+@router.patch("/{project_id}/trash", response_model=schemas.ProjectOut)
+def trash_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Soft delete — hides it from the main list, but keeps it recoverable
+    via the recycle bin. Existing documents that reference this project
+    are unaffected. For a permanent purge, use DELETE /{project_id}
+    instead (only called from within the recycle bin)."""
+    project = db.query(models.Project).filter_by(id=project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    project.is_deleted = True
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+@router.patch("/{project_id}/restore", response_model=schemas.ProjectOut)
+def restore_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    project = db.query(models.Project).filter_by(id=project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    project.is_deleted = False
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+@router.delete("/{project_id}", status_code=204)
+def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Permanent purge — only reachable from within the recycle bin.
+    Blocked (with a clear message) if any document still references this
+    project, rather than failing with a raw database error."""
+    project = db.query(models.Project).filter_by(id=project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    try:
+        db.delete(project)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Can't permanently delete — one or more documents still reference this project. Reassign or delete those documents first.",
+        )
 
 
 @router.get("/{project_id}/documents", response_model=list[schemas.DocumentOut])
