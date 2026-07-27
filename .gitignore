@@ -3,3 +3,6 @@ infra/data/
 __pycache__/
 *.pyc
 infra/data/
+infra/data/postgres/
+infra/data/minio/
+infra/data/redis/
