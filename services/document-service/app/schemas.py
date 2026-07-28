@@ -126,7 +126,7 @@ class DocumentUpdate(BaseModel):
     customer_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
     company_id: Optional[uuid.UUID] = None
-    currency: str = "USD"
+    currency: Optional[str] = None  # omit to leave the document's existing currency unchanged
     terms_and_conditions: Optional[str] = None
     items: list[DocumentItemIn] = []
 

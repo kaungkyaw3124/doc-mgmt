@@ -12,6 +12,7 @@ import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
 from fastapi.responses import Response
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -150,7 +151,11 @@ def create_product(payload: schemas.ProductCreate, db: Session = Depends(get_db)
     data["sku"] = sku
     product = models.Product(**data)
     db.add(product)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="sku already exists")
     db.refresh(product)
     index_product(product)
     return _attach_sub_item_count(db, product)
@@ -306,14 +311,25 @@ def list_trashed_products(
     return _attach_sub_item_counts(db, query.order_by(models.Product.updated_at.desc()).all())
 
 
+def _check_product_visible(product, x_allowed_projects: str | None):
+    visible_ids = get_visible_product_ids(x_allowed_projects)
+    if visible_ids is not None and str(product.id) not in visible_ids:
+        raise HTTPException(status_code=403, detail="you don't have access to this product")
+
+
 @router.patch("/{product_id}/trash", response_model=schemas.ProductOut)
-def trash_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def trash_product(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     """Soft delete — hides it from the catalogue and main list, but keeps
     it recoverable via the recycle bin. For a permanent purge, use
     DELETE /{product_id} instead (only called from within the recycle bin)."""
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
+    _check_product_visible(product, x_allowed_projects)
     product.is_deleted = True
     db.commit()
     db.refresh(product)
@@ -321,10 +337,15 @@ def trash_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/{product_id}/restore", response_model=schemas.ProductOut)
-def restore_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def restore_product(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
+    _check_product_visible(product, x_allowed_projects)
     product.is_deleted = False
     db.commit()
     db.refresh(product)
@@ -349,10 +370,16 @@ def get_product(
 
 
 @router.patch("/{product_id}", response_model=schemas.ProductOut)
-def update_product(product_id: uuid.UUID, payload: schemas.ProductUpdate, db: Session = Depends(get_db)):
+def update_product(
+    product_id: uuid.UUID,
+    payload: schemas.ProductUpdate,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
+    _check_product_visible(product, x_allowed_projects)
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(product, field, value)
@@ -364,20 +391,31 @@ def update_product(product_id: uuid.UUID, payload: schemas.ProductUpdate, db: Se
 
 
 @router.delete("/{product_id}", status_code=204)
-def delete_product(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_product(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
+    _check_product_visible(product, x_allowed_projects)
     db.delete(product)
     db.commit()
     remove_product_from_index(product_id)
 
 
 @router.post("/{product_id}/file")
-def upload_product_file(product_id: uuid.UUID, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_product_file(
+    product_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
+    _check_product_visible(product, x_allowed_projects)
 
     object_key = f"{product.sku}/{file.filename}"
     upload_file(file.file, object_key, content_type=file.content_type or "application/octet-stream")
@@ -388,26 +426,42 @@ def upload_product_file(product_id: uuid.UUID, file: UploadFile = File(...), db:
 
 
 @router.get("/{product_id}/file-url")
-def get_product_file_url(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_product_file_url(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product or not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
+    _check_product_visible(product, x_allowed_projects)
     return {"url": get_presigned_url(product.image_object_key)}
 
 
 @router.get("/{product_id}/file-content")
-def get_product_file_content(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_product_file_content(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     """
-    Internal-use endpoint — called by document-service to pull a product's
-    raw catalogue file bytes when building a per-document catalogue zip
-    (see /documents/{id}/export/catalogue there). Not meant for direct
-    browser use: no presigned convenience, no download filename handling —
-    the browser-facing equivalent is /file-url.
+    Called by document-service (internally, no X-Allowed-Projects header —
+    treated as unrestricted, same as every other internal service-to-
+    service call here) to pull a product's raw catalogue file bytes when
+    building a per-document catalogue zip. Also reachable directly through
+    nginx's /api/products routing, which DOES forward the header, so it's
+    still project-gated for that path. Not meant for direct browser use:
+    no presigned convenience, no download filename handling — the
+    browser-facing equivalent is /file-url.
     """
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product or not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
-    file_bytes = download_file_bytes(product.image_object_key)
+    _check_product_visible(product, x_allowed_projects)
+    try:
+        file_bytes = download_file_bytes(product.image_object_key)
+    except Exception:
+        raise HTTPException(status_code=404, detail="the file for this product is missing from storage")
     return Response(content=file_bytes, media_type="application/octet-stream")
 
 
@@ -511,7 +565,11 @@ def remove_sub_item(product_id: uuid.UUID, sub_item_id: uuid.UUID, db: Session =
 
 
 @router.get("/{product_id}/download-bundle")
-def download_product_bundle(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def download_product_bundle(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
     """
     For a product with sub-items: fetches every sub-item's catalogue file,
     renames each to its sequence number (1, 2, 3… keeping the original
@@ -522,6 +580,7 @@ def download_product_bundle(product_id: uuid.UUID, db: Session = Depends(get_db)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
+    _check_product_visible(product, x_allowed_projects)
 
     sub_items = (
         db.query(models.ProductSubItem)
@@ -542,7 +601,10 @@ def download_product_bundle(product_id: uuid.UUID, db: Session = Depends(get_db)
             ext = ""
             if "." in sub_product.image_object_key.rsplit("/", 1)[-1]:
                 ext = "." + sub_product.image_object_key.rsplit(".", 1)[-1]
-            file_bytes = download_file_bytes(sub_product.image_object_key)
+            try:
+                file_bytes = download_file_bytes(sub_product.image_object_key)
+            except Exception:
+                continue  # object missing from storage — skip rather than fail the whole zip
             zf.writestr(f"{item.sequence_number}{ext}", file_bytes)
             added_any = True
 

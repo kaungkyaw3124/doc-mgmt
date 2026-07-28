@@ -43,10 +43,19 @@ def upload_file(file_obj, object_key: str, content_type: str = "application/octe
     return object_key
 
 
-def get_presigned_url(object_key: str, expires_in: int = 3600) -> str:
+def get_presigned_url(object_key: str, expires_in: int = 3600, force_download: bool = False) -> str:
+    """
+    force_download=True adds a Content-Disposition: attachment override, so
+    the browser saves the file instead of rendering it inline — used for
+    file types (like SVG) that can carry executable content and shouldn't
+    be opened directly in the browser's origin.
+    """
+    params = {"Bucket": settings.minio_bucket, "Key": object_key}
+    if force_download:
+        params["ResponseContentDisposition"] = "attachment"
     return _public_s3_client.generate_presigned_url(
         "get_object",
-        Params={"Bucket": settings.minio_bucket, "Key": object_key},
+        Params=params,
         ExpiresIn=expires_in,
     )
 

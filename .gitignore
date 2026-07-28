@@ -2,7 +2,7 @@ infra/data/
 .env
 __pycache__/
 *.pyc
-infra/data/
+*.log
 infra/data/postgres/
 infra/data/minio/
 infra/data/redis/

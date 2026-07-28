@@ -9,7 +9,11 @@ from weasyprint import HTML
 from app.core.export_quotation import DEFAULT_TERMS
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
-_env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR))
+# autoescape=True: rendered fields include user-controlled document/company
+# data (item descriptions, remarks, terms, addresses). Without escaping, a
+# crafted field could inject markup into the PDF — including a resource tag
+# whose src WeasyPrint would fetch, an SSRF vector against internal hosts.
+_env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=True)
 
 
 def generate_quotation_pdf(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png") -> BytesIO:

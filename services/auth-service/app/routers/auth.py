@@ -106,7 +106,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Your account has been disabled. Contact an administrator.")
 
-    token = create_access_token(subject=user.username)
+    token = create_access_token(subject=str(user.id))
     return TokenResponse(access_token=token)
 
 
@@ -140,7 +140,12 @@ def verify(
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="invalid token")
 
-    user = db.query(models.User).filter_by(username=payload["sub"]).first()
+    try:
+        user_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    user = db.query(models.User).filter_by(id=user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="user no longer exists")
 

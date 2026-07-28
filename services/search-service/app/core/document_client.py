@@ -10,10 +10,10 @@ def get_visible_product_ids(x_allowed_projects: str | None):
     header value Nginx already resolved for us. Returns None if unrestricted
     (see everything), or a set of allowed product_id strings.
 
-    If document-service can't be reached, fails CLOSED (returns an empty
-    set) for a project-restricted caller — showing nothing is safer than a
-    dependency hiccup silently dropping their project restriction and
-    exposing every product.
+    Mirrors catalogue-service's core/document_client.py. Fails CLOSED
+    (empty set) for a project-restricted caller if document-service can't
+    be reached — a dependency hiccup shouldn't silently drop the caller's
+    project restriction and expose every product's search results.
     """
     if not x_allowed_projects or x_allowed_projects == "ALL":
         return None
