@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -31,7 +32,11 @@ def create_category(
 
     category = models.Category(name=payload.name, short_term=payload.short_term.upper(), description=payload.description)
     db.add(category)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="a category with that name or short_term already exists")
     db.refresh(category)
     return category
 
@@ -50,6 +55,7 @@ def update_category(
     if not category:
         raise HTTPException(status_code=404, detail="category not found")
 
+    old_name = category.name
     if payload.name and payload.name != category.name:
         existing = db.query(models.Category).filter_by(name=payload.name).first()
         if existing:
@@ -62,6 +68,20 @@ def update_category(
     if payload.description is not None:
         category.description = payload.description
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="another category already has that name or short_term")
     db.refresh(category)
+
+    if category.name != old_name:
+        # Product.category is a loosely-coupled plain string, not a FK — a
+        # rename would otherwise silently strand existing products under
+        # the old name, dropping them out of category filtering/grouping.
+        db.query(models.Product).filter_by(category=old_name).update(
+            {models.Product.category: category.name}
+        )
+        db.commit()
+
     return category

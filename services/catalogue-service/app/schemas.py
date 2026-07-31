@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProductCreate(BaseModel):
@@ -61,15 +61,15 @@ class SubItemOut(BaseModel):
 
 
 class CategoryCreate(BaseModel):
-    name: str
-    short_term: str  # required — this is what SKUs get generated from, e.g. "COM"
-    description: Optional[str] = None
+    name: str = Field(max_length=100)
+    short_term: str = Field(max_length=20)  # required — this is what SKUs get generated from, e.g. "COM"
+    description: Optional[str] = Field(default=None, max_length=500)
 
 
 class CategoryUpdate(BaseModel):
-    name: Optional[str] = None
-    short_term: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=100)
+    short_term: Optional[str] = Field(default=None, max_length=20)
+    description: Optional[str] = Field(default=None, max_length=500)
 
 
 class CategoryOut(BaseModel):

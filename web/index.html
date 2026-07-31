@@ -187,6 +187,9 @@
     color: rgba(255,255,255,0.65);
     cursor: pointer;
     border-left: 3px solid transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
   .nav-item:hover { color: #fff; background: rgba(255,255,255,0.04); }
   .nav-item.active {
@@ -194,6 +197,17 @@
     border-left-color: var(--rust);
     background: rgba(255,255,255,0.06);
   }
+  .nav-icon { width: 16px; height: 16px; flex-shrink: 0; opacity: 0.85; }
+
+  /* ---------- Inline icons (buttons, modal close) ---------- */
+  .icon {
+    width: 14px;
+    height: 14px;
+    vertical-align: -2px;
+    margin-right: 5px;
+    flex-shrink: 0;
+  }
+  .icon-only { margin-right: 0; }
 
   .sidebar-footer {
     margin-top: auto;
@@ -257,6 +271,23 @@
 
   .empty-row td { text-align: center; color: var(--text-dim); padding: 36px; font-size: 14px; }
 
+  .skeleton-row td { text-align: left; padding: 13px 16px; }
+  .skeleton-bar {
+    display: block;
+    height: 14px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--paper-dim) 25%, var(--hairline) 37%, var(--paper-dim) 63%);
+    background-size: 400% 100%;
+    animation: skeleton-pulse 1.4s ease infinite;
+  }
+  @keyframes skeleton-pulse {
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0 50%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-bar { animation: none; }
+  }
+
   /* ---------- Stamp badge (signature element) ---------- */
   .stamp {
     display: inline-flex;
@@ -273,7 +304,8 @@
     transform: rotate(-2deg);
   }
   .stamp-draft { color: var(--text-dim); }
-  .stamp-sent, .stamp-paid { color: var(--success); }
+  .stamp-sent { color: var(--warn); }
+  .stamp-paid { color: var(--success); }
   .stamp-void, .stamp-expired { color: var(--danger); }
   .stamp-invoice, .stamp-quotation, .stamp-proposal, .stamp-catalogue { color: var(--rust); }
 
@@ -469,13 +501,34 @@
       <div class="stamp-mini"></div>
       <h1>Ledger</h1>
     </div>
-    <div class="nav-item active" data-view="documents">Documents</div>
-    <div class="nav-item" data-view="products">Products</div>
-    <div class="nav-item" data-view="customers">Customers</div>
-    <div class="nav-item" data-view="projects">Projects</div>
-    <div class="nav-item" data-view="company">Company</div>
-    <div class="nav-item" data-view="search">Search</div>
-    <div class="nav-item" data-view="adminpanel" id="admin-nav-item" style="display:none;">Admin</div>
+    <div class="nav-item active" data-view="documents">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+      Documents
+    </div>
+    <div class="nav-item" data-view="products">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+      Products
+    </div>
+    <div class="nav-item" data-view="customers">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+      Customers
+    </div>
+    <div class="nav-item" data-view="projects">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+      Projects
+    </div>
+    <div class="nav-item" data-view="company">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
+      Company
+    </div>
+    <div class="nav-item" data-view="search">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      Search
+    </div>
+    <div class="nav-item" data-view="adminpanel" id="admin-nav-item" style="display:none;">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+      Admin
+    </div>
     <div class="sidebar-footer">
       <div class="who">Signed in as<br><strong id="whoami-username">—</strong></div>
       <button class="link-btn" id="logout-btn">Sign out</button>
@@ -492,7 +545,7 @@
           <p>Invoices, quotations, and catalogue entries.</p>
         </div>
         <div>
-          <button class="btn-secondary" id="open-document-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="open-document-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
           <button class="btn-secondary" id="toggle-doc-form">+ New document</button>
         </div>
       </div>
@@ -533,7 +586,9 @@
           <tr><th>Number</th><th>Type</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th></tr>
         </thead>
         <tbody id="documents-tbody">
-          <tr class="empty-row"><td colspan="10">Loading…</td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -553,9 +608,9 @@
               <button type="button" id="open-category-list-btn">Edit category</button>
             </div>
           </span>
-          <button class="btn-secondary" id="open-bulk-import-btn" style="margin-right:8px;">📥 Bulk import</button>
-          <button class="btn-secondary" id="open-cart-btn" style="margin-right:8px;">🛒 Cart <span id="cart-count-badge"></span></button>
-          <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="open-bulk-import-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Bulk import</button>
+          <button class="btn-secondary" id="open-cart-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>Cart <span id="cart-count-badge"></span></button>
+          <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
           <button class="btn-secondary" id="toggle-product-form">+ New product</button>
         </div>
       </div>
@@ -589,7 +644,9 @@
           </tr>
         </thead>
         <tbody id="products-tbody">
-          <tr class="empty-row"><td colspan="10">Loading…</td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -602,7 +659,7 @@
           <p>Who your documents are for.</p>
         </div>
         <div>
-          <button class="btn-secondary" id="toggle-customer-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="toggle-customer-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
           <button class="btn-secondary" id="toggle-customer-form">+ New customer</button>
         </div>
       </div>
@@ -630,7 +687,9 @@
           </tr>
         </thead>
         <tbody id="customers-tbody">
-          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -643,7 +702,7 @@
           <p>Group documents by project and budget year.</p>
         </div>
         <div>
-          <button class="btn-secondary" id="toggle-project-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="toggle-project-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
           <button class="btn-secondary" id="toggle-project-form">+ New project</button>
         </div>
       </div>
@@ -673,7 +732,9 @@
           </tr>
         </thead>
         <tbody id="projects-tbody">
-          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -686,7 +747,7 @@
           <p>Your business profile — used as the supplier on generated quotations.</p>
         </div>
         <div>
-          <button class="btn-secondary" id="toggle-company-trash-btn" style="margin-right:8px;">🗑 Recycle bin</button>
+          <button class="btn-secondary" id="toggle-company-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
           <button class="btn-secondary" id="toggle-company-form">+ New company</button>
         </div>
       </div>
@@ -712,7 +773,9 @@
           </tr>
         </thead>
         <tbody id="companies-tbody">
-          <tr class="empty-row"><td colspan="7">Loading…</td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -736,7 +799,9 @@
         <table>
           <thead><tr><th>Username</th><th>Requested group</th><th>Requested</th><th>Action</th></tr></thead>
           <tbody id="pending-users-tbody">
-            <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:70%"></span></td></tr>
           </tbody>
         </table>
       </div>
@@ -749,7 +814,9 @@
         <table>
           <thead><tr><th>Username</th><th>Superuser?</th><th>Approved?</th><th>Status</th><th>Edit</th><th>Remove</th></tr></thead>
           <tbody id="all-users-tbody">
-            <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:70%"></span></td></tr>
           </tbody>
         </table>
       </div>
@@ -894,7 +961,7 @@
 <!-- ============ AUDIT LOG MODAL ============ -->
 <div class="modal-overlay" id="audit-log-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="audit-log-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="audit-log-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="audit-log-title">Audit log</h3>
     <div id="audit-log-content"></div>
   </div>
@@ -903,7 +970,7 @@
 <!-- ============ EDIT USER MODAL ============ -->
 <div class="modal-overlay" id="edit-user-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="edit-user-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="edit-user-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="edit-user-title">Edit user</h3>
     <div id="edit-user-banner"></div>
 
@@ -934,7 +1001,7 @@
 <!-- ============ EDIT ROLE MODAL ============ -->
 <div class="modal-overlay" id="edit-role-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="edit-role-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="edit-role-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="edit-role-title">Edit role</h3>
     <div id="edit-role-banner"></div>
 
@@ -965,7 +1032,7 @@
 <!-- ============ NEW/EDIT CUSTOMER MODAL ============ -->
 <div class="modal-overlay" id="customer-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="customer-modal-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="customer-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="customer-form-title">New customer</h3>
     <div id="customer-modal-banner"></div>
     <form id="customer-form">
@@ -997,7 +1064,7 @@
 <!-- ============ NEW/EDIT PROJECT MODAL ============ -->
 <div class="modal-overlay" id="project-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="project-modal-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="project-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="project-form-title">New project</h3>
     <div id="project-modal-banner"></div>
     <form id="project-form">
@@ -1021,7 +1088,7 @@
 <!-- ============ NEW/EDIT COMPANY MODAL ============ -->
 <div class="modal-overlay" id="company-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="company-modal-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="company-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="company-form-title">New company</h3>
     <div id="company-modal-banner"></div>
     <form id="company-form">
@@ -1075,7 +1142,7 @@
 
 <div class="modal-overlay" id="doc-modal">
   <div class="modal-box modal-box-wide">
-    <button class="link-btn-inline modal-close" id="doc-modal-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="doc-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="doc-form-title">New document</h3>
     <div id="doc-modal-banner"></div>
     <form id="doc-form">
@@ -1148,7 +1215,7 @@ Warranty: 2 years from the date of delivery</textarea>
 
 <div class="modal-overlay" id="product-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="product-modal-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="product-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="product-form-title">New product</h3>
     <div id="product-modal-banner"></div>
     <form id="product-form">
@@ -1195,7 +1262,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ ADD CATEGORY MODAL ============ -->
 <div class="modal-overlay" id="category-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="category-modal-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="category-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Add category</h3>
     <div id="category-modal-banner"></div>
     <label for="new-category-name">Category</label>
@@ -1211,7 +1278,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ CATEGORY LIST MODAL ============ -->
 <div class="modal-overlay" id="category-list-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="category-list-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="category-list-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Categories</h3>
     <div id="category-list-banner"></div>
     <table>
@@ -1224,7 +1291,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ EDIT CATEGORY MODAL ============ -->
 <div class="modal-overlay" id="edit-category-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="edit-category-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="edit-category-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Edit category</h3>
     <div id="edit-category-banner"></div>
     <label for="edit-category-name">Category</label>
@@ -1240,13 +1307,15 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ DOCUMENT RECYCLE BIN MODAL ============ -->
 <div class="modal-overlay" id="document-trash-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="document-trash-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="document-trash-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Documents — recycle bin</h3>
     <div id="document-trash-banner"></div>
     <table>
       <thead><tr><th>Number</th><th>Type</th><th>Total</th><th>Restore</th></tr></thead>
       <tbody id="document-trash-tbody">
-        <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:70%"></span></td></tr>
       </tbody>
     </table>
   </div>
@@ -1255,13 +1324,15 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ PRODUCT RECYCLE BIN MODAL ============ -->
 <div class="modal-overlay" id="product-trash-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="product-trash-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="product-trash-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Products — recycle bin</h3>
     <div id="product-trash-banner"></div>
     <table>
       <thead><tr><th>Item Number</th><th>Name</th><th>Price</th><th>Restore</th></tr></thead>
       <tbody id="product-trash-tbody">
-        <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:70%"></span></td></tr>
       </tbody>
     </table>
   </div>
@@ -1270,13 +1341,15 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ CUSTOMER RECYCLE BIN MODAL ============ -->
 <div class="modal-overlay" id="customer-trash-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="customer-trash-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="customer-trash-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Customers — recycle bin</h3>
     <div id="customer-trash-banner"></div>
     <table>
       <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Restore</th></tr></thead>
       <tbody id="customer-trash-tbody">
-        <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="4"><span class="skeleton-bar" style="width:70%"></span></td></tr>
       </tbody>
     </table>
   </div>
@@ -1285,13 +1358,15 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ PROJECT RECYCLE BIN MODAL ============ -->
 <div class="modal-overlay" id="project-trash-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="project-trash-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="project-trash-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Projects — recycle bin</h3>
     <div id="project-trash-banner"></div>
     <table>
       <thead><tr><th>Name</th><th>Budget year</th><th>Restore</th></tr></thead>
       <tbody id="project-trash-tbody">
-        <tr class="empty-row"><td colspan="3">Loading…</td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:70%"></span></td></tr>
       </tbody>
     </table>
   </div>
@@ -1300,13 +1375,15 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ COMPANY RECYCLE BIN MODAL ============ -->
 <div class="modal-overlay" id="company-trash-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="company-trash-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="company-trash-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Companies — recycle bin</h3>
     <div id="company-trash-banner"></div>
     <table>
       <thead><tr><th>Name</th><th>Position</th><th>Restore</th></tr></thead>
       <tbody id="company-trash-tbody">
-        <tr class="empty-row"><td colspan="3">Loading…</td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:70%"></span></td></tr>
       </tbody>
     </table>
   </div>
@@ -1315,7 +1392,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ CART MODAL ============ -->
 <div class="modal-overlay" id="cart-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="cart-modal-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="cart-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Cart</h3>
     <div id="cart-modal-banner"></div>
     <table>
@@ -1331,7 +1408,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ VIEW DOCUMENT MODAL ============ -->
 <div class="modal-overlay" id="view-document-modal">
   <div class="modal-box modal-box-wide">
-    <button class="link-btn-inline modal-close" id="view-document-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="view-document-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="view-document-title">Document</h3>
     <div id="view-document-content"></div>
   </div>
@@ -1340,7 +1417,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ VIEW PRODUCT MODAL ============ -->
 <div class="modal-overlay" id="view-product-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="view-product-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="view-product-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="view-product-title">Product</h3>
     <div id="view-product-content"></div>
   </div>
@@ -1349,7 +1426,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ VIEW CUSTOMER MODAL ============ -->
 <div class="modal-overlay" id="view-customer-modal">
   <div class="modal-box">
-    <button class="link-btn-inline modal-close" id="view-customer-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="view-customer-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="view-customer-title">Customer</h3>
     <div id="view-customer-content"></div>
   </div>
@@ -1358,7 +1435,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ PROJECT DOCUMENTS MODAL ============ -->
 <div class="modal-overlay" id="project-documents-modal">
   <div class="modal-box modal-box-wide">
-    <button class="link-btn-inline modal-close" id="project-documents-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="project-documents-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="project-documents-title">Documents</h3>
     <table>
       <thead><tr><th>Number</th><th>Type</th><th>Status</th><th>Total</th><th>Created</th></tr></thead>
@@ -1370,7 +1447,7 @@ Warranty: 2 years from the date of delivery</textarea>
 <!-- ============ BULK IMPORT PRODUCTS MODAL ============ -->
 <div class="modal-overlay" id="bulk-import-modal">
   <div class="modal-box modal-box-wide">
-    <button class="link-btn-inline modal-close" id="bulk-import-close">Close ✕</button>
+    <button class="link-btn-inline modal-close" id="bulk-import-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3>Bulk import products</h3>
     <div id="bulk-import-banner"></div>
     <p style="font-size:13px; color:var(--text-dim);">
@@ -1399,7 +1476,7 @@ const API_BASE = '/api';
 // with stale data. Each list gets a counter: every load bumps it and
 // captures its own number, then only applies its result if no newer load
 // has started in the meantime — otherwise it just discards itself.
-const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0 };
+const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0, groupMembers: 0, groupRoles: 0 };
 function startLoad(key) {
   loadSeq[key] += 1;
   return loadSeq[key];
@@ -1421,6 +1498,12 @@ function fmtDate(v) {
 function escapeHtml(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function skeletonRows(colspan) {
+  const widths = [80, 55, 70];
+  return widths.map(w =>
+    `<tr class="empty-row skeleton-row"><td colspan="${colspan}"><span class="skeleton-bar" style="width:${w}%"></span></td></tr>`
+  ).join('');
 }
 function stampClass(value) {
   return 'stamp stamp-' + String(value || '').toLowerCase();
@@ -1751,8 +1834,20 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       incompleteRows.push(`Row ${rowIndex + 1}: needs a quantity`);
       return;
     }
+    if (isNaN(Number(quantity))) {
+      incompleteRows.push(`Row ${rowIndex + 1}: quantity must be a number`);
+      return;
+    }
     if (!product_id && (!remark || !unit_price)) {
       incompleteRows.push(`Row ${rowIndex + 1}: needs either a product, or both a remark and unit price`);
+      return;
+    }
+    if (unit_price && isNaN(Number(unit_price))) {
+      incompleteRows.push(`Row ${rowIndex + 1}: unit price must be a number`);
+      return;
+    }
+    if (isNaN(Number(tax_rate))) {
+      incompleteRows.push(`Row ${rowIndex + 1}: tax % must be a number`);
       return;
     }
     if (!product_id && !description) description = remark; // free-text row — use the remark as its name/description too, so exports aren't blank
@@ -2147,7 +2242,7 @@ document.getElementById('document-trash-close').addEventListener('click', () => 
 
 async function loadDocumentTrash() {
   const tbody = document.getElementById('document-trash-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(4);
   try {
     const docs = await apiFetch('/documents/trash');
     if (!docs.length) {
@@ -2266,7 +2361,7 @@ async function viewProjectDocuments(project) {
   document.getElementById('project-documents-title').textContent =
     'Documents — ' + project.name + (project.budget_year ? ' (' + project.budget_year + ')' : '');
   document.getElementById('project-documents-modal').classList.add('active');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="5">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(5);
   try {
     const docs = await apiFetch('/projects/' + project.id + '/documents');
     if (!docs.length) {
@@ -3170,13 +3265,18 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   e.preventDefault();
   showBanner('product-modal-banner', '');
   const fileInput = document.getElementById('product-file');
+  const priceRaw = document.getElementById('product-price').value;
+  if (priceRaw && isNaN(Number(priceRaw))) {
+    showBanner('product-modal-banner', 'Unit price must be a number.');
+    return;
+  }
   const payload = {
     sku: document.getElementById('product-sku').value || null,
     name: document.getElementById('product-name').value,
     category: document.getElementById('product-category').value || null,
     description: document.getElementById('product-description').value || null,
     remark: document.getElementById('product-remark').value || null,
-    unit_price: document.getElementById('product-price').value ? Number(document.getElementById('product-price').value) : null
+    unit_price: priceRaw ? Number(priceRaw) : null
   };
   try {
     document.getElementById('product-form-submit-btn').disabled = true;
@@ -3642,7 +3742,7 @@ document.getElementById('product-trash-close').addEventListener('click', () => {
 
 async function loadProductTrash() {
   const tbody = document.getElementById('product-trash-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(4);
   try {
     const products = await apiFetch('/products/trash');
     if (!products.length) {
@@ -3686,7 +3786,7 @@ document.getElementById('customer-trash-close').addEventListener('click', () => 
 
 async function loadCustomerTrash() {
   const tbody = document.getElementById('customer-trash-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(4);
   try {
     const customers = await apiFetch('/customers/trash');
     if (!customers.length) {
@@ -3730,7 +3830,7 @@ document.getElementById('project-trash-close').addEventListener('click', () => {
 
 async function loadProjectTrash() {
   const tbody = document.getElementById('project-trash-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(3);
   try {
     const projects = await apiFetch('/projects/trash');
     if (!projects.length) {
@@ -3773,7 +3873,7 @@ document.getElementById('company-trash-close').addEventListener('click', () => {
 
 async function loadCompanyTrash() {
   const tbody = document.getElementById('company-trash-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(3);
   try {
     const companies = await apiFetch('/companies/trash');
     if (!companies.length) {
@@ -4425,9 +4525,12 @@ document.getElementById('group-delete-btn').addEventListener('click', async () =
 
 async function loadGroupMembers() {
   const tbody = document.getElementById('group-members-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(2);
+  const mySeq = startLoad('groupMembers');
+  const groupId = selectedGroupId;
   try {
-    const members = await apiFetch('/admin/groups/' + selectedGroupId + '/members');
+    const members = await apiFetch('/admin/groups/' + groupId + '/members');
+    if (isStaleLoad('groupMembers', mySeq)) return; // a newer group was selected while this was in flight
     if (!members.length) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="2">No members yet.</td></tr>';
       return;
@@ -4436,6 +4539,7 @@ async function loadGroupMembers() {
       <tr><td>${escapeHtml(m.username)}</td><td>${m.is_group_admin ? 'Yes' : '—'}</td></tr>
     `).join('');
   } catch (err) {
+    if (isStaleLoad('groupMembers', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="2">${escapeHtml(err.message)}</td></tr>`;
   }
 }
@@ -4520,13 +4624,17 @@ function refreshMemberRolePickers() {
 
 async function loadGroupRoles() {
   const tbody = document.getElementById('roles-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Loading…</td></tr>';
+  tbody.innerHTML = skeletonRows(4);
+  const mySeq = startLoad('groupRoles');
+  const groupId = selectedGroupId;
   try {
-    const roles = await apiFetch('/admin/groups/' + selectedGroupId + '/roles');
+    const roles = await apiFetch('/admin/groups/' + groupId + '/roles');
+    if (isStaleLoad('groupRoles', mySeq)) return; // a newer group was selected while this was in flight
     cachedGroupRoles = roles;
     refreshMemberRolePickers();
     renderRolesTable(roles);
   } catch (err) {
+    if (isStaleLoad('groupRoles', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
   }
 }
