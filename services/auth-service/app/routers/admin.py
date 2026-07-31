@@ -2,6 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -274,7 +275,11 @@ def edit_user(
     if payload.password:
         target.hashed_password = hash_password(payload.password)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="that username is already taken")
     return {"id": str(target.id), "username": target.username}
 
 
@@ -391,7 +396,11 @@ def create_group(
 
     group = models.Group(name=payload.name)
     db.add(group)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="group already exists")
     db.refresh(group)
     return GroupOut(id=group.id, name=group.name, is_active=group.is_active)
 
@@ -452,17 +461,44 @@ def delete_group(
     # Strip any direct project grants members only held via this group's
     # pool — otherwise deleting the group leaves orphaned UserProjectAccess
     # rows behind, same cleanup revoke_group_project_access does per-project.
+    # Skip a (user, project) pair if the user still has that project via a
+    # DIFFERENT group they also belong to — deleting this group shouldn't
+    # silently take away access that's still legitimately granted elsewhere.
     member_user_ids = [
         m.user_id for m in db.query(models.UserGroup).filter_by(group_id=group_id).all()
     ]
     pool_project_ids = [
         g.project_id for g in db.query(models.GroupProjectAccess).filter_by(group_id=group_id).all()
     ]
-    if member_user_ids and pool_project_ids:
-        db.query(models.UserProjectAccess).filter(
-            models.UserProjectAccess.user_id.in_(member_user_ids),
-            models.UserProjectAccess.project_id.in_(pool_project_ids),
-        ).delete(synchronize_session=False)
+    for project_id in pool_project_ids:
+        if not member_user_ids:
+            break
+        other_groups_with_project = [
+            g.group_id
+            for g in db.query(models.GroupProjectAccess)
+            .filter(
+                models.GroupProjectAccess.project_id == project_id,
+                models.GroupProjectAccess.group_id != group_id,
+            )
+            .all()
+        ]
+        still_covered_user_ids = set()
+        if other_groups_with_project:
+            still_covered_user_ids = {
+                m.user_id
+                for m in db.query(models.UserGroup)
+                .filter(
+                    models.UserGroup.group_id.in_(other_groups_with_project),
+                    models.UserGroup.user_id.in_(member_user_ids),
+                )
+                .all()
+            }
+        user_ids_to_strip = [uid for uid in member_user_ids if uid not in still_covered_user_ids]
+        if user_ids_to_strip:
+            db.query(models.UserProjectAccess).filter(
+                models.UserProjectAccess.user_id.in_(user_ids_to_strip),
+                models.UserProjectAccess.project_id == project_id,
+            ).delete(synchronize_session=False)
 
     db.delete(group)
     db.commit()
@@ -517,7 +553,11 @@ def create_user_in_group(
         user_id=user.id, group_id=group_id, is_group_admin=payload.is_group_admin
     )
     db.add(membership)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="username already exists")
     return {"username": user.username, "group_id": str(group_id), "is_group_admin": payload.is_group_admin}
 
 
@@ -545,7 +585,11 @@ def add_existing_member(
         user_id=target_user.id, group_id=group_id, is_group_admin=payload.is_group_admin
     )
     db.add(membership)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="user is already a member of this group")
     return {"username": target_user.username, "group_id": str(group_id)}
 
 
@@ -613,7 +657,11 @@ def create_role(
 
     role = models.Role(name=payload.name, group_id=group_id)
     db.add(role)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="role already exists in this group")
     db.refresh(role)
     return RoleOut(id=role.id, name=role.name, group_id=role.group_id, services=[], is_active=role.is_active)
 
@@ -698,7 +746,12 @@ def grant_access(
 
     grant = models.RoleAccess(role_id=role_id, service_name=payload.service_name, access_level=payload.access_level)
     db.add(grant)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # lost a race with a concurrent grant for the same role+service —
+        # harmless, the other request already created the row we wanted
+        db.rollback()
     return {"role_id": str(role_id), "service_name": payload.service_name, "access_level": payload.access_level}
 
 
@@ -774,7 +827,11 @@ def rename_role(
     if existing:
         raise HTTPException(status_code=409, detail="another role in this group already has that name")
     role.name = payload.name
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="another role in this group already has that name")
     return {"id": str(role.id), "name": role.name}
 
 
@@ -847,7 +904,11 @@ def grant_group_project_access(
         raise HTTPException(status_code=409, detail="group already has access to this project")
 
     db.add(models.GroupProjectAccess(group_id=group_id, project_id=payload.project_id))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="group already has access to this project")
     return {"group_id": str(group_id), "project_id": str(payload.project_id)}
 
 
@@ -874,10 +935,36 @@ def revoke_group_project_access(
         m.user_id for m in db.query(models.UserGroup).filter_by(group_id=group_id).all()
     ]
     if member_user_ids:
-        db.query(models.UserProjectAccess).filter(
-            models.UserProjectAccess.user_id.in_(member_user_ids),
-            models.UserProjectAccess.project_id == project_id,
-        ).delete(synchronize_session=False)
+        # Don't strip access from a member who still has this project via a
+        # DIFFERENT group's pool they also belong to — otherwise revoking it
+        # from this group silently takes away access that's still
+        # legitimately granted through another membership.
+        other_groups_with_project = [
+            g.group_id
+            for g in db.query(models.GroupProjectAccess)
+            .filter(
+                models.GroupProjectAccess.project_id == project_id,
+                models.GroupProjectAccess.group_id != group_id,
+            )
+            .all()
+        ]
+        still_covered_user_ids = set()
+        if other_groups_with_project:
+            still_covered_user_ids = {
+                m.user_id
+                for m in db.query(models.UserGroup)
+                .filter(
+                    models.UserGroup.group_id.in_(other_groups_with_project),
+                    models.UserGroup.user_id.in_(member_user_ids),
+                )
+                .all()
+            }
+        user_ids_to_strip = [uid for uid in member_user_ids if uid not in still_covered_user_ids]
+        if user_ids_to_strip:
+            db.query(models.UserProjectAccess).filter(
+                models.UserProjectAccess.user_id.in_(user_ids_to_strip),
+                models.UserProjectAccess.project_id == project_id,
+            ).delete(synchronize_session=False)
 
     db.delete(grant)
     db.commit()
@@ -1005,7 +1092,11 @@ def grant_user_project_access(
         raise HTTPException(status_code=409, detail="user already has access to this project")
 
     db.add(models.UserProjectAccess(user_id=user_id, project_id=payload.project_id))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="user already has access to this project")
     return {"user_id": str(user_id), "project_id": str(payload.project_id)}
 
 
@@ -1016,12 +1107,37 @@ def revoke_user_project_access(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    """
+    Mirrors grant_user_project_access's scoping: a superuser can revoke
+    anything, but a group admin can only revoke a grant that falls within a
+    group they actually administer — not just any project on a user who
+    happens to share some administered group with them (the user could
+    have this project via a *different* group's pool).
+    """
     _require_can_manage_users(db, current_user)
     target = db.query(models.User).filter_by(id=user_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="user not found")
     if not current_user.is_superuser and not _target_is_in_an_administered_group(db, current_user, target):
         raise HTTPException(status_code=403, detail="you can only manage users who belong to a group you administer")
+
+    if not current_user.is_superuser:
+        shared_group_ids = _shared_administered_group_ids(db, current_user, target)
+        in_pool = (
+            db.query(models.GroupProjectAccess)
+            .filter(
+                models.GroupProjectAccess.group_id.in_(shared_group_ids),
+                models.GroupProjectAccess.project_id == project_id,
+            )
+            .first()
+            if shared_group_ids
+            else None
+        )
+        if not in_pool:
+            raise HTTPException(
+                status_code=403,
+                detail="this project isn't in the pool of a group you administer for this user",
+            )
 
     grant = (
         db.query(models.UserProjectAccess).filter_by(user_id=user_id, project_id=project_id).first()
@@ -1064,7 +1180,11 @@ def assign_role(
 
     assignment = models.UserRole(user_id=target_user.id, role_id=role_id)
     db.add(assignment)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="user already has this role")
     return {"username": target_user.username, "role_id": str(role_id)}
 
 

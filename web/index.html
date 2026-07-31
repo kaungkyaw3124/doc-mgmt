@@ -1476,7 +1476,7 @@ const API_BASE = '/api';
 // with stale data. Each list gets a counter: every load bumps it and
 // captures its own number, then only applies its result if no newer load
 // has started in the meantime — otherwise it just discards itself.
-const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0 };
+const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0, groupMembers: 0, groupRoles: 0 };
 function startLoad(key) {
   loadSeq[key] += 1;
   return loadSeq[key];
@@ -1834,8 +1834,20 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       incompleteRows.push(`Row ${rowIndex + 1}: needs a quantity`);
       return;
     }
+    if (isNaN(Number(quantity))) {
+      incompleteRows.push(`Row ${rowIndex + 1}: quantity must be a number`);
+      return;
+    }
     if (!product_id && (!remark || !unit_price)) {
       incompleteRows.push(`Row ${rowIndex + 1}: needs either a product, or both a remark and unit price`);
+      return;
+    }
+    if (unit_price && isNaN(Number(unit_price))) {
+      incompleteRows.push(`Row ${rowIndex + 1}: unit price must be a number`);
+      return;
+    }
+    if (isNaN(Number(tax_rate))) {
+      incompleteRows.push(`Row ${rowIndex + 1}: tax % must be a number`);
       return;
     }
     if (!product_id && !description) description = remark; // free-text row — use the remark as its name/description too, so exports aren't blank
@@ -3253,13 +3265,18 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   e.preventDefault();
   showBanner('product-modal-banner', '');
   const fileInput = document.getElementById('product-file');
+  const priceRaw = document.getElementById('product-price').value;
+  if (priceRaw && isNaN(Number(priceRaw))) {
+    showBanner('product-modal-banner', 'Unit price must be a number.');
+    return;
+  }
   const payload = {
     sku: document.getElementById('product-sku').value || null,
     name: document.getElementById('product-name').value,
     category: document.getElementById('product-category').value || null,
     description: document.getElementById('product-description').value || null,
     remark: document.getElementById('product-remark').value || null,
-    unit_price: document.getElementById('product-price').value ? Number(document.getElementById('product-price').value) : null
+    unit_price: priceRaw ? Number(priceRaw) : null
   };
   try {
     document.getElementById('product-form-submit-btn').disabled = true;
@@ -4509,8 +4526,11 @@ document.getElementById('group-delete-btn').addEventListener('click', async () =
 async function loadGroupMembers() {
   const tbody = document.getElementById('group-members-tbody');
   tbody.innerHTML = skeletonRows(2);
+  const mySeq = startLoad('groupMembers');
+  const groupId = selectedGroupId;
   try {
-    const members = await apiFetch('/admin/groups/' + selectedGroupId + '/members');
+    const members = await apiFetch('/admin/groups/' + groupId + '/members');
+    if (isStaleLoad('groupMembers', mySeq)) return; // a newer group was selected while this was in flight
     if (!members.length) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="2">No members yet.</td></tr>';
       return;
@@ -4519,6 +4539,7 @@ async function loadGroupMembers() {
       <tr><td>${escapeHtml(m.username)}</td><td>${m.is_group_admin ? 'Yes' : '—'}</td></tr>
     `).join('');
   } catch (err) {
+    if (isStaleLoad('groupMembers', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="2">${escapeHtml(err.message)}</td></tr>`;
   }
 }
@@ -4604,12 +4625,16 @@ function refreshMemberRolePickers() {
 async function loadGroupRoles() {
   const tbody = document.getElementById('roles-tbody');
   tbody.innerHTML = skeletonRows(4);
+  const mySeq = startLoad('groupRoles');
+  const groupId = selectedGroupId;
   try {
-    const roles = await apiFetch('/admin/groups/' + selectedGroupId + '/roles');
+    const roles = await apiFetch('/admin/groups/' + groupId + '/roles');
+    if (isStaleLoad('groupRoles', mySeq)) return; // a newer group was selected while this was in flight
     cachedGroupRoles = roles;
     refreshMemberRolePickers();
     renderRolesTable(roles);
   } catch (err) {
+    if (isStaleLoad('groupRoles', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
   }
 }

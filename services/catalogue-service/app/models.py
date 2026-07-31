@@ -37,7 +37,7 @@ class Category(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(100), unique=True, nullable=False)
-    short_term = Column(String(20))  # e.g. "COM" for Computer — manually entered, used as the SKU prefix
+    short_term = Column(String(20), unique=True)  # e.g. "COM" for Computer — used as the SKU prefix; must be unique or two categories would generate colliding SKU prefixes
     description = Column(String(500))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 

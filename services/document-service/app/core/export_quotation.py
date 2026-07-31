@@ -11,6 +11,22 @@ THIN = Side(style="thin", color="999999")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 HEADER_FILL = PatternFill("solid", fgColor="EFEFEF")
 
+_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe_str(value):
+    """
+    Neutralizes spreadsheet formula injection: openpyxl (and Excel/Sheets on
+    open) treats any string cell value starting with =, +, -, or @ as a
+    live formula. Every string here can originate from another user's input
+    (product description, customer address, remarks, terms...), so prefix
+    those with a straight quote to force plain text instead of letting a
+    crafted value like "=cmd|'/c calc'!A1" execute when the export is opened.
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_TRIGGER_CHARS):
+        return "'" + value
+    return value
+
 DEFAULT_TERMS = (
     "Price Validity: 30 Days\n"
     "Payment Lead Time: 35% on Agreement, 65% on delivery\n"
@@ -75,7 +91,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"B{row}"] = document.issue_date.isoformat() if document.issue_date else date.today().isoformat()
     row += 2
 
-    company_name = company["name"] if company else "—"
+    company_name = _safe_str(company["name"]) if company else "—"
     ws[f"A{row}"] = "SUPPLIER"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     ws[f"B{row}"] = company_name
@@ -84,14 +100,14 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     row += 1
 
     supplier_rows = [
-        ("Position", company.get("position") if company else ""),
-        ("Address", company.get("address") if company else ""),
-        ("Contact No", company.get("contact_no") if company else ""),
+        ("Position", _safe_str(company.get("position")) if company else ""),
+        ("Address", _safe_str(company.get("address")) if company else ""),
+        ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
     ]
-    customer_name = customer["name"] if customer else "—"
+    customer_name = _safe_str(customer["name"]) if customer else "—"
     customer_address = ""
     if customer and customer.get("billing_address"):
-        customer_address = ", ".join(str(v) for v in customer["billing_address"].values())
+        customer_address = _safe_str(", ".join(str(v) for v in customer["billing_address"].values()))
     end_user_rows = [
         ("Customer ID", str(customer["id"]) if customer else "—"),
         ("Quotation ID", document.doc_number),
@@ -131,11 +147,12 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     main_item_rows = []  # only these contribute to the Total — sub-item rows are informational, already covered by the parent's price
     catalogue_number = 0  # matches the Catalogue zip export's numbering — only product-based items count
     for idx, (item, product, sub_items) in enumerate(items_with_product, start=1):
-        item_name = product["name"] if product else (item.description or "")
-        description = (product.get("description") if product else None) or item.description or ""
+        item_name = _safe_str(product["name"] if product else (item.description or ""))
+        description = _safe_str((product.get("description") if product else None) or item.description or "")
         line_amount = (item.quantity or 0) * (item.unit_price or 0)
+        remark = _safe_str(item.remark or (product.get("remark") if product else None) or "")
 
-        values = [idx, item_name, description, float(item.quantity), item.unit or "Nos", float(item.unit_price or 0), float(line_amount), item.remark or (product.get("remark") if product else None) or ""]
+        values = [idx, item_name, description, float(item.quantity or 0), item.unit or "Nos", float(item.unit_price or 0), float(line_amount), remark]
         for col, v in enumerate(values, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.font = Font(name="Arial", size=10)
@@ -150,12 +167,12 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             catalogue_number += 1
         if sub_items:
             for sub in sub_items:
-                sub_label = f"{catalogue_number}.{sub['sequence_number']}"
+                sub_label = f"{catalogue_number}.{sub.get('sequence_number', '?')}"
                 sub_price = float(sub["unit_price"]) if sub.get("unit_price") is not None else ""
                 sub_values = [
                     sub_label,
-                    f"{sub['sku']} — {sub['name']}",
-                    sub.get("description") or "",
+                    _safe_str(f"{sub.get('sku', '')} — {sub.get('name', '')}"),
+                    _safe_str(sub.get("description") or ""),
                     1.0,
                     "Nos",
                     sub_price,
@@ -189,7 +206,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     terms_text = document.terms_and_conditions or DEFAULT_TERMS
     for line in terms_text.split("\n"):
         ws.merge_cells(f"A{row}:H{row}")
-        ws[f"A{row}"] = line
+        ws[f"A{row}"] = _safe_str(line)
         ws[f"A{row}"].font = Font(name="Arial", size=10)
         row += 1
     row += 1
@@ -198,10 +215,10 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     row += 1
     ws[f"A{row}"] = "Email:"
-    ws[f"B{row}"] = company.get("support_email", "") if company else ""
+    ws[f"B{row}"] = _safe_str(company.get("support_email", "")) if company else ""
     row += 1
     ws[f"A{row}"] = "Phone:"
-    ws[f"B{row}"] = company.get("support_phone", "") if company else ""
+    ws[f"B{row}"] = _safe_str(company.get("support_phone", "")) if company else ""
 
     buffer = BytesIO()
     wb.save(buffer)
