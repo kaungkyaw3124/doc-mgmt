@@ -181,6 +181,32 @@ def list_products(
     return _attach_sub_item_counts(db, query.order_by(models.Product.created_at.desc()).all())
 
 
+@router.get("/bulk-import-template")
+def download_product_bulk_import_template():
+    """A blank spreadsheet with the right headers (plus one example row)
+    for bulk-importing products — matches what /bulk-import expects."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Products"
+    ws.append(["Name", "Category", "Price", "Description"])
+    for cell in ws[1]:
+        cell.font = openpyxl.styles.Font(bold=True)
+    ws.append(["Dell Vostro 15", "Computer", 950.00, "15-inch business laptop, Intel i5, 8GB RAM, 512GB SSD"])
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 12
+    ws.column_dimensions["D"].width = 55
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="product-bulk-import-template.xlsx"'},
+    )
+
+
 @router.post("/bulk-import")
 def bulk_import_products(
     excel_file: UploadFile = File(...),

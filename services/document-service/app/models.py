@@ -41,6 +41,22 @@ class Company(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class CompanyDirector(Base):
+    """
+    A Managing Director (MD) for a company — a company can have several,
+    each with their own name and their own personal seal (distinct from
+    the company's own general seal_object_key above).
+    """
+    __tablename__ = "company_directors"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    seal_object_key = Column(String(500))
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class Customer(Base):
     __tablename__ = "customers"
 
@@ -65,6 +81,7 @@ class Document(Base):
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), index=True)  # which company issues this document — chosen per-document, no more single "primary" company
+    director_id = Column(UUID(as_uuid=True), ForeignKey("company_directors.id"), index=True)  # which MD's name/seal to show on this document
     status = Column(String(20), nullable=False, default="draft", index=True)
     currency = Column(String(3), default="USD")
     subtotal = Column(Numeric(12, 2))

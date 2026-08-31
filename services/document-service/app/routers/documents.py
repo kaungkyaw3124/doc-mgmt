@@ -165,12 +165,18 @@ def create_document(
         if not company:
             raise HTTPException(status_code=400, detail=f"company {payload.company_id} not found")
 
+    if payload.director_id:
+        director = db.query(models.CompanyDirector).filter_by(id=payload.director_id).first()
+        if not director:
+            raise HTTPException(status_code=400, detail=f"director {payload.director_id} not found")
+
     doc = models.Document(
         doc_type=payload.doc_type,
         doc_number=doc_number,
         customer_id=payload.customer_id,
         project_id=payload.project_id,
         company_id=payload.company_id,
+        director_id=payload.director_id,
         currency=payload.currency,
         issue_date=payload.issue_date,
         due_date=payload.due_date,
@@ -483,11 +489,17 @@ def update_document(
         if not company:
             raise HTTPException(status_code=400, detail=f"company {payload.company_id} not found")
 
+    if payload.director_id:
+        director = db.query(models.CompanyDirector).filter_by(id=payload.director_id).first()
+        if not director:
+            raise HTTPException(status_code=400, detail=f"director {payload.director_id} not found")
+
     line_items, subtotal, tax_total = _process_items(payload.items, db)
 
     doc.customer_id = payload.customer_id
     doc.project_id = payload.project_id
     doc.company_id = payload.company_id
+    doc.director_id = payload.director_id
     if payload.currency is not None:
         doc.currency = payload.currency
     doc.terms_and_conditions = payload.terms_and_conditions
@@ -689,7 +701,21 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
             except Exception:
                 seal_bytes = None  # don't let a bad seal file block the export
 
-    return doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime
+    director = None
+    director_seal_bytes = None
+    director_seal_mime = "image/png"
+    if doc.director_id:
+        director_row = db.query(models.CompanyDirector).filter_by(id=doc.director_id).first()
+        if director_row:
+            director = {"name": director_row.name}
+            if director_row.seal_object_key:
+                try:
+                    director_seal_bytes = get_file_bytes(director_row.seal_object_key)
+                    director_seal_mime = _guess_image_mime(director_row.seal_object_key)
+                except Exception:
+                    director_seal_bytes = None  # don't let a bad seal file block the export
+
+    return doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime
 
 
 @router.get("/{document_id}/export/quotation")
@@ -698,8 +724,8 @@ def export_quotation_xlsx(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
-    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
-    buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime)
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
+    buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime)
     filename = f"Quotation-{doc.doc_number}.xlsx"
     return Response(
         content=buffer.getvalue(),
@@ -714,8 +740,8 @@ def export_quotation_pdf(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
-    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
-    buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime)
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
+    buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime)
     filename = f"Quotation-{doc.doc_number}.pdf"
     return Response(
         content=buffer.getvalue(),

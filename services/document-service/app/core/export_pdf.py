@@ -16,7 +16,7 @@ _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
 _env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=True)
 
 
-def generate_quotation_pdf(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png") -> BytesIO:
+def generate_quotation_pdf(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png", director=None, director_seal_bytes=None, director_seal_mime="image/png") -> BytesIO:
     template = _env.get_template("quotation.html")
 
     logo_data_uri = None
@@ -34,6 +34,14 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
             seal_data_uri = f"data:{seal_mime};base64,{b64}"
         except Exception:
             seal_data_uri = None
+
+    director_seal_data_uri = None
+    if director_seal_bytes:
+        try:
+            b64 = base64.b64encode(director_seal_bytes).decode("ascii")
+            director_seal_data_uri = f"data:{director_seal_mime};base64,{b64}"
+        except Exception:
+            director_seal_data_uri = None
 
     customer_address = ""
     customer_dict = None
@@ -81,6 +89,8 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
     html_str = template.render(
         logo_data_uri=logo_data_uri,
         seal_data_uri=seal_data_uri,
+        director=director,
+        director_seal_data_uri=director_seal_data_uri,
         issue_date=document.issue_date.isoformat() if document.issue_date else date.today().isoformat(),
         company=company,
         customer=customer_dict,

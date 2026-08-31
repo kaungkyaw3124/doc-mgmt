@@ -61,11 +61,6 @@
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
 
-  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; }
-  .md-seal { width: 130px; height: 130px; }
-  .md-name { font-weight: bold; margin-top: 6px; }
-  .md-title { font-size: 9pt; color: #555; }
-
   .footer h3 { font-size: 11pt; margin-bottom: 6px; }
 </style>
 </head>
@@ -92,7 +87,7 @@
       <div class="party">
         <h3>END USER</h3>
         <table>
-          <tr><td class="label">Customer Name</td><td>{{ customer.name if customer else "—" }}</td></tr>
+          <tr><td class="label">Customer ID</td><td>{{ customer.id if customer else "—" }}</td></tr>
           <tr><td class="label">Quotation ID</td><td>{{ doc_number }}</td></tr>
           <tr><td class="label">Organization</td><td>{{ customer.name if customer else "—" }}</td></tr>
           <tr><td class="label">Address</td><td>{{ customer_address }}</td></tr>
@@ -110,16 +105,17 @@
   <table class="items">
     <thead>
       <tr>
-        <th>No</th><th>Item</th><th>Qty</th><th>Unit</th>
+        <th>No</th><th>Item</th><th>Description</th><th>Qty</th><th>Unit</th>
         <th>Price ({{ currency }})</th><th>Amount ({{ currency }})</th><th>Remark</th>
       </tr>
     </thead>
     <tbody>
-      <tr class="group-header"><td colspan="7">{{ group_label }}</td></tr>
+      <tr class="group-header"><td colspan="8">{{ group_label }}</td></tr>
       {% for item in items %}
       <tr>
         <td class="num">{{ loop.index }}</td>
-        <td><strong>{{ item.name }}</strong>{% if item.description %}<br>{{ item.description }}{% endif %}</td>
+        <td>{{ item.name }}</td>
+        <td>{{ item.description }}</td>
         <td class="num">{{ item.qty }}</td>
         <td>{{ item.unit }}</td>
         <td class="num">{{ item.price }}</td>
@@ -129,7 +125,8 @@
       {% for sub in item.sub_items %}
       <tr class="sub-item">
         <td class="sub-label">{{ sub.label }}</td>
-        <td>{{ sub.sku }} — {{ sub.name }}{% if sub.description %}<br>{{ sub.description }}{% endif %}</td>
+        <td>{{ sub.sku }} — {{ sub.name }}</td>
+        <td>{{ sub.description }}</td>
         <td class="num">1.0</td>
         <td>Nos</td>
         <td class="num">{{ sub.price }}</td>
@@ -139,7 +136,7 @@
       {% endfor %}
       {% endfor %}
       <tr class="total-row">
-        <td colspan="5" style="text-align:right;">Total:</td>
+        <td colspan="6" style="text-align:right;">Total:</td>
         <td class="num">{{ total }}</td>
         <td></td>
       </tr>
@@ -150,14 +147,6 @@
     <h3>Terms and Conditions</h3>
     <p>{{ terms_text }}</p>
   </div>
-
-  {% if director %}
-  <div class="md-block">
-    {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
-    <div class="md-name">{{ director.name }}</div>
-    <div class="md-title">Managing Director</div>
-  </div>
-  {% endif %}
 
 </body>
 </html>

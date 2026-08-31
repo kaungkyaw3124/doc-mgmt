@@ -67,6 +67,20 @@ class CompanyOut(BaseModel):
     created_at: datetime
 
 
+class CompanyDirectorCreate(BaseModel):
+    name: str
+
+
+class CompanyDirectorOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    company_id: uuid.UUID
+    name: str
+    seal_object_key: Optional[str]
+    sort_order: int
+    created_at: datetime
+
+
 class CustomerCreate(BaseModel):
     name: str
     email: Optional[str] = None
@@ -114,6 +128,7 @@ class DocumentCreate(BaseModel):
     customer_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
     company_id: Optional[uuid.UUID] = None  # which company issues this document
+    director_id: Optional[uuid.UUID] = None  # which of that company's MDs signs this document
     currency: str = "USD"  # "USD" or "MMK"
     issue_date: Optional[date] = None
     due_date: Optional[date] = None
@@ -126,6 +141,7 @@ class DocumentUpdate(BaseModel):
     customer_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
     company_id: Optional[uuid.UUID] = None
+    director_id: Optional[uuid.UUID] = None
     currency: Optional[str] = None  # omit to leave the document's existing currency unchanged
     terms_and_conditions: Optional[str] = None
     items: list[DocumentItemIn] = []
@@ -139,6 +155,7 @@ class DocumentOut(BaseModel):
     customer_id: Optional[uuid.UUID]
     project_id: Optional[uuid.UUID]
     company_id: Optional[uuid.UUID]
+    director_id: Optional[uuid.UUID]
     status: str
     currency: str
     subtotal: Optional[Decimal]

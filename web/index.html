@@ -333,6 +333,7 @@
   .line-item-row > div { flex: 1; }
   .line-item-row label { font-size: 11px; }
   .line-item-row input { margin-bottom: 0; }
+  .line-item-row input.field-error { border-color: var(--danger); background: #fff5f5; }
   .remove-line { background: none; border: none; color: var(--danger); font-size: 12px; cursor: pointer; padding: 8px 4px; }
 
   .add-line-btn {
@@ -606,9 +607,17 @@
             <button class="btn-secondary split-btn-arrow" id="category-dropdown-arrow">▾</button>
             <div class="split-btn-menu" id="category-dropdown-menu">
               <button type="button" id="open-category-list-btn">Edit category</button>
+              <button type="button" id="open-category-bulk-import-btn">Bulk import category</button>
+              <button type="button" id="sync-categories-from-products-btn">Sync from products</button>
             </div>
           </span>
-          <button class="btn-secondary" id="open-bulk-import-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Bulk import</button>
+          <span class="split-btn-group" id="bulk-import-split-btn-wrap" style="margin-right:8px;">
+            <button class="btn-secondary" id="open-bulk-import-btn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Bulk import</button>
+            <button class="btn-secondary split-btn-arrow" id="bulk-import-dropdown-arrow">▾</button>
+            <div class="split-btn-menu" id="bulk-import-dropdown-menu">
+              <button type="button" id="download-product-template-btn">Download template</button>
+            </div>
+          </span>
           <button class="btn-secondary" id="open-cart-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>Cart <span id="cart-count-badge"></span></button>
           <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
           <button class="btn-secondary" id="toggle-product-form">+ New product</button>
@@ -637,16 +646,15 @@
             <th>Item Number</th>
             <th>Name <button class="sort-btn" data-sort-table="products" data-sort-col="name">⇅</button></th>
             <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
-            <th>Price <button class="sort-btn" data-sort-table="products" data-sort-col="price">⇅</button></th>
             <th>Created <button class="sort-btn" data-sort-table="products" data-sort-col="created">⇅</button></th>
             <th>Modified <button class="sort-btn" data-sort-table="products" data-sort-col="modified">⇅</button></th>
             <th>Catalog</th><th>Cart</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="products-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -1135,6 +1143,13 @@
       <label for="company-seal">Company seal (optional, .png or .jpg)</label>
       <input type="file" id="company-seal" accept="image/png,image/jpeg">
       <div id="company-current-seal-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
+        <label style="margin:0;">Managing Directors</label>
+        <button type="button" class="link-btn-inline" id="add-director-row-btn">+ Add another MD</button>
+      </div>
+      <div id="director-rows"></div>
+
       <button type="submit" class="btn-primary" id="company-form-submit-btn" style="margin-top:14px;">Create company</button>
     </form>
   </div>
@@ -1192,6 +1207,16 @@
         </div>
       </div>
 
+      <div class="form-row">
+        <div>
+          <label for="doc-director">Managing Director (name + seal shown on the document)</label>
+          <select id="doc-director">
+            <option value="">— none —</option>
+          </select>
+        </div>
+        <div></div>
+      </div>
+
       <div class="form-row" style="align-items:center; margin-bottom:8px;">
         <label style="margin:0;">Line items</label>
         <div style="text-align:right;">
@@ -1200,6 +1225,12 @@
       </div>
       <div id="line-items"></div>
       <button type="button" class="add-line-btn" id="add-line-btn">+ Add line item</button>
+
+      <div id="doc-totals-summary" style="display:flex; justify-content:flex-end; align-items:center; gap:24px; margin:14px 0; font-size:14px;">
+        <div>Tax %: <input type="text" id="doc-tax-rate" value="0" style="width:60px; display:inline-block; margin:0;"></div>
+        <div>Total without tax: <strong id="doc-totals-subtotal">0.00</strong></div>
+        <div>Total with tax: <strong id="doc-totals-grand">0.00</strong></div>
+      </div>
 
       <label for="doc-terms">Terms &amp; Conditions</label>
       <textarea id="doc-terms" rows="6" placeholder="Price Validity, Payment Lead Time, Delivery, Warranty, etc.">Price Validity: 30 Days
@@ -1236,10 +1267,7 @@ Warranty: 2 years from the date of delivery</textarea>
             <option value="">— choose a category —</option>
           </select>
         </div>
-        <div>
-          <label for="product-price">Unit price</label>
-          <input type="text" id="product-price" placeholder="20.00">
-        </div>
+        <div></div>
       </div>
       <label for="product-description">Description</label>
       <textarea id="product-description" rows="2" placeholder="Short description of this product"></textarea>
@@ -1463,6 +1491,23 @@ Warranty: 2 years from the date of delivery</textarea>
     <input type="file" id="bulk-import-zip" accept=".zip,.rar">
     <button type="button" class="btn-primary" id="bulk-import-submit-btn" style="margin-top:14px;">Import</button>
     <div id="bulk-import-results" style="margin-top:16px;"></div>
+  </div>
+</div>
+
+<!-- ============ CATEGORY BULK IMPORT MODAL ============ -->
+<div class="modal-overlay" id="category-bulk-import-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="category-bulk-import-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+    <h3>Bulk import categories</h3>
+    <div id="category-bulk-import-banner"></div>
+    <p style="font-size:13px; color:var(--text-dim);">
+      Spreadsheet needs <strong>Name</strong> and <strong>Short Term</strong> columns (Short Term becomes the SKU prefix, e.g. "COM") — <strong>Description</strong> is optional.
+    </p>
+    <button type="button" class="btn-secondary" id="download-category-template-btn">Download template</button>
+    <label for="category-bulk-import-excel" style="margin-top:14px;">Category spreadsheet (.xlsx)</label>
+    <input type="file" id="category-bulk-import-excel" accept=".xlsx">
+    <button type="button" class="btn-primary" id="category-bulk-import-submit-btn" style="margin-top:14px;">Import</button>
+    <div id="category-bulk-import-results" style="margin-top:16px;"></div>
   </div>
 </div>
 
@@ -1709,6 +1754,7 @@ document.getElementById('toggle-doc-form').addEventListener('click', () => {
   document.getElementById('doc-number').placeholder = 'Auto-generating…';
   document.getElementById('line-items').innerHTML = '';
   addLineItem();
+  document.getElementById('doc-director').innerHTML = '<option value="">— none —</option>';
   prefillNextDocNumber();
   document.getElementById('doc-modal').classList.add('active');
 });
@@ -1738,10 +1784,29 @@ async function prefillNextDocNumber(forceOverwrite = false) {
 
 document.getElementById('doc-company').addEventListener('change', () => {
   if (!editingDocumentId) prefillNextDocNumber(true);
+  refreshDocDirectorPicker();
 });
 document.getElementById('doc-company').addEventListener('input', () => {
   if (!editingDocumentId) prefillNextDocNumber(true);
+  refreshDocDirectorPicker();
 });
+
+async function refreshDocDirectorPicker(selectDirectorId) {
+  const select = document.getElementById('doc-director');
+  const companyId = resolveDocCompanyIdFromInput();
+  if (!companyId) {
+    select.innerHTML = '<option value="">— none —</option>';
+    return;
+  }
+  try {
+    const directors = await apiFetch('/companies/' + companyId + '/directors');
+    select.innerHTML = '<option value="">— none —</option>' +
+      directors.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+    if (selectDirectorId) select.value = selectDirectorId;
+  } catch (err) {
+    select.innerHTML = '<option value="">— none —</option>';
+  }
+}
 
 let editingDocumentId = null;
 let cachedDocuments = [];
@@ -1774,22 +1839,19 @@ function addLineItem(prefill) {
     <div style="max-width:80px;"><label>Unit</label><input type="text" class="li-unit" placeholder="Nos" value="${prefill ? escapeHtml(prefill.unit || 'Nos') : 'Nos'}"></div>
     <div><label>Unit price</label><input type="text" class="li-price" placeholder="20.00" value="${prefill ? safeVal(prefill.unit_price) : ''}"></div>
     <div><label>Remark</label><input type="text" class="li-remark" placeholder="Optional note" value="${prefill ? escapeHtml(prefill.remark || '') : ''}"></div>
-    <div style="max-width:70px;"><label>Tax %</label><input type="text" class="li-tax" placeholder="0" value="${prefill ? safeVal(prefill.tax_rate, 0) : ''}"></div>
     <button type="button" class="remove-line" data-line-id="${id}">Remove</button>
   `;
   document.getElementById('line-items').appendChild(div);
-  div.querySelector('.remove-line').addEventListener('click', () => div.remove());
+  div.querySelector('.remove-line').addEventListener('click', () => { div.remove(); updateDocumentTotals(); });
   div.querySelector('.li-product-search').addEventListener('input', (e) => {
     const typed = e.target.value.trim();
     const descInput = div.querySelector('.li-desc');
-    const priceInput = div.querySelector('.li-price');
     const qtyInput = div.querySelector('.li-qty');
     const remarkInput = div.querySelector('.li-remark');
     const match = typed && cachedProducts.find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
     if (match) {
       div.dataset.resolvedProductId = match.id;
       descInput.value = match.name;
-      if (match.unit_price) priceInput.value = match.unit_price;
       if (!qtyInput.value) qtyInput.value = '1';
       if (!remarkInput.value && match.remark) remarkInput.value = match.remark;
     } else {
@@ -1797,8 +1859,32 @@ function addLineItem(prefill) {
       if (!typed) descInput.value = '';
     }
   });
+  div.querySelector('.li-price').addEventListener('input', (e) => {
+    e.target.classList.remove('field-error');
+  });
+  updateDocumentTotals();
 }
 document.getElementById('add-line-btn').addEventListener('click', addLineItem);
+
+document.getElementById('line-items').addEventListener('input', (e) => {
+  if (e.target.matches('.li-qty, .li-price')) updateDocumentTotals();
+});
+document.getElementById('doc-tax-rate').addEventListener('input', updateDocumentTotals);
+
+function updateDocumentTotals() {
+  let subtotal = 0;
+  document.querySelectorAll('#line-items .line-item-row').forEach(row => {
+    const qty = Number(row.querySelector('.li-qty').value) || 0;
+    const price = Number(row.querySelector('.li-price').value) || 0;
+    subtotal += qty * price;
+  });
+  const taxRate = Number(document.getElementById('doc-tax-rate').value) || 0;
+  const taxTotal = subtotal * (taxRate / 100);
+  const currency = document.getElementById('doc-currency').value;
+  document.getElementById('doc-totals-subtotal').textContent = subtotal.toFixed(2) + ' ' + currency;
+  document.getElementById('doc-totals-grand').textContent = (subtotal + taxTotal).toFixed(2) + ' ' + currency;
+}
+document.getElementById('doc-currency').addEventListener('change', updateDocumentTotals);
 
 document.getElementById('doc-customer').addEventListener('input', (e) => {
   const hint = document.getElementById('doc-customer-hint');
@@ -1816,6 +1902,8 @@ function refreshLineItemProductOptions() {
 document.getElementById('doc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showBanner('doc-modal-banner', '');
+  document.querySelectorAll('#line-items .li-price.field-error').forEach(el => el.classList.remove('field-error'));
+  const overallTaxRate = Number(document.getElementById('doc-tax-rate').value) || 0;
   const items = [];
   const incompleteRows = [];
   document.querySelectorAll('#line-items .line-item-row').forEach((row, rowIndex) => {
@@ -1825,7 +1913,6 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     const quantity = row.querySelector('.li-qty').value;
     const unit = row.querySelector('.li-unit').value || 'Nos';
     const unit_price = row.querySelector('.li-price').value;
-    const tax_rate = row.querySelector('.li-tax').value || '0';
 
     const hasSomeData = product_id || description || remark || unit_price;
     if (!hasSomeData) return; // a genuinely blank/unused row — fine to ignore silently
@@ -1838,21 +1925,22 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       incompleteRows.push(`Row ${rowIndex + 1}: quantity must be a number`);
       return;
     }
-    if (!product_id && (!remark || !unit_price)) {
-      incompleteRows.push(`Row ${rowIndex + 1}: needs either a product, or both a remark and unit price`);
+    if (!product_id && !remark) {
+      incompleteRows.push(`Row ${rowIndex + 1}: needs either a product, or a remark describing what this line item is`);
       return;
     }
-    if (unit_price && isNaN(Number(unit_price))) {
+    if (!unit_price) {
+      row.querySelector('.li-price').classList.add('field-error');
+      incompleteRows.push(`Row ${rowIndex + 1}: needs a unit price — products don't carry a catalog price anymore, enter it per document`);
+      return;
+    }
+    if (isNaN(Number(unit_price))) {
       incompleteRows.push(`Row ${rowIndex + 1}: unit price must be a number`);
-      return;
-    }
-    if (isNaN(Number(tax_rate))) {
-      incompleteRows.push(`Row ${rowIndex + 1}: tax % must be a number`);
       return;
     }
     if (!product_id && !description) description = remark; // free-text row — use the remark as its name/description too, so exports aren't blank
 
-    const item = { quantity: Number(quantity), tax_rate: Number(tax_rate), unit };
+    const item = { quantity: Number(quantity), tax_rate: overallTaxRate, unit };
     if (product_id) item.product_id = product_id;
     if (description) item.description = description;
     if (remark) item.remark = remark;
@@ -1861,6 +1949,8 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
   });
   if (incompleteRows.length > 0) {
     showBanner('doc-modal-banner', 'Fix these before saving — nothing was changed: ' + incompleteRows.join('; '));
+    const firstError = document.querySelector('#line-items .field-error');
+    if (firstError) firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
   if (items.length === 0) {
@@ -1874,6 +1964,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       customer_id: resolveCustomerIdFromInput(),
       project_id: resolveDocProjectIdFromInput(),
       company_id: resolveDocCompanyIdFromInput(),
+      director_id: document.getElementById('doc-director').value || null,
       currency: document.getElementById('doc-currency').value,
       terms_and_conditions: document.getElementById('doc-terms').value || null,
       items
@@ -1930,11 +2021,14 @@ function startEditDocument(doc) {
     : '';
   const docCompany = cachedCompanies.find(c => c.id === doc.company_id);
   document.getElementById('doc-company').value = docCompany ? docCompany.name : '';
+  refreshDocDirectorPicker(doc.director_id);
   document.getElementById('doc-terms').value = doc.terms_and_conditions || '';
 
   document.getElementById('line-items').innerHTML = '';
   lineItemCount = 0;
   doc.items.forEach(item => addLineItem(item));
+  document.getElementById('doc-tax-rate').value = doc.items.length ? (doc.items[0].tax_rate || 0) : 0;
+  updateDocumentTotals();
   if (doc.items.length === 0) addLineItem();
 
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2515,6 +2609,63 @@ function refreshProjectBudgetYearFilter() {
 // ---------- company ----------
 let editingCompanyId = null;
 
+function buildDirectorRow(director) {
+  const div = document.createElement('div');
+  div.className = 'director-row';
+  div.dataset.directorId = director ? director.id : '';
+  div.style.cssText = 'display:flex; gap:10px; align-items:flex-end; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--border);';
+  div.innerHTML = `
+    <div style="flex:1;">
+      <label>MD Name</label>
+      <input type="text" class="director-name" placeholder="Managing Director's name" value="${director ? escapeHtml(director.name) : ''}">
+    </div>
+    <div style="flex:1;">
+      <label>MD Seal</label>
+      <input type="file" class="director-seal-file" accept="image/png,image/jpeg">
+      ${director && director.seal_object_key ? `<div style="font-size:12px; color:var(--text-dim); margin-top:2px;">Seal already attached — choosing a new file replaces it. <button type="button" class="link-btn-inline director-view-seal-btn">View</button></div>` : ''}
+    </div>
+    <button type="button" class="link-btn-inline director-remove-btn" style="color:var(--danger); margin-bottom:8px;">Remove</button>
+  `;
+  div.querySelector('.director-remove-btn').addEventListener('click', async () => {
+    const directorId = div.dataset.directorId;
+    if (directorId && editingCompanyId) {
+      if (!confirm('Remove this MD? This deletes them immediately.')) return;
+      try {
+        await apiFetch('/companies/' + editingCompanyId + '/directors/' + directorId, { method: 'DELETE' });
+      } catch (err) {
+        showBanner('company-modal-banner', err.message);
+        return;
+      }
+    }
+    div.remove();
+  });
+  if (director && director.seal_object_key) {
+    div.querySelector('.director-view-seal-btn').addEventListener('click', async () => {
+      try {
+        const data = await apiFetch('/companies/' + director.company_id + '/directors/' + director.id + '/seal-url');
+        window.open(data.url, '_blank');
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  }
+  return div;
+}
+
+function resetDirectorRows(directors) {
+  const container = document.getElementById('director-rows');
+  container.innerHTML = '';
+  if (directors && directors.length) {
+    directors.forEach(d => container.appendChild(buildDirectorRow(d)));
+  } else {
+    container.appendChild(buildDirectorRow(null)); // default: one blank row
+  }
+}
+
+document.getElementById('add-director-row-btn').addEventListener('click', () => {
+  document.getElementById('director-rows').appendChild(buildDirectorRow(null));
+});
+
 document.getElementById('toggle-company-form').addEventListener('click', () => {
   editingCompanyId = null;
   document.getElementById('company-form').reset();
@@ -2522,6 +2673,7 @@ document.getElementById('toggle-company-form').addEventListener('click', () => {
   document.getElementById('company-form-submit-btn').textContent = 'Create company';
   document.getElementById('company-current-logo-info').style.display = 'none';
   document.getElementById('company-current-seal-info').style.display = 'none';
+  resetDirectorRows(null);
   showBanner('company-modal-banner', '');
   document.getElementById('company-modal').classList.add('active');
 });
@@ -2597,7 +2749,51 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       }
     }
 
+    // Flush the director rows: create any new ones, rename existing ones,
+    // and upload a seal file for any row where one was selected.
+    const directorRows = document.querySelectorAll('#director-rows .director-row');
+    for (const row of directorRows) {
+      const name = row.querySelector('.director-name').value.trim();
+      const sealFile = row.querySelector('.director-seal-file').files[0];
+      let directorId = row.dataset.directorId;
+
+      if (!directorId) {
+        if (!name) continue; // a genuinely blank unused row — skip silently
+        const created = await apiFetch('/companies/' + company.id + '/directors', {
+          method: 'POST',
+          body: JSON.stringify({ name })
+        });
+        if (!created) {
+          showBanner('company-modal-banner', 'Company saved, but one MD row failed to save.');
+          loadCompanies();
+          return;
+        }
+        directorId = created.id;
+      } else if (name) {
+        await apiFetch('/companies/' + company.id + '/directors/' + directorId, {
+          method: 'PATCH',
+          body: JSON.stringify({ name })
+        });
+      }
+
+      if (sealFile) {
+        const formData = new FormData();
+        formData.append('file', sealFile);
+        const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/directors/' + directorId + '/seal', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token },
+          body: formData
+        });
+        if (!uploadResponse.ok) {
+          showBanner('company-modal-banner', `Company saved, but a director's seal didn't upload.`);
+          loadCompanies();
+          return;
+        }
+      }
+    }
+
     document.getElementById('company-form').reset();
+    resetDirectorRows(null);
     document.getElementById('company-modal').classList.remove('active');
     document.getElementById('company-form-title').textContent = 'New company';
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
@@ -2643,6 +2839,11 @@ function startEditCompany(company) {
   } else {
     sealInfo.style.display = 'none';
   }
+
+  resetDirectorRows(null); // show a blank row immediately, replaced once the real list loads
+  apiFetch('/companies/' + company.id + '/directors')
+    .then(directors => resetDirectorRows(directors))
+    .catch(() => resetDirectorRows(null));
 }
 
 async function viewCompanyImage(companyId, kind) {
@@ -3121,13 +3322,22 @@ document.getElementById('import-from-cart-btn').addEventListener('click', () => 
     showBanner('doc-modal-banner', 'Your cart is empty — add some products to it from the Products tab first.');
     return;
   }
+  // Clear out any rows that are still completely blank (e.g. the default
+  // starting row) so importing from the cart doesn't leave an empty,
+  // unused line sitting above the real items.
+  document.querySelectorAll('#line-items .line-item-row').forEach(row => {
+    const hasProduct = !!row.dataset.resolvedProductId;
+    const hasRemark = row.querySelector('.li-remark').value.trim() !== '';
+    const hasPrice = row.querySelector('.li-price').value.trim() !== '';
+    if (!hasProduct && !hasRemark && !hasPrice) row.remove();
+  });
   cartItems.forEach(p => {
     addLineItem({
       product_id: p.id,
       description: p.name,
       quantity: p.quantity || 1,
       unit: 'Nos',
-      unit_price: p.unit_price,
+      unit_price: null,
       tax_rate: 0
     });
   });
@@ -3185,8 +3395,38 @@ document.getElementById('category-dropdown-arrow').addEventListener('click', (e)
   document.getElementById('category-dropdown-menu').classList.toggle('active');
 });
 
+document.getElementById('bulk-import-dropdown-arrow').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('bulk-import-dropdown-menu').classList.toggle('active');
+});
+
 document.addEventListener('click', () => {
   document.getElementById('category-dropdown-menu').classList.remove('active');
+  document.getElementById('bulk-import-dropdown-menu').classList.remove('active');
+});
+
+document.getElementById('download-product-template-btn').addEventListener('click', async () => {
+  document.getElementById('bulk-import-dropdown-menu').classList.remove('active');
+  try {
+    const response = await fetch(API_BASE + '/products/bulk-import-template', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!response.ok) {
+      showBanner('products-banner', 'Could not download the template.');
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'product-bulk-import-template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showBanner('products-banner', err.message);
+  }
 });
 
 document.getElementById('open-category-list-btn').addEventListener('click', async () => {
@@ -3265,25 +3505,23 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   e.preventDefault();
   showBanner('product-modal-banner', '');
   const fileInput = document.getElementById('product-file');
-  const priceRaw = document.getElementById('product-price').value;
-  if (priceRaw && isNaN(Number(priceRaw))) {
-    showBanner('product-modal-banner', 'Unit price must be a number.');
-    return;
-  }
   const payload = {
     sku: document.getElementById('product-sku').value || null,
     name: document.getElementById('product-name').value,
     category: document.getElementById('product-category').value || null,
     description: document.getElementById('product-description').value || null,
     remark: document.getElementById('product-remark').value || null,
-    unit_price: priceRaw ? Number(priceRaw) : null
+    unit_price: null // price isn't set at the catalog level anymore — entered per-document instead
   };
   try {
     document.getElementById('product-form-submit-btn').disabled = true;
     let product;
     if (editingProductId) {
-      // sku can't be changed via PATCH (it's the identity), so leave it out
-      const { sku, ...updatePayload } = payload;
+      // sku can't be changed via PATCH (it's the identity); unit_price is
+      // also left out here — it's not managed via this form anymore, and
+      // omitting it (rather than sending null) means an edit never wipes
+      // out a price a product might already have from before this change.
+      const { sku, unit_price, ...updatePayload } = payload;
       product = await apiFetch('/products/' + editingProductId, {
         method: 'PATCH',
         body: JSON.stringify(updatePayload)
@@ -3353,7 +3591,6 @@ function startEditProduct(product) {
   document.getElementById('product-category').value = product.category || '';
   document.getElementById('product-description').value = product.description || '';
   document.getElementById('product-remark').value = product.remark || '';
-  document.getElementById('product-price').value = product.unit_price || '';
   document.getElementById('product-form-submit-btn').textContent = 'Save changes';
   const fileInfo = document.getElementById('product-current-file-info');
   if (product.image_object_key) {
@@ -3447,6 +3684,121 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
   }
 });
 
+document.getElementById('sync-categories-from-products-btn').addEventListener('click', async () => {
+  document.getElementById('category-dropdown-menu').classList.remove('active');
+  if (!confirm('Scan all products and create any missing categories? This is safe to run any time — it only adds categories that don\'t exist yet.')) return;
+  try {
+    const result = await apiFetch('/categories/sync-from-products', { method: 'POST' });
+    if (result.created.length === 0) {
+      alert('Nothing to sync — every category already in use is already registered.');
+    } else {
+      const names = result.created.map(c => `${c.name} (${c.short_term})`).join('\n');
+      alert(`Created ${result.created.length} categor${result.created.length === 1 ? 'y' : 'ies'}:\n${names}`);
+    }
+    loadCategories();
+  } catch (err) {
+    showBanner('products-banner', err.message);
+  }
+});
+
+document.getElementById('open-category-bulk-import-btn').addEventListener('click', () => {
+  document.getElementById('category-dropdown-menu').classList.remove('active');
+  showBanner('category-bulk-import-banner', '');
+  document.getElementById('category-bulk-import-excel').value = '';
+  document.getElementById('category-bulk-import-results').innerHTML = '';
+  document.getElementById('category-bulk-import-modal').classList.add('active');
+});
+
+document.getElementById('category-bulk-import-close').addEventListener('click', () => {
+  document.getElementById('category-bulk-import-modal').classList.remove('active');
+});
+
+document.getElementById('download-category-template-btn').addEventListener('click', async () => {
+  try {
+    const response = await fetch(API_BASE + '/categories/bulk-import-template', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!response.ok) {
+      showBanner('category-bulk-import-banner', 'Could not download the template.');
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'category-bulk-import-template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showBanner('category-bulk-import-banner', err.message);
+  }
+});
+
+document.getElementById('category-bulk-import-submit-btn').addEventListener('click', async () => {
+  const excelInput = document.getElementById('category-bulk-import-excel');
+  const resultsEl = document.getElementById('category-bulk-import-results');
+
+  if (!excelInput.files.length) {
+    showBanner('category-bulk-import-banner', 'Choose a spreadsheet file first.');
+    return;
+  }
+
+  showBanner('category-bulk-import-banner', '');
+  resultsEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Importing…</p>';
+  const submitBtn = document.getElementById('category-bulk-import-submit-btn');
+  submitBtn.disabled = true;
+
+  try {
+    const formData = new FormData();
+    formData.append('file', excelInput.files[0]);
+
+    const response = await fetch(API_BASE + '/categories/bulk-import', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: formData
+    });
+
+    if (!response.ok) {
+      let detail = 'Bulk import failed.';
+      try {
+        const errBody = await response.json();
+        if (errBody.detail) detail = errBody.detail;
+      } catch (parseErr) {
+        // response wasn't JSON — stick with the generic message
+      }
+      showBanner('category-bulk-import-banner', detail);
+      resultsEl.innerHTML = '';
+      return;
+    }
+
+    const result = await response.json();
+    const rows = result.created.map(item => `
+      <tr>
+        <td class="mono">${item.row}</td>
+        <td>${escapeHtml(item.name)}</td>
+        <td class="mono">${escapeHtml(item.short_term)}</td>
+      </tr>
+    `).join('');
+
+    resultsEl.innerHTML = `
+      <p style="font-weight:600;">Created ${result.created.length} categor${result.created.length === 1 ? 'y' : 'ies'}.</p>
+      <table>
+        <thead><tr><th>Row</th><th>Name</th><th>Short Term</th></tr></thead>
+        <tbody>${rows || '<tr class="empty-row"><td colspan="3">Nothing was created.</td></tr>'}</tbody>
+      </table>
+      ${result.warnings.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${result.warnings.map(w => escapeHtml(w)).join('<br>')}</p>` : ''}
+    `;
+    loadCategories();
+  } catch (err) {
+    showBanner('category-bulk-import-banner', err.message);
+    resultsEl.innerHTML = '';
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 async function loadProducts() {
   const tbody = document.getElementById('products-tbody');
   const mySeq = startLoad('products');
@@ -3459,7 +3811,7 @@ async function loadProducts() {
     applyFilterAndSort('products');
   } catch (err) {
     if (isStaleLoad('products', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -3664,15 +4016,17 @@ function renderProductSubItemsReadonly(subItems) {
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
     <tr>
       <td class="mono">${escapeHtml(p.sku)}</td>
-      <td><button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button></td>
+      <td>
+        <button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button>
+        ${p.description ? `<div style="font-size:12px; color:var(--text-dim); margin-top:2px; white-space:pre-line;">${escapeHtml(p.description)}</div>` : ''}
+      </td>
       <td>${escapeHtml(p.category || '—')}</td>
-      <td class="mono">${fmtMoney(p.unit_price)}</td>
       <td>${fmtDate(p.created_at)}</td>
       <td>${fmtDate(p.updated_at)}</td>
       <td>${p.sub_item_count > 0
@@ -3921,7 +4275,6 @@ const sortAccessors = {
   products: {
     name: p => (p.name || '').toLowerCase(),
     category: p => (p.category || '').toLowerCase(),
-    price: p => Number(p.unit_price) || 0,
     created: p => new Date(p.created_at).getTime(),
     modified: p => new Date(p.updated_at).getTime(),
   },
