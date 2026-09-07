@@ -439,3 +439,32 @@ security: remove insecure default secrets
 ### Final Result
 
 PASS
+
+### Addendum (found during Task 3, 2026-09-07 10:23)
+
+Task 3's `infra-integration` CI job caught a real regression from this
+task: `MEILI_MASTER_KEY`/`MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY` in
+`catalogue-service`, `document-service`, and `search-service`'s
+`.env.example` had been changed to non-functional placeholders
+(`GENERATE_A_SECURE_SECRET`/`CHANGE_ME`). Those three values are NOT
+self-contained per-service secrets like `JWT_SECRET` — they must match
+the credentials the `meilisearch`/`minio` containers themselves are
+started with (`infra/docker-compose.yml`'s own dev-convenience
+defaults). Placeholder-izing only the service side broke that match:
+document-service failed to boot in the integration test with
+`botocore.exceptions.ClientError: InvalidAccessKeyId`. This violated
+this task's own "Development configuration remains usable" acceptance
+criterion — a regression, not a new finding.
+
+**Fix**: reverted those three fields, in all three `.env.example`
+files, back to the working dev defaults (`local_dev_master_key_change_me`,
+`minioadmin`/`minioadmin`) that match the datastore containers' own
+defaults — same pattern already correctly used for auth-service's
+`DATABASE_URL` (kept `docmgmt`/`docmgmt`, matching `postgres`'s
+default) and `JWT_SECRET`/`SEED_ADMIN_PASSWORD` (genuinely
+self-contained, safe as strict `CHANGE_ME`-style placeholders). The
+`is_insecure()` fail-fast check is unaffected by this fix — it still
+rejects `minioadmin` and `local_dev_master_key_change_me` in
+production; only the *unedited, development-mode* value changed back
+to something that actually connects. See Task 3's log entry for the
+CI evidence (run that caught this, and the run that confirmed the fix).
