@@ -189,9 +189,9 @@ flowchart TB
             DocC["document-service :8000 (internal)"]
             CatC["catalogue-service :8000 (internal)"]
             SearchC["search-service :8000 (internal)"]
-            PgC["postgres :5432→5432"]
-            MinioC["minio :9000→9000, :9001→9001"]
-            MeiliC["meilisearch :7700→7700"]
+            PgC["postgres :5432 (internal only)"]
+            MinioC["minio :9000, :9001 (internal only)"]
+            MeiliC["meilisearch :7700 (internal only)"]
         end
         VolPg[["bind mount ./data/postgres"]]
         VolMinio[["bind mount ./data/minio"]]

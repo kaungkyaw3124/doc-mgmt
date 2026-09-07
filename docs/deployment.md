@@ -16,22 +16,27 @@ infrastructure.
 
 | Service | Image / build | Published ports | Internal port | Depends on |
 |---|---|---|---|---|
-| `postgres` | `postgres:16` | `5432:5432` | 5432 | — |
-| `minio` | `minio/minio` | `9000:9000` (S3), `9001:9001` (console) | 9000/9001 | — |
-| `meilisearch` | `getmeili/meilisearch:v1.10` | `7700:7700` | 7700 | — |
+| `postgres` | `postgres:16` | none (`expose: 5432`) | 5432 | — |
+| `minio` | `minio/minio` | none (`expose: 9000, 9001`) | 9000/9001 | — |
+| `meilisearch` | `getmeili/meilisearch:v1.10` | none (`expose: 7700`) | 7700 | — |
 | `auth-service` | `../services/auth-service` | none (`expose: 8000`) | 8000 | `postgres` |
 | `catalogue-service` | `../services/catalogue-service` | none | 8000 | `postgres`, `meilisearch`, `minio` |
 | `document-service` | `../services/document-service` | none | 8000 | `postgres`, `minio`, `catalogue-service`, `meilisearch` |
 | `search-service` | `../services/search-service` | none | 8000 | `meilisearch`, `document-service` |
-| `nginx` | `nginx:alpine` | **`8080:80`** | 80 | `document-service`, `catalogue-service`, `search-service`, `auth-service` |
+| `nginx` | `nginx:alpine` | **`8080:80`** | 80 | `document-service`, `catalogue-service`, `search-service`, `auth-service`, `minio` |
 
 All services set `restart: unless-stopped`
 (`infra/docker-compose.yml`). **`nginx` is the only container reachable from
-outside the Docker host's own network** by design — every other published
-port (`5432`, `9000`, `9001`, `7700`) is explicitly called out in the compose
-file's own comments as convenient for local debugging and something to
-"remove later" (`infra/docker-compose.yml:13-14`) — this has not yet been
-done (see [known-issues.md](known-issues.md)).
+outside the Docker host's own network** by design. Postgres/MinIO/Meilisearch
+were previously also published directly to the host (`5432`, `9000`, `9001`,
+`7700`) — flagged as a security gap in `docs/SECURITY_HARDENING_LOG.md` Task 3
+and fixed there: they're now `expose`-only (reachable from other containers
+on the compose network, not from the host). Browser-facing MinIO downloads
+(presigned URLs) are proxied through Nginx instead — see the `/documents/`
+and `/products/` locations in `infra/nginx/nginx.conf`. For ad-hoc admin
+access (psql, the MinIO console), see the "Inspect MinIO contents"/"Inspect
+Postgres directly" rows in [operations.md](operations.md#common-operational-tasks)
+rather than re-publishing a port.
 
 ## Persistent volumes
 
@@ -105,7 +110,7 @@ a variable is unset.
 | `MEILI_URL` | `http://meilisearch:7700` | |
 | `MEILI_MASTER_KEY` | `local_dev_master_key_change_me` | ⚠ no startup warning if left default (inconsistent with `JWT_SECRET`'s warning) |
 | `MINIO_ENDPOINT` | `minio:9000` | internal |
-| `MINIO_PUBLIC_ENDPOINT` | `localhost:9000` | for presigned URLs |
+| `MINIO_PUBLIC_ENDPOINT` | `localhost:8080` | for presigned URLs, proxied through Nginx (see Containers above) |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `minioadmin` / `minioadmin` | ⚠ no startup warning |
 | `MINIO_BUCKET` | `products` | |
 | `MINIO_SECURE` | `false` | http vs https for the S3 endpoint |

@@ -27,7 +27,11 @@ so a direct connection to a service's port can't forge these headers.
 router).
 
 ### 2. Insecure defaults ship for every secret, with inconsistent startup warnings — Medium
-**Where**: `services/auth-service/app/main.py:23-35` warns on default
+**RESOLVED** — see `docs/SECURITY_HARDENING_LOG.md` Task 2 (commit
+`59d09ce`): all four services now fail to start in production
+(`ENVIRONMENT=production`) if any of these secrets are missing or still
+set to a known/generic-placeholder default; development still only warns.
+**Where** (historical): `services/auth-service/app/main.py:23-35` warns on default
 `JWT_SECRET`/`SEED_ADMIN_PASSWORD`; **no equivalent warning exists** for
 `MEILI_MASTER_KEY` or `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`, which default
 to `local_dev_master_key_change_me` and `minioadmin`/`minioadmin` across
@@ -42,7 +46,13 @@ Meilisearch/MinIO settings.
 **Effort**: Low.
 
 ### 3. Postgres/MinIO/Meilisearch ports published to the host, acknowledged but not closed — Medium
-**Where**: `infra/docker-compose.yml:13-14, 26-27, 63-64` — comments say
+**RESOLVED** — see `docs/SECURITY_HARDENING_LOG.md` Task 3: `ports:`
+mappings removed for `postgres`, `minio`, and `meilisearch` (now
+`expose:`-only); browser-facing MinIO presigned-download URLs are proxied
+through Nginx instead (`/documents/`, `/products/` locations in
+`infra/nginx/nginx.conf`), and `docs/operations.md` documents a temporary-
+tunnel pattern for ad-hoc admin access.
+**Where** (historical): `infra/docker-compose.yml:13-14, 26-27, 63-64` — comments say
 "exposed for now... remove later."
 **Why it matters**: on a host with any inbound network exposure, this
 offers a direct, RBAC-bypassing path to raw data (see finding #1) and to

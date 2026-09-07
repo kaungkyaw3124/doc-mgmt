@@ -344,11 +344,16 @@ flowchart LR
 - **Two S3 clients per service** — an internal one
   (`minio:9000`, the Docker network hostname) for server-side
   upload/download, and a **separate** one pointed at
-  `MINIO_PUBLIC_ENDPOINT` (default `localhost:9000`) used **only** to sign
+  `MINIO_PUBLIC_ENDPOINT` (default `localhost:8080`) used **only** to sign
   presigned URLs, because a browser cannot resolve the internal Docker
   service name (`app/core/storage.py` in both catalogue-service and
   document-service — the comment in document-service's version explains
-  this most fully).
+  this most fully). As of `docs/SECURITY_HARDENING_LOG.md` Task 3, this
+  points at Nginx (port `8080`), not MinIO's own port directly — MinIO is
+  no longer published to the host, so Nginx proxies presigned requests
+  through to it (`/documents/`, `/products/` locations in
+  `infra/nginx/nginx.conf`) with the path and Host header preserved
+  exactly, since both are part of what the SigV4 signature covers.
 - **Filename sanitization**: uploaded filenames are stripped of any
   directory component and non-`[A-Za-z0-9._-]` characters replaced with
   `_` before being used in an object key (`_sanitize_filename`, present

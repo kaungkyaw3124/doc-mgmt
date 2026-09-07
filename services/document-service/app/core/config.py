@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     meili_master_key: str = "local_dev_master_key_change_me"
 
     minio_endpoint: str = "minio:9000"                 # internal, container-to-container
-    minio_public_endpoint: str = "localhost:9000"      # what a browser/host machine can reach
+    # What a browser/host machine can reach — routed through Nginx (see
+    # infra/nginx/nginx.conf's /documents/ location), NOT MinIO's own
+    # port directly, which is no longer published to the host.
+    minio_public_endpoint: str = "localhost:8080"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "documents"

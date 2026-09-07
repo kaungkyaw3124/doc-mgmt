@@ -84,3 +84,87 @@ jobs:
       - name: Run tests
         working-directory: services/search-service
         run: python -m pytest -v
+
+  infra-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create per-service .env files from .env.example (dev defaults)
+        run: |
+          for svc in auth-service catalogue-service document-service search-service; do
+            cp "services/$svc/.env.example" "services/$svc/.env"
+          done
+
+      - name: Build and start the full stack
+        working-directory: infra
+        run: docker compose up -d --build
+
+      - name: Wait for Nginx to answer a public, no-auth endpoint
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/auth/groups-public || echo 000)
+            if [ "$code" = "200" ]; then echo "up after ${i}0s"; exit 0; fi
+            sleep 10
+          done
+          echo "auth-service via Nginx never became healthy"
+          docker compose -f infra/docker-compose.yml ps
+          docker compose -f infra/docker-compose.yml logs --tail=200
+          exit 1
+
+      - name: All containers are running (internal service-to-service comms worked at boot)
+        working-directory: infra
+        run: |
+          # document-service/catalogue-service's on_startup calls
+          # ensure_bucket_exists() against MinIO and sets Meilisearch
+          # filterable attributes — if either were unreachable over the
+          # internal network, those services would have failed to boot.
+          docker compose ps
+          for svc in postgres minio meilisearch document-service catalogue-service search-service auth-service nginx; do
+            state=$(docker compose ps --format '{{.State}}' "$svc")
+            echo "$svc: $state"
+            case "$state" in
+              running) ;;
+              *) echo "FAIL: $svc is not running ($state)"; exit 1 ;;
+            esac
+          done
+
+      - name: Acceptance — Postgres/MinIO/Meilisearch are NOT reachable from the host
+        run: |
+          fail=0
+          for port in 5432 9000 9001 7700; do
+            if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+              echo "FAIL: host port $port is open (should not be published)"
+              fail=1
+            else
+              echo "OK: host port $port is closed"
+            fi
+          done
+          exit $fail
+
+      - name: Acceptance — presigned-download proxy path reaches MinIO through Nginx
+        run: |
+          # No valid signature on this request, so MinIO is expected to
+          # reject it — the point is confirming Nginx's /documents/ and
+          # /products/ locations actually reach the minio container
+          # (a 502/504/connection-refused here would mean the proxy is
+          # broken), not that this specific request succeeds.
+          for path in /documents/no-such-key /products/no-such-key; do
+            code=$(curl -s -o /tmp/resp.xml -w '%{http_code}' "http://localhost:8080$path")
+            echo "$path -> $code"
+            if [ "$code" = "502" ] || [ "$code" = "504" ] || [ "$code" = "000" ]; then
+              echo "FAIL: $path did not reach MinIO through Nginx (got $code)"
+              cat /tmp/resp.xml
+              exit 1
+            fi
+          done
+
+      - name: Dump logs on failure
+        if: failure()
+        working-directory: infra
+        run: docker compose logs --tail=300
+
+      - name: Tear down
+        if: always()
+        working-directory: infra
+        run: docker compose down -v

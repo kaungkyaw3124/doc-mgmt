@@ -10,8 +10,11 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d   # creates the "catalogue" DB on first boot
-    ports:
-      - "5432:5432"   # exposed for now so you can inspect with psql/DBeaver while building; remove later
+    # Not published to the host — only reachable from other containers on
+    # this compose network (see docs/operations.md for how to get admin
+    # access to it when you need to, without leaving it open permanently).
+    expose:
+      - "5432"
     restart: unless-stopped
 
   minio:
@@ -22,9 +25,12 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - ./data/minio:/data
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console
+    # Not published to the host — only document-service/catalogue-service
+    # reach it (S3 API), over this compose network. See docs/operations.md
+    # for admin console access without leaving it open permanently.
+    expose:
+      - "9000"   # S3 API
+      - "9001"   # web console
     restart: unless-stopped
 
   document-service:
@@ -60,8 +66,10 @@ services:
       MEILI_ENV: development
     volumes:
       - ./data/meili:/meili_data
-    ports:
-      - "7700:7700"
+    # Not published to the host — only document-service/catalogue-service/
+    # search-service reach it, over this compose network.
+    expose:
+      - "7700"
     restart: unless-stopped
 
   search-service:
@@ -95,4 +103,5 @@ services:
       - catalogue-service
       - search-service
       - auth-service
+      - minio
     restart: unless-stopped
