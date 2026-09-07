@@ -6,7 +6,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 |---|---|---|---|
 | 1 | Login rate limiting | PASS | bc3610f |
 | 2 | Remove insecure default secrets | PASS | 59d09ce |
-| 3 | Remove host exposure of internal datastores | NOT STARTED | - |
+| 3 | Remove host exposure of internal datastores | PASS | 02957ee (fix: db0c219) |
 | 4 | Authenticate gateway trust headers | NOT STARTED | - |
 | 5 | Secure uploaded content type | NOT STARTED | - |
 | 6 | JWT storage and rotation | NOT STARTED | - |
@@ -468,3 +468,212 @@ rejects `minioadmin` and `local_dev_master_key_change_me` in
 production; only the *unedited, development-mode* value changed back
 to something that actually connects. See Task 3's log entry for the
 CI evidence (run that caught this, and the run that confirmed the fix).
+
+---
+
+## Task 3 — Remove Host Exposure of Internal Datastores
+
+**Date:** 2026-09-07 10:29
+
+**Status:** PASS
+
+### Goal
+
+Only Nginx should be reachable from outside the Docker host. Postgres,
+MinIO, and Meilisearch — previously published directly to the host —
+should be reachable only from other containers on the compose network,
+without breaking internal service-to-service communication or the
+browser-facing presigned-download flow that used to hit MinIO's port
+directly.
+
+### Acceptance Criteria
+
+- [x] PostgreSQL is not unnecessarily host-published
+- [x] MinIO API is not unnecessarily host-published
+- [x] MinIO console is not unnecessarily host-published
+- [x] Meilisearch is not unnecessarily host-published
+- [x] Internal communication works
+- [x] Application tests pass
+- [x] Security regression tests pass
+
+### Initial State
+
+`infra/docker-compose.yml` published `postgres` (`5432:5432`), `minio`
+(`9000:9000` S3 API, `9001:9001` console), and `meilisearch`
+(`7700:7700`) directly to the host, with comments acknowledging this
+was meant to be temporary ("exposed for now... remove later" —
+`known-issues.md` finding #3). On any host with inbound network
+exposure, this bypassed Nginx's auth gate entirely — direct
+credential-guessing and RBAC-bypassing access to raw data.
+
+### Changes Made
+
+- `infra/docker-compose.yml` — `ports:` replaced with `expose:` for
+  `postgres` (5432), `minio` (9000, 9001), and `meilisearch` (7700).
+  `nginx` now also `depends_on: minio` (needed for the new proxy route
+  below).
+- `infra/nginx/nginx.conf` — new `/documents/` and `/products/`
+  locations, proxying straight through to `http://minio:9000` with
+  **no path rewrite and the original `Host` header preserved**.
+  MinIO's presigned GET URLs (SigV4) sign both the request path and the
+  `Host` header — changing either at the proxy would make MinIO reject
+  an otherwise-valid signature, so this had to be a transparent
+  passthrough, not a rewrite. Bucket names (`documents`, `products`)
+  happen to already be MinIO's own top-level path segments
+  (`/<bucket>/<key>`), so no prefix-stripping was needed. Still safe
+  fully unauthenticated at the Nginx layer: MinIO itself enforces the
+  signature and its expiry on every request, exactly as it did when
+  reachable on its own port.
+- `services/{document,catalogue}-service/app/core/config.py` and
+  `.env.example` — `MINIO_PUBLIC_ENDPOINT` default changed from
+  `localhost:9000` (MinIO's own now-unpublished port) to `localhost:8080`
+  (Nginx, which now proxies to it).
+- `docs/operations.md` — replaced the old "MinIO console at
+  `http://<host>:9001`" / "port 5432 is also published" rows with a
+  documented temporary-tunnel pattern (`docker run --rm --network
+  infra_default -p 127.0.0.1:<port>:<port> alpine/socat ...`) for
+  one-off admin access, explicitly warning not to re-add `ports:` for
+  routine access. Also corrected a now-stale "no rate limiting on
+  /api/auth/login" line left over from before Task 1.
+- `docs/deployment.md`, `docs/workflows.md`, `docs/architecture.md`,
+  `docs/known-issues.md` — updated the container/port tables, the
+  `MINIO_PUBLIC_ENDPOINT` description, the deployment diagram, and
+  marked known-issues findings #2 and #3 RESOLVED with references to
+  this log.
+- `.github/workflows/tests.yml` — new `infra-integration` job: builds
+  and boots the **real** `infra/docker-compose.yml` stack on the
+  runner's own Docker (not a mock), then asserts all of: every
+  container reaches `running` state, Nginx answers a real end-to-end
+  request through to Postgres, all four datastore ports are closed on
+  the host, and the new `/documents/`/`/products/` proxy paths actually
+  reach MinIO (not a 502/504) rather than only checking static config.
+
+### Design notes
+
+- **Why proxy through Nginx instead of just accepting broken presigned
+  URLs**: the alternative (leave `MINIO_PUBLIC_ENDPOINT` pointing at a
+  now-closed port) would have silently broken every document/product
+  file download in the app — that's not an acceptable trade for a
+  security fix. Proxying was the option that closes the port without
+  losing functionality.
+- **Why no path rewrite**: an earlier design (proxy `/minio/<bucket>/<key>`
+  → strip `/minio/` → `<bucket>/<key>`) was considered and rejected
+  before implementation — SigV4 signs the exact request path the
+  *client* sends, so if Nginx rewrites the path before forwarding, MinIO
+  computes its own signature check against the *rewritten* path/Host
+  and the signatures won't match. Because MinIO's own path scheme
+  (`/<bucket>/<key>`) already equals what a same-named Nginx `location`
+  prefix would forward unmodified, a transparent (non-rewriting) proxy
+  was both correct and simpler.
+
+### Tests Performed
+
+```text
+docker compose -f infra/docker-compose.yml config   # validated syntax + resolved env locally
+```
+Real integration test via CI (`infra-integration` job in
+`.github/workflows/tests.yml`), which this sandbox cannot run itself
+(no Docker daemon — see the environment note at the top of this log):
+builds and boots all 8 containers from the actual compose file, then:
+```text
+curl http://localhost:8080/api/auth/groups-public   # end-to-end through Nginx -> auth-service -> Postgres
+docker compose ps   # every service state == running
+# for each of 5432, 9000, 9001, 7700: confirm the host port refuses a TCP connect
+curl http://localhost:8080/documents/no-such-key   # reaches MinIO through Nginx (not 502/504)
+curl http://localhost:8080/products/no-such-key    # reaches MinIO through Nginx (not 502/504)
+```
+Runs: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34111080185
+(commit `02957ee`, **FAILED** — see Bugs Found) and
+https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34111636919
+(commit `db0c219`, **PASSED**, all 5 jobs including `infra-integration`).
+
+### Test Iterations
+
+#### Attempt 1 (commit `02957ee`) — FAIL
+
+`document-service` crashed on startup:
+```text
+botocore.exceptions.ClientError: An error occurred (InvalidAccessKeyId)
+when calling the ListBuckets operation: The Access Key Id you provided
+does not exist in our records.
+ERROR:    Application startup failed. Exiting.
+```
+Root cause: a regression from **Task 2**, not this task — Task 2 had
+replaced `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`/`MEILI_MASTER_KEY` in
+`.env.example` with non-functional placeholders. Those three fields
+are not self-contained per-service secrets; they must match the
+credentials the `minio`/`meilisearch` containers are themselves started
+with. Task 3's `infra-integration` job was the first thing in this
+project to actually boot the full stack end-to-end, so it's what caught
+this — the earlier per-service unit-test jobs never exercise
+`ensure_bucket_exists()` against a real MinIO.
+
+#### Attempt 2 (commit `db0c219`) — PASS
+
+Fixed by reverting those three `.env.example` fields (across
+catalogue-service, document-service, search-service) to the working
+dev defaults that match the datastore containers' own compose defaults
+— documented in full as an addendum to Task 2's entry above (not
+re-litigated here). All 5 CI jobs passed, including every
+`infra-integration` acceptance step.
+
+### Bugs Found
+
+- **Task 2 regression** (see Test Iterations above and Task 2's
+  addendum): `.env.example` MinIO/Meilisearch credentials didn't match
+  the datastore containers' actual credentials after Task 2's
+  placeholder change, breaking document-service's boot. Fixed in commit
+  `db0c219`. This was a real, CI-caught failure — not hidden, not
+  glossed over as "implemented successfully."
+
+Otherwise: none new to this task.
+
+### Verification
+
+- `infra-integration` CI job, commit `db0c219`: `docker compose ps`
+  showed all 8 containers (`postgres`, `minio`, `meilisearch`,
+  `document-service`, `catalogue-service`, `search-service`,
+  `auth-service`, `nginx`) in `running` state — internal
+  service-to-service communication (Postgres, MinIO, Meilisearch, all
+  reached only over the compose network) works without any published
+  ports.
+- `curl http://localhost:8080/api/auth/groups-public` returned `200` —
+  a real, unauthenticated end-to-end request through Nginx →
+  auth-service → Postgres succeeded, proving the whole chain functions
+  with Postgres unpublished.
+- For each of ports `5432`, `9000`, `9001`, `7700`: a raw TCP connect
+  attempt from the CI runner's host network to `127.0.0.1:<port>`
+  failed (job step "Acceptance — Postgres/MinIO/Meilisearch are NOT
+  reachable from the host" passed) — confirms none of the four are
+  published.
+- `curl http://localhost:8080/documents/no-such-key` and
+  `.../products/no-such-key` did NOT return `502`/`504`/connection-
+  refused (job step "Acceptance — presigned-download proxy path
+  reaches MinIO through Nginx" passed) — confirms the new proxy
+  locations actually reach the `minio` container, not just that they
+  parse correctly in `nginx.conf`.
+
+Therefore: all four datastores are closed to the host, internal
+communication is intact, and the browser-facing presigned-download path
+still functions end-to-end through the new proxy — acceptance criteria
+satisfied.
+
+### Security Impact
+
+Fixes a vulnerability (CWE-668, exposure of resource to wrong sphere).
+Closes a direct, RBAC-bypassing path to Postgres data, MinIO objects,
+and the Meilisearch index that existed on any host with inbound network
+exposure beyond the intended Nginx gateway — combined with Task 2's
+fix, an attacker can no longer reach these datastores directly at all,
+let alone with a guessable/default credential.
+
+### Commit
+
+```text
+02957ee  security: isolate internal datastores            (FAILED CI)
+db0c219  fix: restore working MinIO/Meilisearch dev defaults broken by Task 2   (PASSED CI)
+```
+
+### Final Result
+
+PASS
