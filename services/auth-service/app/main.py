@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from app.core.db import Base, engine, SessionLocal
 from app.core.config import settings
 from app.core.security import hash_password
+from app.core.secrets_check import db_password_from_url, enforce_production_secrets, is_insecure
 from app import models
 from app.routers import auth, admin
 
@@ -16,23 +17,25 @@ app.include_router(auth.router)
 app.include_router(admin.router)
 
 
+def _secret_problems() -> list[str]:
+    """Pure check, no I/O — kept separate from on_startup so it can be
+    tested (and, more importantly, so it runs and can fail BEFORE any
+    database/network I/O below it)."""
+    problems = []
+    if is_insecure(settings.jwt_secret, {"local_dev_jwt_secret_change_me"}):
+        problems.append("JWT_SECRET")
+    if is_insecure(settings.seed_admin_password, {"changeme", "admin"}):
+        problems.append("SEED_ADMIN_PASSWORD")
+    if is_insecure(db_password_from_url(settings.database_url), {"docmgmt", "postgres"}):
+        problems.append("DATABASE_URL password")
+    return problems
+
+
 @app.on_event("startup")
 def on_startup():
-    Base.metadata.create_all(bind=engine)
+    enforce_production_secrets(settings.environment, _secret_problems())
 
-    if settings.jwt_secret == "local_dev_jwt_secret_change_me":
-        logger.warning(
-            "SECURITY: jwt_secret is still set to its insecure default. "
-            "Anyone who knows this value can forge valid tokens, including "
-            "superuser tokens. Set JWT_SECRET before running outside local dev."
-        )
-    if settings.seed_admin_password == "changeme":
-        logger.warning(
-            "SECURITY: seed_admin_password is still set to its insecure default. "
-            "If the users table was empty on boot, the seeded admin account has "
-            "a guessable password — log in and change it, or set "
-            "SEED_ADMIN_PASSWORD before first boot."
-        )
+    Base.metadata.create_all(bind=engine)
 
     # Seed the first user as a superuser, but only if the users table is
     # completely empty — someone needs superuser rights to bootstrap every

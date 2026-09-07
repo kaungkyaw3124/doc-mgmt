@@ -36,3 +36,51 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://docmgmt:docmgmt@localhost:5432/auth_test
         run: python -m pytest -v
+
+  catalogue-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: services/catalogue-service
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: services/catalogue-service
+        run: python -m pytest -v
+
+  document-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install WeasyPrint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 \
+            libffi-dev shared-mime-info fonts-liberation
+      - name: Install dependencies
+        working-directory: services/document-service
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: services/document-service
+        run: python -m pytest -v
+
+  search-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: services/search-service
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: services/search-service
+        run: python -m pytest -v

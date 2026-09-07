@@ -2,6 +2,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # "production" enables fail-fast startup validation of secrets (see
+    # app/core/secrets_check.py); anything else only warns.
+    environment: str = "development"
+
     database_url: str = "postgresql://docmgmt:docmgmt@postgres:5432/catalogue"
 
     document_service_url: str = "http://document-service:8000"

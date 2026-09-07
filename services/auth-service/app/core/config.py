@@ -2,6 +2,11 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # "production" enables fail-fast startup validation of secrets (see
+    # app/core/secrets_check.py) — anything else (default: "development")
+    # only warns, so local/dev boots stay convenient.
+    environment: str = "development"
+
     database_url: str = "postgresql://docmgmt:docmgmt@postgres:5432/auth"
 
     # Used only to seed the first admin user on startup if the users table
