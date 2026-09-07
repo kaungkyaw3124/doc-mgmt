@@ -159,6 +159,60 @@ jobs:
             fi
           done
 
+      - name: Acceptance — legitimate requests through Nginx still work (login + protected endpoint)
+        run: |
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          if [ -z "$token" ]; then
+            echo "FAIL: could not log in as the seeded admin through Nginx"
+            exit 1
+          fi
+          code=$(curl -s -o /tmp/products.json -w '%{http_code}' http://localhost:8080/api/products -H "Authorization: Bearer $token")
+          echo "GET /api/products (through Nginx, real token) -> $code"
+          if [ "$code" != "200" ]; then
+            echo "FAIL: a legitimate authenticated request through Nginx was rejected"
+            cat /tmp/products.json
+            exit 1
+          fi
+
+      - name: Acceptance — header spoofing directly against a backend service (bypassing Nginx) is rejected
+        run: |
+          fail=0
+
+          # No X-Internal-Secret at all, but a spoofed superuser-shaped
+          # trust header — must be rejected before ever reaching the route.
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Allowed-Projects: ALL' -H 'X-Access-Level: edit' \
+            http://catalogue-service:8000/products)
+          echo "direct catalogue-service call, no secret, spoofed headers -> $code"
+          [ "$code" = "401" ] || { echo "FAIL: expected 401, got $code"; fail=1; }
+
+          # Wrong X-Internal-Secret — also rejected.
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Internal-Secret: wrong-secret' -H 'X-Allowed-Projects: ALL' \
+            http://catalogue-service:8000/products)
+          echo "direct catalogue-service call, wrong secret -> $code"
+          [ "$code" = "401" ] || { echo "FAIL: expected 401, got $code"; fail=1; }
+
+          # Same call against document-service, for good measure.
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Allowed-Projects: ALL' -H 'X-Access-Level: edit' -H 'X-Username: admin' \
+            http://document-service:8000/documents)
+          echo "direct document-service call, no secret, spoofed headers -> $code"
+          [ "$code" = "401" ] || { echo "FAIL: expected 401, got $code"; fail=1; }
+
+          # Correct secret — the gateway check itself must NOT be what's
+          # blocking this one (whatever the app returns from here on is
+          # a normal routing/DB concern, not a 401 from the gateway guard).
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Internal-Secret: local_dev_internal_secret_change_me' \
+            http://catalogue-service:8000/health)
+          echo "direct catalogue-service call, correct secret, /health -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: expected 200, got $code"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

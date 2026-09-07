@@ -158,6 +158,17 @@ Compose network with no host port published for those services, but a
 hard requirement to preserve if the network topology ever changes (see
 [known-issues.md](known-issues.md)).
 
+**Update (`docs/SECURITY_HARDENING_LOG.md` Task 4)**: the "hard
+requirement to preserve" above is no longer just a topology assumption —
+it's now enforced in code. Each of `document-service`,
+`catalogue-service`, `search-service` runs a middleware
+(`app/core/gateway_auth.py`) that rejects any request lacking a shared
+`X-Internal-Secret`, which only Nginx and these services' own direct
+inter-service calls are configured with. The RBAC *decision* is still
+made once, in auth-service, exactly as decided here — this only closes
+the gap where a caller with any other path to a service's port could
+skip that decision-point entirely by setting the trust headers itself.
+
 ## 8. Iterative delivery: ship fast, then dedicated hardening passes
 
 **Decision**: functionality was built first; two large, dedicated commits

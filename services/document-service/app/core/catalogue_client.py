@@ -7,6 +7,11 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# catalogue-service's gateway_auth middleware requires this on every
+# request, including ones (like these) that bypass Nginx entirely —
+# see app/core/gateway_auth.py for why.
+_INTERNAL_HEADERS = {"X-Internal-Secret": settings.internal_shared_secret}
+
 
 class ProductNotFoundError(Exception):
     pass
@@ -24,7 +29,7 @@ def get_product(product_id: uuid.UUID) -> dict:
     """
     url = f"{settings.catalogue_service_url}/products/{product_id}"
     try:
-        response = httpx.get(url, timeout=5.0)
+        response = httpx.get(url, headers=_INTERNAL_HEADERS, timeout=5.0)
     except httpx.RequestError as exc:
         raise CatalogueServiceUnavailableError(
             f"could not reach catalogue-service at {settings.catalogue_service_url}: {exc}"
@@ -43,7 +48,7 @@ def get_product_sub_items(product_id: uuid.UUID) -> list:
     one product's sub-item lookup."""
     url = f"{settings.catalogue_service_url}/products/{product_id}/sub-items"
     try:
-        response = httpx.get(url, timeout=10.0)
+        response = httpx.get(url, headers=_INTERNAL_HEADERS, timeout=10.0)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as exc:
@@ -56,7 +61,7 @@ def get_product_file_bytes(product_id: uuid.UUID) -> bytes | None:
     catalogue-service couldn't be reached."""
     url = f"{settings.catalogue_service_url}/products/{product_id}/file-content"
     try:
-        response = httpx.get(url, timeout=45.0)
+        response = httpx.get(url, headers=_INTERNAL_HEADERS, timeout=45.0)
         if response.status_code != 200:
             logger.warning(
                 "get_product_file_bytes(%s) got HTTP %s from %s", product_id, response.status_code, url
@@ -80,7 +85,7 @@ def get_product_download_bundle_bytes(product_id: uuid.UUID) -> bytes | None:
     enough headroom to actually finish rather than get cut off early)."""
     url = f"{settings.catalogue_service_url}/products/{product_id}/download-bundle"
     try:
-        response = httpx.get(url, timeout=90.0)
+        response = httpx.get(url, headers=_INTERNAL_HEADERS, timeout=90.0)
         if response.status_code != 200:
             logger.warning(
                 "get_product_download_bundle_bytes(%s) got HTTP %s from %s: %s",

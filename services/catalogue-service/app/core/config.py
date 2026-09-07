@@ -10,6 +10,14 @@ class Settings(BaseSettings):
 
     document_service_url: str = "http://document-service:8000"
 
+    # Shared secret Nginx (and sibling services calling this one directly —
+    # see app/core/document_client.py) must present on every request, via
+    # the X-Internal-Secret header — see app/core/gateway_auth.py. Without
+    # this, a caller with any network path to this service (not just
+    # through Nginx) could set X-Allowed-Projects/etc. itself and grant
+    # itself arbitrary access. Never sent to a browser.
+    internal_shared_secret: str = "local_dev_internal_secret_change_me"
+
     meili_url: str = "http://meilisearch:7700"
     meili_master_key: str = "local_dev_master_key_change_me"
 

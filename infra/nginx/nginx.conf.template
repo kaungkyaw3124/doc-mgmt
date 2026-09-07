@@ -1,3 +1,13 @@
+# This is a TEMPLATE, not a config Nginx reads directly — the nginx
+# container's entrypoint (see infra/docker-compose.yml's `nginx` service)
+# runs `envsubst` on it at startup, substituting the placeholder for the
+# internal shared secret (see the X-Internal-Secret lines below) with
+# the real value, and writing the result to nginx.conf. envsubst is
+# invoked with an explicit single-variable list, so it does NOT touch
+# Nginx's own $variables ($host, $uri, $upstream_http_..., etc.) below —
+# only that one placeholder is replaced. (Not spelled out literally in
+# this comment on purpose — envsubst is a dumb text substitution and
+# would replace it here too if it appeared verbatim.)
 events {}
 
 http {
@@ -108,6 +118,12 @@ http {
             rewrite ^/api/documents(.*)$ /documents$1 break;
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
+            # Proves to document-service that this request really came
+            # through Nginx (which just did the auth_request check above)
+            # rather than a client that reached document-service by some
+            # other path and set these trust headers itself — see
+            # services/document-service/app/core/gateway_auth.py.
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Allowed-Projects $allowed_projects;
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Has-Audit-Log $has_audit_log;
@@ -127,6 +143,7 @@ http {
             rewrite ^/api/customers(.*)$ /customers$1 break;
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Access-Level $access_level;
         }
 
@@ -137,6 +154,7 @@ http {
             rewrite ^/api/companies(.*)$ /companies$1 break;
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Access-Level $access_level;
         }
 
@@ -148,6 +166,7 @@ http {
             rewrite ^/api/projects(.*)$ /projects$1 break;
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Allowed-Projects $allowed_projects;
             proxy_set_header X-Access-Level $access_level;
         }
@@ -160,6 +179,7 @@ http {
             rewrite ^/api/products(.*)$ /products$1 break;
             proxy_pass http://catalogue-service:8000;
             proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Has-Category-Access $has_category_access;
             proxy_set_header X-Allowed-Projects $allowed_projects;
         }
@@ -171,6 +191,7 @@ http {
             rewrite ^/api/categories(.*)$ /categories$1 break;
             proxy_pass http://catalogue-service:8000;
             proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Has-Category-Access $has_category_access;
         }
 
@@ -181,6 +202,7 @@ http {
             rewrite ^/api/search(.*)$ /search$1 break;
             proxy_pass http://search-service:8000;
             proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Allowed-Projects $allowed_projects;
         }
     }

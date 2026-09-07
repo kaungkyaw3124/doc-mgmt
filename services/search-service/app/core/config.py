@@ -11,6 +11,12 @@ class Settings(BaseSettings):
 
     document_service_url: str = "http://document-service:8000"
 
+    # Shared secret Nginx (and this service's own calls to document-service
+    # — see app/core/document_client.py) must present, via the
+    # X-Internal-Secret header — see app/core/gateway_auth.py. Never sent
+    # to a browser.
+    internal_shared_secret: str = "local_dev_internal_secret_change_me"
+
     class Config:
         env_file = ".env"
 

@@ -8,7 +8,20 @@ below is grounded in code that was actually read — none are speculative.
 ## Security risks
 
 ### 1. Downstream services fully trust gateway headers with no independent check — Medium
-**Where**: `document-service`, `catalogue-service`, `search-service` — every
+**RESOLVED** — see `docs/SECURITY_HARDENING_LOG.md` Task 4: each of
+`document-service`, `catalogue-service`, `search-service` now runs an
+ASGI middleware (`app/core/gateway_auth.py`) rejecting any request that
+doesn't carry a shared `X-Internal-Secret`, which only Nginx
+(`infra/nginx/nginx.conf.template`, rendered via `envsubst` at container
+start) and the services' own direct inter-service calls
+(`app/core/document_client.py`/`catalogue_client.py`) are configured
+with. A direct connection to a service's port (even from within the
+Docker network, e.g. Task 3's `expose:`-only reachability) can no longer
+forge `X-Allowed-Projects`/etc. and gain access — it's rejected before
+reaching any router. This did NOT require touching every router
+individually (contrary to the original Effort estimate below) — one
+middleware registration per service was enough.
+**Where** (historical): `document-service`, `catalogue-service`, `search-service` — every
 router reading `X-Allowed-Projects`/`X-Access-Level`/`X-Has-Audit-Log`/
 `X-Has-Category-Access`/`X-Username`.
 **Why it matters**: this is a deliberate architecture decision (see

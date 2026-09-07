@@ -93,9 +93,23 @@ services:
 
   nginx:
     image: nginx:alpine
+    environment:
+      # Must match INTERNAL_SHARED_SECRET in each of document-service/
+      # catalogue-service/search-service's .env — see
+      # infra/nginx/nginx.conf.template and each service's
+      # app/core/gateway_auth.py.
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:-local_dev_internal_secret_change_me}
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ../web:/usr/share/nginx/html:ro
+    # Render the template (substituting ONLY $INTERNAL_SHARED_SECRET —
+    # see the comment at the top of nginx.conf.template for why the
+    # variable list passed to envsubst must stay this explicit) into the
+    # real config, then start Nginx normally.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - envsubst '$$INTERNAL_SHARED_SECRET' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
     ports:
       - "8080:80"
     depends_on:

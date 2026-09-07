@@ -20,7 +20,17 @@ def get_visible_product_ids(x_allowed_projects: str | None):
 
     url = f"{settings.document_service_url}/documents/visible-product-ids"
     try:
-        response = httpx.get(url, headers={"X-Allowed-Projects": x_allowed_projects}, timeout=5.0)
+        # document-service's gateway_auth middleware requires
+        # X-Internal-Secret on every request, including this one, which
+        # bypasses Nginx entirely — see app/core/gateway_auth.py there.
+        response = httpx.get(
+            url,
+            headers={
+                "X-Allowed-Projects": x_allowed_projects,
+                "X-Internal-Secret": settings.internal_shared_secret,
+            },
+            timeout=5.0,
+        )
         response.raise_for_status()
         data = response.json()
     except httpx.RequestError:
