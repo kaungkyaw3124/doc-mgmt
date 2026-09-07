@@ -1,7 +1,7 @@
 import uuid
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,7 @@ from app.core.jwt_utils import create_access_token, decode_access_token
 from app.core.security import hash_password, verify_password
 from app.core.deps import require_superuser
 from app.core.authz import user_has_service_access, get_user_allowed_project_ids, get_user_access_level
+from app.core.rate_limit import RateLimitExceeded, check_login_rate_limit, get_client_ip, record_failed_attempt
 from app import models
 
 router = APIRouter(tags=["auth"])
@@ -92,9 +93,25 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(request)
+
+    try:
+        check_login_rate_limit(db, client_ip, payload.username)
+    except RateLimitExceeded as exc:
+        # Same 429 + generic message regardless of whether the account
+        # exists, and regardless of which of the three limits tripped —
+        # nothing here should let a caller distinguish "real account,
+        # rate-limited" from "no such account, rate-limited".
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
     user = db.query(models.User).filter_by(username=payload.username).first()
     if not user or not verify_password(payload.password, user.hashed_password):
+        record_failed_attempt(db, client_ip, payload.username)
         raise HTTPException(status_code=401, detail="invalid username or password")
 
     if not user.is_approved:
