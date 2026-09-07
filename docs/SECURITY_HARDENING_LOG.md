@@ -512,7 +512,10 @@ credential-guessing and RBAC-bypassing access to raw data.
   `postgres` (5432), `minio` (9000, 9001), and `meilisearch` (7700).
   `nginx` now also `depends_on: minio` (needed for the new proxy route
   below).
-- `infra/nginx/nginx.conf` — new `/documents/` and `/products/`
+- `infra/nginx/nginx.conf` (at the time — see the verification addendum
+  at the end of this entry: this file was later renamed to
+  `nginx.conf.template` as part of Task 4, which is unrelated to this
+  task's own changes) — new `/documents/` and `/products/`
   locations, proxying straight through to `http://minio:9000` with
   **no path rewrite and the original `Host` header preserved**.
   MinIO's presigned GET URLs (SigV4) sign both the request path and the
@@ -677,3 +680,112 @@ db0c219  fix: restore working MinIO/Meilisearch dev defaults broken by Task 2   
 ### Final Result
 
 PASS
+
+### Independent re-verification addendum (2026-09-07 ~11:12, on request)
+
+The user explicitly asked that Task 3 not be taken on faith from the
+PASS above and be re-verified from scratch against the actual current
+repo state and the actual CI run output (not the earlier summary of
+it). Performed the following, independently, in this session:
+
+1. **`git status` / `git log --oneline -10`** — working tree clean, no
+   uncommitted local modification to `services/document-service/app/routers/companies.py`,
+   no stray `*.crdownload` files anywhere in the repo. History confirmed:
+   `02957ee` (isolate internal datastores, failed CI) →
+   `db0c219` (fix) → `04f29eb` (this log entry) →
+   (separately, Task 4: `3d3f014` — see note below).
+
+2. **Re-read `infra/docker-compose.yml` directly**: confirmed `postgres`
+   has `expose: ["5432"]` and no `ports:`; `minio` has
+   `expose: ["9000", "9001"]` and no `ports:`; `meilisearch` has
+   `expose: ["7700"]` and no `ports:`; `nginx` is the only service with
+   a `ports:` mapping (`8080:80`).
+
+3. **Re-read `infra/nginx/nginx.conf.template` directly** (the file was
+   renamed from `nginx.conf` during Task 4 — content at the
+   `/documents/`/`/products/` locations relevant to Task 3 is
+   unchanged): confirmed `proxy_set_header Host $host;` forwards the
+   client's original Host header unmodified (so it still matches what
+   was SigV4-signed against `MINIO_PUBLIC_ENDPOINT`), and confirmed
+   `proxy_pass http://minio:9000;` has **no URI component** — per Nginx's
+   own semantics this means the original request URI is forwarded to
+   MinIO byte-for-byte, not rewritten. Both together are what keep the
+   presigned-URL signature valid; this was reasoned through the actual
+   directive semantics, not assumed from the comments alone.
+
+4. **Re-fetched the raw CI logs** (not just the stored `conclusion`
+   field) for run `34111636919` (commit `db0c219`) directly from
+   GitHub Actions:
+   - `infra-integration` job (id `101708997308`): raw log shows
+     `postgres: running`, `minio: running`, `meilisearch: running`,
+     `document-service: running`, `catalogue-service: running`,
+     `search-service: running`, `auth-service: running`, `nginx: running`;
+     then `OK: host port 5432 is closed`, `OK: host port 9000 is closed`,
+     `OK: host port 9001 is closed`, `OK: host port 7700 is closed`;
+     then `/documents/no-such-key -> 403` and `/products/no-such-key -> 403`
+     (MinIO's own `AccessDenied` for an unsigned request — proves the
+     proxy reaches MinIO, not a 502/504/connection-refused); and
+     `up after 20s` for the Nginx→auth-service→Postgres end-to-end
+     check.
+   - `catalogue-service` job (id `101708997597`): raw log confirms
+     `6 passed, 3 warnings` — includes
+     `test_default_minio_credentials_fail_in_production`,
+     `test_default_meili_key_fails_in_production`,
+     `test_default_database_password_fails_in_production`, and
+     `test_valid_production_configuration_has_no_problems` — i.e.
+     production secret validation (Task 2's fail-fast check) still
+     correctly rejects the insecure/default values after Task 3's
+     `.env.example` fix, and still accepts a genuinely valid production
+     configuration.
+   - `document-service` job (id `101708997516`): raw log confirms
+     `6 passed, 3 warnings` (same test suite).
+
+All of the above was re-pulled and re-read directly in this
+verification pass, not assumed from the original PASS determination or
+from commit messages alone.
+
+**Acceptance criteria, re-confirmed:**
+- [x] PostgreSQL: no host-published port (`expose` only), reachable
+  internally (proven by every dependent service reaching `running`
+  state, and by the Nginx→auth-service→Postgres `200` on
+  `/api/auth/groups-public`).
+- [x] MinIO: neither `9000` nor `9001` host-published; reachable
+  internally (services booted); Nginx proxies the required MinIO
+  traffic (`/documents/`, `/products/` reach MinIO — confirmed `403`,
+  not `502`/`504`).
+- [x] Meilisearch: `7700` not host-published; reachable internally
+  (`document-service`/`catalogue-service` booted, which requires a
+  successful Meilisearch call in their `on_startup`).
+- [x] Nginx remains the sole external entry point (`0.0.0.0:8080->80`
+  in the `docker compose ps` output; every other service shows no
+  host-side port mapping).
+- [x] MinIO/Nginx proxy config verified by reading the actual directive
+  semantics (not assumed), specifically re: Host header and no-rewrite
+  path handling for SigV4.
+- [x] Dev environment regression (Task 2 → Task 3 interaction) verified
+  fixed via fresh raw CI log content, not the stored conclusion alone.
+- [x] Production secret validation re-confirmed still functioning via
+  fresh raw CI log content for the exact tests that check it.
+- [x] Relevant tests run: yes (5 CI jobs, all reconfirmed).
+- [x] Docker/integration tests: yes, actually run (real Docker daemon
+  on the GitHub Actions runner — this sandbox itself has no Docker
+  daemon, disclosed at the top of this log), and their raw output was
+  re-read in this pass, not just their pass/fail status.
+
+**Note on scope**: while re-verifying, found that `security/auth-hardening`
+already has Task 4 implemented and pushed as commit `3d3f014`
+("security: authenticate gateway trust headers"), completed earlier in
+this session before this re-verification was requested. That work
+touched `infra/nginx/nginx.conf` (renaming it to `nginx.conf.template`
+and adding `X-Internal-Secret` header injection), which is why item 10
+in the request ("inspect infra/nginx/nginx.conf.template") finds that
+name rather than `nginx.conf`. Per instruction, Task 4 is not being
+further advanced or logged in this pass — its own log entry is pending
+separately. The summary table's Task 4 row is currently stale
+("NOT STARTED") relative to the actual repository state; flagged here
+rather than silently corrected, since correcting it is arguably Task 4
+documentation work and this pass is scoped to Task 3 only.
+
+**Conclusion: Task 3 genuinely PASSES all acceptance criteria**, on
+fresh, independent, evidence-based re-verification — not merely
+because the earlier entry and commit history said so.
