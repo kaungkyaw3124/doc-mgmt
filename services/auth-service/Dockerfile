@@ -9,7 +9,11 @@ WORKDIR /app
 # these are build-time toolchain packages, not runtime app dependencies.
 ARG APT_MIRROR=deb.debian.org
 RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
-        sed -i -e '/bookworm-security/d' -e "s#deb.debian.org#${APT_MIRROR}#g" /etc/apt/sources.list; \
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+            printf 'Types: deb\nURIs: http://%s/debian\nSuites: bookworm bookworm-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' "$APT_MIRROR" > /etc/apt/sources.list.d/debian.sources; \
+        elif [ -f /etc/apt/sources.list ]; then \
+            printf 'deb http://%s/debian bookworm main\ndeb http://%s/debian bookworm-updates main\n' "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list; \
+        fi; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     gcc \
