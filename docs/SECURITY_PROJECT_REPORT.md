@@ -15,7 +15,7 @@ not replace the log.
 | 4 | Authenticate gateway trust headers | PASS | `3d3f014` (fix: `12b1da0`) |
 | 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix: `e49d7f1`) |
 | 6 | JWT storage and rotation | PASS | `72a9af5` (fixes: `d727155`, `e7ed0a1` — see below) |
-| 7 | CORS policy | implemented, CI verification pending | this pass — see below |
+| 7 | CORS policy | PASS | `92a5f91` |
 | 8 | Security headers / Nginx hardening | not started | - |
 
 ## Task 5 — Secure Uploaded Content-Type
@@ -457,9 +457,10 @@ detailed below.
 
 ## Task 7 — CORS Policy Hardening
 
-**Status: implemented, CI verification pending** — not claimed PASS
-until this section is updated with actual raw CI evidence (see
-`docs/SECURITY_HARDENING_LOG.md`'s Task 7 entry for the full design).
+**Status: PASS** — verified against raw CI evidence (commit `92a5f91`,
+run `34195255901`, all 5 jobs green on the first attempt). See
+`docs/SECURITY_HARDENING_LOG.md`'s Task 7 entry for the full design
+and quoted evidence.
 
 ### Original problem
 
@@ -546,9 +547,23 @@ present, service-to-service traffic unaffected). See
 
 ### Full test results / integration test results
 
-*(Filled in once this commit's CI run completes — see the FINAL
-REPORT for this task, which quotes the actual run ID, job IDs, and
-pass/fail per job pulled directly from GitHub Actions.)*
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34195255901
+(commit `92a5f91`). All 5 jobs passed on the first attempt — no fix
+iteration needed. Verified via raw log content, not the `conclusion`
+field alone. Production fail-safe step: all 5 scenarios matched
+expectations (empty/dev-default/localhost origins refused in
+production with exit 1 and the expected `SECURITY:` message; a real
+`https://` origin accepted with exit 0; development never refuses).
+Full CORS acceptance step: trusted-origin preflight against a
+PROTECTED endpoint succeeded (204) with no `Authorization` header sent
+— direct proof preflight is answered before `auth_request` runs;
+untrusted origin never granted the header; no wildcard; no duplicate
+header; login/refresh/logout all still work with a trusted `Origin`
+header present; service-to-service traffic (no `Origin` header)
+unaffected. Full quoted raw output in
+`docs/SECURITY_HARDENING_LOG.md`'s Task 7 "Exact results".
+`auth-service`/`catalogue-service`/`document-service`/`search-service`
+unit-test jobs: all passed, zero regression to Tasks 1–6.
 
 ### Bugs/failures encountered
 

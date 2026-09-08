@@ -10,7 +10,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 4 | Authenticate gateway trust headers | PASS | 3d3f014 (fix: 12b1da0) |
 | 5 | Secure uploaded content type | PASS | c21f72c (this pass: content-sniffing + Nginx Host-header fix) |
 | 6 | JWT storage and rotation | PASS | 72a9af5 (fixes: d727155, e7ed0a1) |
-| 7 | CORS policy | implemented, CI verification pending | this pass |
+| 7 | CORS policy | PASS | 92a5f91 |
 | 8 | Security headers / Nginx hardening | NOT STARTED | - |
 
 ## A note on the test-execution environment
@@ -1789,9 +1789,9 @@ and the one infra-integration CI step above was touched this pass.
 
 **Date:** 2026-09-08
 
-**Status:** implemented, CI verification pending (updated to PASS/FAIL
-in an addendum once this commit's actual CI run is read — no status
-claim survives past the raw evidence in this log, ever).
+**Status:** PASS — verified against raw CI evidence, see "Exact
+results" below (commit `92a5f91`, run `34195255901`, all 5 jobs green
+on the first attempt, no fix iteration needed).
 
 ### Goal
 
@@ -2060,11 +2060,55 @@ since it's implemented entirely in Nginx):
 
 ### Exact results
 
-*(Filled in once this commit's CI run completes — evidence can't
-predate the run it evidences, same reasoning as every prior task's
-addendum commit in this log. See the FINAL REPORT for this task for
-the actual run ID, job IDs, and quoted pass/fail output pulled
-directly from GitHub Actions.)*
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34195255901
+(commit `92a5f91`), all 5 jobs **PASSED** on the first attempt — no fix
+iteration was needed. Verified via `mcp__github__get_job_logs` with
+`return_content: true` (raw log content, not the `conclusion` field
+alone), job `101961451327` (`infra-integration`):
+
+- **"Acceptance — CORS production config fails safe (no stack
+  needed)"** — real output quoted directly from the raw log:
+  ```
+  SECURITY: CORS_ALLOWED_ORIGIN must be set to a real https:// origin in production (got: '<empty>'). Refusing to start in production.
+  production, empty origin -> exit 1
+  SECURITY: CORS_ALLOWED_ORIGIN must be set to a real https:// origin in production (got: 'http://localhost:8080'). Refusing to start in production.
+  production, dev-default http origin -> exit 1
+  SECURITY: CORS_ALLOWED_ORIGIN ('https://localhost:8080') looks like a local/dev placeholder, not a real production origin. Refusing to start in production.
+  production, https localhost origin -> exit 1
+  production, valid https origin -> exit 0
+  SECURITY: CORS_ALLOWED_ORIGIN is not set — no cross-origin browser request will ever be granted CORS headers (same-origin traffic is unaffected). This is fine in development, but will be refused at startup in production.
+  development, empty origin -> exit 0
+  ```
+  All 5 scenarios matched expectations exactly.
+- **"Acceptance — CORS policy (trusted/untrusted origins, preflight,
+  headers, credentials)"** — real output quoted directly from the raw
+  log:
+  ```
+  preflight (trusted origin, no auth) -> HTTP/1.1 204 No Content
+  untrusted preflight -> HTTP/1.1 204 No Content
+  GET /api/products, trusted origin -> HTTP/1.1 200 OK
+  GET /api/products, untrusted origin -> HTTP/1.1 200 OK
+  login with Origin header -> HTTP/1.1 200 OK
+  refresh with Origin header -> 200
+  logout with Origin header -> 204
+  direct-to-backend health check (no Origin header at all) -> 200
+  ```
+  The trusted-origin preflight against a PROTECTED endpoint
+  (`/api/products`) succeeded with **204 and no `Authorization`
+  header sent at all** — direct proof the preflight-before-
+  `auth_request` fix works, not just that the step exited 0 (every
+  `[ ... ] || { echo "FAIL: ..."; fail=1; }` assertion — trusted-origin
+  header values, untrusted-origin non-grant, no wildcard, no duplicate
+  header, exact allowed-methods/-headers content — passed silently,
+  and none of their `FAIL:` lines appear anywhere in the actual output
+  above).
+- `auth-service`, `catalogue-service`, `document-service`,
+  `search-service`: all **PASSED**, confirming zero regression to
+  Tasks 1–6.
+
+**Net result: Task 7 is genuinely PASS, independently verified against
+raw CI evidence — not assumed from the commit existing or from a green
+checkmark alone.**
 
 ### Regression
 
