@@ -16,7 +16,15 @@ not replace the log.
 | 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix: `e49d7f1`) |
 | 6 | JWT storage and rotation | PASS | `72a9af5` (fixes: `d727155`, `e7ed0a1` — see below) |
 | 7 | CORS policy | PASS | `92a5f91` |
-| 8 | Security headers / Nginx hardening | implemented, CI verification pending | this pass — see below |
+| 8 | Security headers / Nginx hardening | PASS | `ef4d087` |
+
+**All 8 individual security-hardening tasks are now PASS**, each
+independently verified against raw CI evidence (not assumed from a
+commit's existence or a green checkmark alone — see each task's own
+section below, and the corresponding entry in
+`docs/SECURITY_HARDENING_LOG.md`, for the exact run/job IDs and quoted
+output). The final full security audit across all 8 tasks together has
+not started yet.
 
 ## Task 5 — Secure Uploaded Content-Type
 
@@ -584,10 +592,10 @@ security audit.~~ Task 8 is addressed below.
 
 ## Task 8 — Security Headers / Nginx Hardening
 
-**Status: implemented, CI verification pending** — not claimed PASS
-until this section is updated with actual raw CI evidence (see
+**Status: PASS** — verified against raw CI evidence (commit `ef4d087`,
+run `34198753195`, all 5 jobs green on the first attempt). See
 `docs/SECURITY_HARDENING_LOG.md`'s Task 8 entry for the full design,
-inspection findings, and CSP source-by-source justification).
+inspection findings, and CSP source-by-source justification.
 
 ### Original problem
 
@@ -703,16 +711,25 @@ string; MinIO-proxied response headers (`nosniff` present, MinIO's own
 `Server` header confirmed hidden). See
 `docs/SECURITY_HARDENING_LOG.md` for the complete list.
 
-*(Exact CI run ID, job IDs, and quoted raw pass/fail output filled in
-once this commit's CI run completes — see the FINAL REPORT for this
-task.)*
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34198753195
+(commit `ef4d087`). All 5 jobs passed on the first attempt — no fix
+iteration needed. Verified via raw log content, not the `conclusion`
+field alone: `Server: nginx` with no version digit on both the
+frontend response and the MinIO-proxied response; all 5 core headers
+present with exact expected values; the CSP hash freshly computed from
+the actually-served file matched the header exactly
+(`sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE=`); the 401
+(Nginx's own `auth_request` error) and 413 (Nginx's own body-size
+rejection) both carried the header set / disclosed no version. Every
+Task 3–7 infra-integration acceptance step, and all 4 services' unit
+test jobs, passed unmodified in the same run — zero regression. Full
+quoted raw output in `docs/SECURITY_HARDENING_LOG.md`'s Task 8 "Exact
+results".
 
 ### Bugs/failures encountered
 
-*(Filled in once CI results are read — this section will report either
-"none, first attempt passed" or the exact diagnosis/fix per any
-failure, per this task's IMPLEMENT → TEST → DIAGNOSE → FIX → RETEST →
-VERIFY instruction.)*
+None — the first push passed all 5 CI jobs, including the new Task 8
+step and every pre-existing Task 3–7 regression check.
 
 ### Documentation updated
 

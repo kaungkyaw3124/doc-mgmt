@@ -11,7 +11,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 5 | Secure uploaded content type | PASS | c21f72c (this pass: content-sniffing + Nginx Host-header fix) |
 | 6 | JWT storage and rotation | PASS | 72a9af5 (fixes: d727155, e7ed0a1) |
 | 7 | CORS policy | PASS | 92a5f91 |
-| 8 | Security headers / Nginx hardening | implemented, CI verification pending | this pass |
+| 8 | Security headers / Nginx hardening | PASS | ef4d087 |
 
 ## A note on the test-execution environment
 
@@ -2132,9 +2132,9 @@ location.
 
 **Date:** 2026-09-08
 
-**Status:** implemented, CI verification pending (updated to PASS/FAIL
-in an addendum once this commit's actual CI run is read — no status
-claim survives past the raw evidence in this log, ever).
+**Status:** PASS — verified against raw CI evidence, see "Exact
+results" below (commit `ef4d087`, run `34198753195`, all 5 jobs green
+on the first attempt, no fix iteration needed).
 
 ### Goal
 
@@ -2526,11 +2526,54 @@ unaffected (no service code changed).
 
 ### Exact results
 
-*(Filled in once this commit's CI run completes — evidence can't
-predate the run it evidences, same reasoning as every prior task's
-addendum commit in this log. See the FINAL REPORT for this task for
-the actual run ID, job IDs, and quoted pass/fail output pulled
-directly from GitHub Actions.)*
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34198753195
+(commit `ef4d087`), all 5 jobs **PASSED** on the first attempt — no fix
+iteration was needed. Verified via `mcp__github__get_job_logs` with
+`return_content: true` (raw log content, not the `conclusion` field
+alone), job `101972440688` (`infra-integration`), step "Acceptance —
+security headers, version disclosure, CSP integrity, no duplicates" —
+real output quoted directly from the raw log:
+
+```
+Server header on / -> Server: nginx
+/ X-Content-Type-Options -> X-Content-Type-Options: nosniff
+/ Referrer-Policy -> Referrer-Policy: strict-origin-when-cross-origin
+/ X-Frame-Options -> X-Frame-Options: SAMEORIGIN
+/ Permissions-Policy -> Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(), clipboard-read=(), clipboard-write=()
+/ Content-Security-Policy -> Content-Security-Policy: default-src 'self'; script-src 'sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+computed inline-script hash -> sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE=
+unauthenticated /api/documents -> HTTP/1.1 401 Unauthorized
+401 /api/documents X-Content-Type-Options -> X-Content-Type-Options: nosniff
+401 /api/documents Content-Security-Policy -> Content-Security-Policy: default-src 'self'; script-src 'sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+oversized request body -> HTTP/1.1 413 Request Entity Too Large
+MinIO passthrough headers -> Server: nginx
+X-Content-Type-Options: nosniff
+```
+
+Every assertion in the step passed silently (no `FAIL:` line appears
+anywhere in the actual output above) — most notably: `Server: nginx`
+with **no version digit** on both the frontend response AND the
+MinIO-proxied response (proving `proxy_hide_header Server` actually
+suppressed MinIO's own `Server: MinIO` — it did not merely go
+untested); the **freshly computed** hash of the actually-served
+`index.html`'s inline `<script>` block matches the CSP header's
+`script-src` value exactly (`sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE=` both times); the 401 (Nginx's own `auth_request` error) and
+the 413 (Nginx's own body-size rejection) both carry the header set/
+disclose no version, proving `always` correctly extends these headers
+to Nginx's own internally-generated error responses, not just normal
+2xx ones.
+
+All other infra-integration steps — Tasks 3–7's acceptance checks
+(host-exposure, MinIO passthrough connectivity, legitimate-request
+passthrough, trust-header overwrite, direct-backend header spoofing,
+upload Content-Type, refresh-token rotation, CORS policy) — **PASSED**
+unmodified in the same run, confirming zero regression.
+`auth-service`/`catalogue-service`/`document-service`/`search-service`
+unit-test jobs: all **PASSED**.
+
+**Net result: Task 8 is genuinely PASS, independently verified against
+raw CI evidence for the complete relevant test suite — not assumed
+from the commit existing or from a green checkmark alone.**
 
 ### Documentation updated
 
