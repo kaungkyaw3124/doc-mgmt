@@ -19,7 +19,7 @@ from app.core.db import get_db
 from app.core.search_client import index_product, remove_product_from_index
 from app.core.storage import upload_file, get_presigned_url, download_file_bytes
 from app.core.document_client import get_visible_product_ids
-from app.core.upload_safety import safe_content_type, should_force_download
+from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app import models, schemas
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -455,6 +455,20 @@ def upload_product_file(
     _check_product_visible(product, x_allowed_projects)
 
     sanitized_filename = _sanitize_filename(file.filename)
+
+    # Read only the leading bytes to check the file's actual content
+    # against what its extension claims — then rewind before streaming
+    # the full upload to storage. See app/core/upload_safety.py: this is
+    # a distinct check from Content-Type derivation below — it rejects
+    # the upload outright rather than just relabeling it.
+    head = file.file.read(4096)
+    file.file.seek(0)
+    if not content_matches_extension(sanitized_filename, head):
+        raise HTTPException(
+            status_code=400,
+            detail="file content does not match its extension",
+        )
+
     object_key = f"{product.sku}/{sanitized_filename}"
     # Content-Type is derived from the filename server-side, NEVER trusted
     # from the client's upload — see app/core/upload_safety.py.

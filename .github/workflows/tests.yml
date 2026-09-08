@@ -244,43 +244,111 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
 
-          product_id=$(curl -s -X POST http://localhost:8080/api/products \
-            -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-            -d '{"name":"Upload Safety Test Product"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
-          echo "created product $product_id"
+          new_product() {
+            curl -s -X POST http://localhost:8080/api/products \
+              -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+              -d "{\"name\":\"Upload Safety Test Product $1\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'
+          }
 
-          # Real HTML content, named with a .pdf extension AND the client
-          # explicitly (falsely) claiming Content-Type: text/html — both
-          # the extension-spoofing and the Content-Type-spoofing attack in
-          # one request.
+          # --- (C) content/extension mismatch: real HTML named *.pdf, with
+          # the client ALSO (falsely) declaring Content-Type: text/html —
+          # both the extension-spoofing and Content-Type-spoofing attack in
+          # one request. The upload-time magic-byte check (see
+          # app/core/upload_safety.py: content_matches_extension) must
+          # reject this outright — it must never reach storage at all, not
+          # merely get relabeled on the way out.
+          product_id=$(new_product html-as-pdf)
           printf '<html><body><script>document.title="pwned"</script></body></html>' > /tmp/evil.pdf
-          curl -s -X POST "http://localhost:8080/api/products/$product_id/file" \
+          code=$(curl -s -o /tmp/upload_resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
             -H "Authorization: Bearer $token" \
-            -F "file=@/tmp/evil.pdf;filename=evil.pdf;type=text/html" > /tmp/upload_resp.json
-          cat /tmp/upload_resp.json
+            -F "file=@/tmp/evil.pdf;filename=evil.pdf;type=text/html")
+          echo "HTML content named evil.pdf -> $code"; cat /tmp/upload_resp.json; echo
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting HTML content named .pdf, got $code"; fail=1; }
 
-          file_url=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
+          # It must not have been stored either — the product still has no
+          # file attached at all.
+          code=$(curl -s -o /tmp/no_file.json -w '%{http_code}' "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token")
+          echo "file-url after rejected upload -> $code"
+          [ "$code" = "404" ] || { echo "FAIL: expected 404 (no file attached) after a rejected upload, got $code"; cat /tmp/no_file.json; fail=1; }
+
+          # --- (C) image extension with non-image (garbage) content.
+          product_id=$(new_product garbage-as-png)
+          printf 'this is not image data at all, just plain garbage bytes' > /tmp/evil.png
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" -F "file=@/tmp/evil.png;filename=evil.png;type=image/png")
+          echo "garbage content named evil.png -> $code"
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting non-image content named .png, got $code"; cat /tmp/resp.json; fail=1; }
+
+          # --- (C) a real image renamed to a DIFFERENT image extension —
+          # still a content/extension mismatch even though both are "real"
+          # image formats.
+          product_id=$(new_product jpeg-as-png)
+          printf '\xff\xd8\xffJFIFrealjpegbytesnotpng' > /tmp/evil2.png
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" -F "file=@/tmp/evil2.png;filename=evil2.png;type=image/png")
+          echo "real JPEG bytes named .png -> $code"
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting JPEG content named .png, got $code"; cat /tmp/resp.json; fail=1; }
+
+          # --- (C)/(D) an executable (ELF header) renamed with an allowed
+          # image extension — "executable disguised as an image".
+          product_id=$(new_product elf-as-jpg)
+          printf '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00restofbinary' > /tmp/evil.jpg
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" -F "file=@/tmp/evil.jpg;filename=evil.jpg;type=image/jpeg")
+          echo "ELF binary named evil.jpg -> $code"
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting an ELF binary named .jpg, got $code"; cat /tmp/resp.json; fail=1; }
+
+          # --- (D) filename attacks: path traversal and an unusual/Unicode
+          # filename, both with genuinely legitimate PDF content — these
+          # must be ACCEPTED (the content is fine) but the object key must
+          # never contain the raw traversal/unicode filename, only the
+          # sanitized form (see _sanitize_filename in products.py).
+          product_id=$(new_product path-traversal)
+          printf '%%PDF-1.4 legitimate test content' > /tmp/traversal.pdf
+          resp=$(curl -s -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F 'file=@/tmp/traversal.pdf;filename=../../../etc/passwd.pdf;type=application/pdf')
+          echo "path-traversal filename upload -> $resp"
+          echo "$resp" | grep -q '\.\./' && { echo "FAIL: object key preserved path-traversal segments: $resp"; fail=1; }
+          echo "$resp" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert "image_object_key" in d and ".." not in d["image_object_key"]' \
+            || { echo "FAIL: unexpected/missing image_object_key for sanitized traversal filename"; fail=1; }
+
+          product_id=$(new_product unicode-filename)
+          printf '%%PDF-1.4 legitimate test content' > /tmp/unicode.pdf
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F 'file=@/tmp/unicode.pdf;filename=报告™_日本語.pdf;type=application/pdf')
+          echo "unicode filename upload -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: a legitimate PDF with a unicode filename was rejected"; cat /tmp/resp.json; fail=1; }
+
+          # --- (D) double extension: a legitimate PDF whose filename ends
+          # in a second, disallowed extension. The FINAL extension governs
+          # (matches the documented, tested behavior of _extension()) — so
+          # this is treated as an unrecognized-extension upload (safe,
+          # opaque octet-stream), not as a PDF and not rejected outright.
+          product_id=$(new_product double-extension)
+          printf '%%PDF-1.4 legitimate test content' > /tmp/double.pdf
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F 'file=@/tmp/double.pdf;filename=invoice.pdf.exe;type=application/pdf')
+          echo "double-extension (invoice.pdf.exe) upload -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: a real-PDF-content upload with a double extension was unexpectedly rejected"; cat /tmp/resp.json; fail=1; }
+          file_url_double=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
-          echo "presigned url: $file_url"
+          served=$(curl -s -o /dev/null -D - "$file_url_double" | tr -d '\r' | grep -i '^Content-Type:' | head -1)
+          echo "double-extension served -> $served"
+          echo "$served" | grep -qi 'application/pdf' && { echo "FAIL: invoice.pdf.exe must NOT be served as application/pdf (its real extension is .exe)"; fail=1; }
 
-          served_content_type=$(curl -s -o /dev/null -D - "$file_url" | tr -d '\r' | grep -i '^Content-Type:' | head -1)
-          echo "served -> $served_content_type"
-          if echo "$served_content_type" | grep -qi 'text/html'; then
-            echo "FAIL: server served the upload back as text/html — client-supplied Content-Type was trusted"
-            fail=1
-          fi
-          if ! echo "$served_content_type" | grep -qi 'application/pdf'; then
-            echo "FAIL: expected application/pdf (derived from the .pdf extension), got: $served_content_type"
-            fail=1
-          fi
-
-          # Now an SVG (a real, correctly-typed image format that can still
-          # carry <script>) — must come back forced to download, not opened
-          # inline, regardless of its Content-Type.
+          # --- (A)/(E) SVG (a real, correctly-typed image format that can
+          # still carry <script>) has no fixed binary signature to check,
+          # so it's accepted — but must come back forced to download, not
+          # opened inline, regardless of its (safe) Content-Type.
+          product_id=$(new_product svg-script)
           printf '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' > /tmp/evil.svg
-          curl -s -X POST "http://localhost:8080/api/products/$product_id/file" \
+          code=$(curl -s -o /tmp/upload_resp2.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
             -H "Authorization: Bearer $token" \
-            -F "file=@/tmp/evil.svg;filename=evil.svg;type=image/svg+xml" > /tmp/upload_resp2.json
+            -F "file=@/tmp/evil.svg;filename=evil.svg;type=image/svg+xml")
+          [ "$code" = "200" ] || { echo "FAIL: a real SVG upload was rejected (SVG isn't a mismatch, just always force-downloaded)"; cat /tmp/upload_resp2.json; fail=1; }
 
           file_url2=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
@@ -291,13 +359,28 @@ jobs:
             fail=1
           fi
 
-          # And a normal legitimate upload must still work end-to-end.
+          # --- (A)/(E) a normal legitimate upload must still work
+          # end-to-end, including the real signed round trip through MinIO
+          # (not just a non-502 connectivity check).
+          product_id=$(new_product legit-pdf)
           printf '%%PDF-1.4 legitimate test content' > /tmp/legit.pdf
           code=$(curl -s -o /tmp/legit_resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
             -H "Authorization: Bearer $token" \
             -F "file=@/tmp/legit.pdf;filename=quote.pdf;type=application/pdf")
           echo "legitimate PDF upload -> $code"
           [ "$code" = "200" ] || { echo "FAIL: a legitimate PDF upload was rejected"; cat /tmp/legit_resp.json; fail=1; }
+
+          file_url=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
+          echo "presigned url: $file_url"
+          served_code=$(curl -s -o /tmp/served.bin -w '%{http_code}' -D /tmp/served_headers.txt "$file_url")
+          served_content_type=$(tr -d '\r' < /tmp/served_headers.txt | grep -i '^Content-Type:' | head -1)
+          echo "legitimate PDF served -> $served_code / $served_content_type"
+          [ "$served_code" = "200" ] || { echo "FAIL: presigned download of a legitimately-uploaded PDF failed (got $served_code)"; cat /tmp/served_headers.txt; fail=1; }
+          if ! echo "$served_content_type" | grep -qi 'application/pdf'; then
+            echo "FAIL: expected application/pdf (derived from the .pdf extension), got: $served_content_type"
+            fail=1
+          fi
 
           exit $fail
 

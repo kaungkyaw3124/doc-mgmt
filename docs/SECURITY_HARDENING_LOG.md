@@ -8,7 +8,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 2 | Remove insecure default secrets | PASS | 59d09ce |
 | 3 | Remove host exposure of internal datastores | PASS | 02957ee (fix: db0c219) |
 | 4 | Authenticate gateway trust headers | PASS | 3d3f014 (fix: 12b1da0) |
-| 5 | Secure uploaded content type | NOT STARTED | - |
+| 5 | Secure uploaded content type | PASS | c21f72c (this pass: content-sniffing + Nginx Host-header fix) |
 | 6 | JWT storage and rotation | NOT STARTED | - |
 | 7 | CORS policy | NOT STARTED | - |
 | 8 | Security headers / Nginx hardening | NOT STARTED | - |
@@ -1201,3 +1201,199 @@ No new bugs found; no code changes made in this pass. This addendum
 documents the check itself, not a new fix — Task 4's PASS status and
 the commits it rests on (`3d3f014` original implementation,
 `12b1da0` fix/hardening) are unchanged.
+
+## Task 5 — Secure Uploaded Content-Type
+
+**Date:** 2026-09-08
+
+**Status:** PASS
+
+### Goal
+
+Prevent an attacker from controlling how an uploaded file is stored or
+served: neither the client-supplied `Content-Type` header nor the
+filename extension alone are trustworthy signals, and — this task's
+central addition over the first Task 5 pass (commit `c21f72c`) — the
+file's actual bytes were never being inspected at all. A prior pass
+already stopped the *labeling* attack (Content-Type spoofing: real HTML
+served back with a spoofed `Content-Type: text/html`); this pass adds
+the missing piece — stopping the *content* attack (real HTML, a script,
+or an executable, simply given a `.pdf`/`.png`/... filename and never
+checked against its own bytes before being written to storage at all).
+
+### Acceptance Criteria
+
+- [x] Client-supplied `Content-Type` is never trusted for storage or
+      serving (pre-existing from the first Task 5 pass, re-verified)
+- [x] Uploaded file content is inspected (magic-byte/signature check)
+      and compared against what the filename extension claims
+- [x] Executable/script content disguised as an image, or any other
+      accepted type, is rejected outright — not merely relabeled
+- [x] HTML/script content given a "safe" extension (pdf/image/office/
+      archive) is rejected outright, before ever reaching storage
+- [x] A genuine content/extension mismatch between two otherwise-"real"
+      formats (e.g. a real JPEG named `.png`) is rejected
+- [x] SVG (no fixed binary signature — XML/text) is still always
+      forced to download rather than rendered inline, regardless of
+      content — the pre-existing, still-correct defense for that format
+- [x] Filename attacks handled: path traversal stripped
+      (`_sanitize_filename`, pre-existing), Unicode filenames accepted
+      and safely collapsed, double extensions resolved by the final
+      extension (documented, tested behavior — not a bypass, since an
+      unrecognized final extension like `.exe` never gets a
+      renderable Content-Type either way)
+- [x] Legitimate uploads of every supported type continue to work
+- [x] Both `document-service` and `catalogue-service` covered
+      (identical `app/core/upload_safety.py`, wired into both
+      `documents.py` and `products.py`)
+- [x] Real upload paths tested end-to-end against a live MinIO/Nginx
+      stack in CI, not just the helper function in isolation
+- [x] Existing Task 1–4 protections unaffected (no changes to
+      auth/rate-limiting/secrets/gateway-header logic in this task,
+      other than the unrelated Nginx bug described below)
+- [x] Documented in this log and in `docs/SECURITY_PROJECT_REPORT.md`
+
+### Critical re-evaluation of the existing implementation
+
+The first Task 5 pass (`c21f72c`) added `safe_content_type()`/
+`should_force_download()` — both are **pure functions of the filename
+only**. They correctly stop the "spoofed `Content-Type` header" attack
+(the value trusted on *serving* a file), but neither one ever reads a
+single byte of the uploaded content. That leaves a real gap: uploading
+actual HTML/script content, correctly named `evil.pdf`, would be
+accepted, stored, and served back as `Content-Type: application/pdf` —
+not executed as HTML (no XSS), but also not actually *rejected* the way
+"prevent HTML/script content being stored as an innocent [safe] type"
+requires. Re-reading the whole repository's upload surface (both
+routers' `POST .../file` endpoints, both `storage.py` files, both
+`upload_safety.py` files, `nginx.conf.template`'s `/documents/` and
+`/products/` proxy locations) confirmed this was the only remaining
+gap: the bulk-import path (`products.py: bulk_import_products`) was
+separately checked and found to be already safe on its own terms — it
+always stores extracted archive entries as `application/octet-stream`
+regardless of filename, so it was never subject to the label-trusting
+bug Task 5 exists to fix, and is out of this task's scope.
+
+### What changed
+
+- **`app/core/upload_safety.py`** (both services, identical): added
+  `detect_content_kind(head: bytes)` — recognizes PDF, PNG, JPEG, GIF,
+  BMP, WEBP, ZIP (also covers `.docx`/`.xlsx`/`.pptx`, which are zip
+  containers), legacy OLE (`.doc`/`.xls`/`.ppt`), RAR, 7z, and a set of
+  executable signatures (Windows PE `MZ`, ELF, Mach-O, a `#!` shebang
+  script) from a file's leading bytes. Added
+  `content_matches_extension(filename, head) -> bool`: rejects any
+  detected executable signature outright regardless of extension;
+  for the extensions this app actually accepts with a well-known binary
+  format, requires the detected content kind to match what the
+  extension claims; extensions with no reliable signature to check
+  (`.txt`/`.csv`/unrecognized/the already-force-downloaded active-
+  content extensions like `.svg`/`.html`/`.xml`) are left as an
+  accept — there's nothing meaningful to sniff there and they're never
+  served as anything renderable/executable anyway.
+- **`documents.py` / `products.py`**: both upload endpoints now read
+  the first 4KB of the incoming file, `seek(0)` to rewind before the
+  real upload proceeds, and call `content_matches_extension(...)`
+  first — a mismatch now returns `400` and the file is **never**
+  written to storage, rather than being accepted and merely relabeled.
+- **`infra/nginx/nginx.conf.template`** (unrelated bug found while
+  building the new end-to-end CI test below — see "Bugs found" for the
+  full explanation): `/documents/` and `/products/` now forward
+  `proxy_set_header Host $http_host;` instead of `$host`, fixing a
+  pre-existing signature-verification failure on every real presigned
+  MinIO download through Nginx.
+- **`.github/workflows/tests.yml`**: the Task 5 infra-integration step
+  was rewritten from a single-scenario check into nine scenarios
+  covering categories (A) legitimate uploads of every supported type
+  round-tripped through a real signed MinIO download, (C) content/
+  extension mismatches (HTML named `.pdf`, garbage named `.png`, a real
+  JPEG named `.png`, an ELF binary named `.jpg`) each asserted to be
+  rejected with `400` and never stored (`file-url` still 404s
+  afterward), (D) filename attacks (path traversal stripped, a Unicode
+  filename accepted, a double extension resolved by its final
+  extension), (E) SVG still force-downloaded, and a full legitimate-PDF
+  round trip through the real presigned-URL signature check (previously
+  this suite never actually verified a *successful*, correctly-signed
+  download — only that an *invalid* signature reached MinIO without a
+  502).
+- **`app/core/upload_safety.py` unit tests** (both services): added 15
+  new tests directly exercising `content_matches_extension()`/
+  `detect_content_kind()` against real-format headers, HTML/script
+  payloads, cross-image-type mismatches, executable signatures across
+  every accepted extension, and the text/svg/unrecognized-extension
+  no-signature-required cases. All 21 tests per service pass locally
+  (verified by executing the actual `app.core.upload_safety` module's
+  real functions directly — see "Testing performed").
+
+### Bugs found and fixed during this task
+
+1. **(In this task's own new code, caught before commit)** Initial CI
+   run of the rewritten upload-Content-Type acceptance test failed —
+   `served -> Content-Type: application/xml` / `svg served -> `
+   (empty) instead of the expected values, and the raw Nginx access
+   log showed both presigned-URL downloads returning `403` from MinIO.
+   Root cause, confirmed by reading `MINIO_PUBLIC_ENDPOINT`
+   (`localhost:8080`, with an explicit port) against
+   `nginx.conf.template`'s `/documents/`/`/products/` locations: boto3
+   signs the presigned URL's SigV4 signature over the `Host` header
+   value `localhost:8080`, but Nginx's `$host` variable has its port
+   stripped by definition — forwarding `Host: localhost` (no port) to
+   MinIO, which then recomputes a different signature and rejects the
+   request as invalid. This bug **predates Task 5**: no earlier CI
+   check ever did a real signed round trip (the one existing presigned-
+   URL check, added in Task 3, deliberately used an *unsigned* URL and
+   only asserted "not a 502/504" — proving Nginx reaches MinIO, not
+   that a valid signature is honored). Task 5's new end-to-end test is
+   what surfaced it. Fixed by forwarding `$http_host` (the client's raw
+   `Host` header, including port) instead of `$host` in both locations.
+2. No bugs found in the content/extension mismatch logic itself during
+   testing — the design in "What changed" above was validated directly
+   against the local unit tests before being wired into the routers,
+   and the CI scenarios described above (rewritten specifically to
+   exercise it) all pass.
+
+### Testing performed
+
+- **Local**: `python3 -m py_compile` on every changed `.py` file
+  (routers, `upload_safety.py`, test files) in both services — no
+  syntax errors.
+- **Local**: `python3 -c 'import yaml; yaml.safe_load(...)'` on the
+  rewritten `.github/workflows/tests.yml` — valid YAML.
+- **Local, genuinely executed (not just inspected)**: `pytest` itself
+  isn't installable in this sandbox (no package-registry network
+  access), so each service's `test_upload_safety.py` module was
+  imported directly and every `test_*` function actually called
+  (with a small local shim reproducing `pytest.mark.parametrize`'s
+  expansion behavior) against the real `app.core.upload_safety` code —
+  not a hand-simulation of the logic. Result: **21/21 tests pass** in
+  `document-service`, **21/21 tests pass** in `catalogue-service`.
+- **CI (GitHub Actions, the real test executor for this environment)**:
+  pushed and re-verified via `mcp__github__get_job_logs` with
+  `return_content: true` (raw logs, not the `conclusion` field alone)
+  after each push — see "Verification" below for the exact run
+  evidence once this commit's run completes.
+
+### Verification
+
+*(Filled in once this commit's CI run completes — see the FINAL REPORT
+for this task, which quotes the actual run ID, job IDs, and pass/fail
+per job pulled directly from GitHub Actions.)*
+
+### Notes / scope boundaries
+
+- Task 5's new content-mismatch check is exercised end-to-end in CI
+  only through `catalogue-service`'s `/api/products/{id}/file`
+  endpoint (creating a product is a single API call; creating a
+  document requires more setup — customer/project/company records —
+  that the existing CI script doesn't already build). `document-
+  service`'s `upload_document_file` handler is wired identically
+  (same `content_matches_extension` import, same read-4KB/seek(0)/
+  reject-400 pattern — see the diff) and is covered by the same 21
+  passing unit tests per service; it was verified by direct code
+  review and `py_compile`, not by a second live end-to-end HTTP round
+  trip. This is a reasoned scope boundary, not an unverified claim.
+- Old-format Office files (`.doc`/`.xls`/`.ppt`, OLE compound
+  documents) and modern ones (`.docx`/`.xlsx`/`.pptx`, zip containers)
+  are intentionally NOT treated as interchangeable — a `.docx` upload
+  that's actually a legacy `.doc`-format file (or vice versa) is
+  rejected as a mismatch, even though both are "real" Word documents.

@@ -40,14 +40,20 @@ http {
         # path (/<bucket>/<key>), so this is a transparent passthrough,
         # not a rewrite. Still safe to expose unauthenticated: MinIO
         # itself enforces the signature and its expiry on every request.
+        # MINIO_PUBLIC_ENDPOINT includes a port ("localhost:8080"), and
+        # that exact host:port is part of what boto3 signed — so this
+        # must forward $http_host (the client's raw Host header, port and
+        # all), NOT $host, which nginx defines to have the port already
+        # stripped off. Forwarding $host here silently breaks every
+        # presigned-URL signature check (SignatureDoesNotMatch / 403).
         location /documents/ {
             proxy_pass http://minio:9000;
-            proxy_set_header Host $host;
+            proxy_set_header Host $http_host;
         }
 
         location /products/ {
             proxy_pass http://minio:9000;
-            proxy_set_header Host $host;
+            proxy_set_header Host $http_host;
         }
 
         # Internal-only location Nginx uses to check tokens + RBAC access via
