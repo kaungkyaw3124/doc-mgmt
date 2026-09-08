@@ -237,6 +237,70 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — uploaded file Content-Type is derived server-side, not trusted from the client
+        run: |
+          fail=0
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+
+          product_id=$(curl -s -X POST http://localhost:8080/api/products \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d '{"name":"Upload Safety Test Product"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          echo "created product $product_id"
+
+          # Real HTML content, named with a .pdf extension AND the client
+          # explicitly (falsely) claiming Content-Type: text/html — both
+          # the extension-spoofing and the Content-Type-spoofing attack in
+          # one request.
+          printf '<html><body><script>document.title="pwned"</script></body></html>' > /tmp/evil.pdf
+          curl -s -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F "file=@/tmp/evil.pdf;filename=evil.pdf;type=text/html" > /tmp/upload_resp.json
+          cat /tmp/upload_resp.json
+
+          file_url=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
+          echo "presigned url: $file_url"
+
+          served_content_type=$(curl -s -o /dev/null -D - "$file_url" | tr -d '\r' | grep -i '^Content-Type:' | head -1)
+          echo "served -> $served_content_type"
+          if echo "$served_content_type" | grep -qi 'text/html'; then
+            echo "FAIL: server served the upload back as text/html — client-supplied Content-Type was trusted"
+            fail=1
+          fi
+          if ! echo "$served_content_type" | grep -qi 'application/pdf'; then
+            echo "FAIL: expected application/pdf (derived from the .pdf extension), got: $served_content_type"
+            fail=1
+          fi
+
+          # Now an SVG (a real, correctly-typed image format that can still
+          # carry <script>) — must come back forced to download, not opened
+          # inline, regardless of its Content-Type.
+          printf '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' > /tmp/evil.svg
+          curl -s -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F "file=@/tmp/evil.svg;filename=evil.svg;type=image/svg+xml" > /tmp/upload_resp2.json
+
+          file_url2=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
+          disposition=$(curl -s -o /dev/null -D - "$file_url2" | tr -d '\r' | grep -i '^Content-Disposition:' | head -1)
+          echo "svg served -> $disposition"
+          if ! echo "$disposition" | grep -qi 'attachment'; then
+            echo "FAIL: expected Content-Disposition: attachment for an SVG upload, got: $disposition"
+            fail=1
+          fi
+
+          # And a normal legitimate upload must still work end-to-end.
+          printf '%%PDF-1.4 legitimate test content' > /tmp/legit.pdf
+          code=$(curl -s -o /tmp/legit_resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F "file=@/tmp/legit.pdf;filename=quote.pdf;type=application/pdf")
+          echo "legitimate PDF upload -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: a legitimate PDF upload was rejected"; cat /tmp/legit_resp.json; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

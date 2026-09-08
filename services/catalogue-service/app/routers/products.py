@@ -19,9 +19,20 @@ from app.core.db import get_db
 from app.core.search_client import index_product, remove_product_from_index
 from app.core.storage import upload_file, get_presigned_url, download_file_bytes
 from app.core.document_client import get_visible_product_ids
+from app.core.upload_safety import safe_content_type, should_force_download
 from app import models, schemas
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_filename(filename: str | None) -> str:
+    """Strips directory components (blocks path traversal via the object
+    key) and collapses everything else to a safe character set — mirrors
+    document-service/app/routers/companies.py's helper of the same name."""
+    base = os.path.basename(filename or "") or "file"
+    return _SAFE_FILENAME_RE.sub("_", base)
 
 
 def _sub_item_counts_map(db: Session, product_ids: list) -> dict:
@@ -443,8 +454,11 @@ def upload_product_file(
         raise HTTPException(status_code=404, detail="product not found")
     _check_product_visible(product, x_allowed_projects)
 
-    object_key = f"{product.sku}/{file.filename}"
-    upload_file(file.file, object_key, content_type=file.content_type or "application/octet-stream")
+    sanitized_filename = _sanitize_filename(file.filename)
+    object_key = f"{product.sku}/{sanitized_filename}"
+    # Content-Type is derived from the filename server-side, NEVER trusted
+    # from the client's upload — see app/core/upload_safety.py.
+    upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
 
     product.image_object_key = object_key
     db.commit()
@@ -461,7 +475,11 @@ def get_product_file_url(
     if not product or not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
     _check_product_visible(product, x_allowed_projects)
-    return {"url": get_presigned_url(product.image_object_key)}
+    return {
+        "url": get_presigned_url(
+            product.image_object_key, force_download=should_force_download(product.image_object_key)
+        )
+    }
 
 
 @router.get("/{product_id}/file-content")

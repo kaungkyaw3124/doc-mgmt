@@ -86,7 +86,18 @@ an application-level failed-attempt lockout.
 **Effort**: Low (Nginx-only fix) to Medium (app-level lockout with state).
 
 ### 5. Inconsistent Content-Type trust on file uploads — Low/Medium
-**Where**: `document-service/app/routers/companies.py:46-52` derives the
+**RESOLVED** — see `docs/SECURITY_HARDENING_LOG.md` Task 5:
+`documents.py`'s and `products.py`'s file uploads now derive Content-Type
+server-side from the sanitized filename extension via
+`app/core/upload_safety.py` (never from `file.content_type`), and their
+presigned download URLs force `Content-Disposition: attachment` for any
+extension capable of rendering as active content (SVG, HTML, XML, JS, ...)
+regardless of what Content-Type that extension maps to — matching and
+generalizing the pattern `companies.py` already used for logos/seals.
+`products.py`'s object key also gained the same filename-sanitization
+`companies.py` already had, closing an unrelated path-traversal gap found
+while fixing this.
+**Where** (historical): `document-service/app/routers/companies.py:46-52` derives the
 stored `Content-Type` strictly from the sanitized file extension
 (hardened); `document-service/app/routers/documents.py:544` and
 `catalogue-service/app/routers/products.py:421` instead trust the

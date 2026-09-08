@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.storage import upload_file, get_presigned_url, get_file_bytes
+from app.core.upload_safety import safe_content_type, should_force_download
 from app.core.catalogue_client import (
     get_product,
     get_product_sub_items,
@@ -552,8 +553,11 @@ def upload_document_file(
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
 
-    object_key = f"{doc.doc_type}/{doc.doc_number}/{_sanitize_filename(file.filename)}"
-    upload_file(file.file, object_key, content_type=file.content_type or "application/octet-stream")
+    sanitized_filename = _sanitize_filename(file.filename)
+    object_key = f"{doc.doc_type}/{doc.doc_number}/{sanitized_filename}"
+    # Content-Type is derived from the filename server-side, NEVER trusted
+    # from the client's upload — see app/core/upload_safety.py.
+    upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
 
     doc.file_object_key = object_key
     db.commit()
@@ -591,7 +595,7 @@ def get_document_file_url(
     if allowed is not None and doc.project_id is not None and str(doc.project_id) not in allowed:
         raise HTTPException(status_code=403, detail="you don't have access to this document's project")
 
-    return {"url": get_presigned_url(doc.file_object_key)}
+    return {"url": get_presigned_url(doc.file_object_key, force_download=should_force_download(doc.file_object_key))}
 
 
 @router.get("/{document_id}/audit-log")
