@@ -10,7 +10,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 4 | Authenticate gateway trust headers | PASS | 3d3f014 (fix: 12b1da0) |
 | 5 | Secure uploaded content type | PASS | c21f72c (this pass: content-sniffing + Nginx Host-header fix) |
 | 6 | JWT storage and rotation | PASS | 72a9af5 (fixes: d727155, e7ed0a1) |
-| 7 | CORS policy | NOT STARTED | - |
+| 7 | CORS policy | implemented, CI verification pending | this pass |
 | 8 | Security headers / Nginx hardening | NOT STARTED | - |
 
 ## A note on the test-execution environment
@@ -1784,3 +1784,302 @@ and the one infra-integration CI step above was touched this pass.
 - `docs/SECURITY_HARDENING_LOG.md`: this entry, and the status table
   updated from `NOT STARTED` to `PASS`.
 - `docs/SECURITY_PROJECT_REPORT.md`: Task 6 row and section updated.
+
+## Task 7 — CORS Policy Hardening
+
+**Date:** 2026-09-08
+
+**Status:** implemented, CI verification pending (updated to PASS/FAIL
+in an addendum once this commit's actual CI run is read — no status
+claim survives past the raw evidence in this log, ever).
+
+### Goal
+
+Implement an explicit, secure CORS policy: no wildcard-with-credentials,
+explicit configured trusted origins, methods/headers/exposed-headers
+restricted to what's actually used, production fails safe on missing/
+invalid config, dev origins can't silently leak into production,
+preflight works correctly, no duplicate/conflicting CORS headers.
+
+### Initial CORS state (before this task)
+
+`grep -rn "CORSMiddleware\|allow_origins\|Access-Control-Allow" services/
+*/app/ infra/` returned **nothing** — no FastAPI app in this project
+(`auth-service`, `catalogue-service`, `document-service`,
+`search-service`) has ever imported `CORSMiddleware` or set any
+`Access-Control-*` header, and Nginx has never emitted one either.
+
+### Security problem this creates
+
+Absence of any CORS configuration is not the same thing as a correct
+CORS policy — it happens to be safe TODAY only as an accident of this
+app's architecture (see "Whether credentialed CORS is actually
+required" below), not because of any enforced policy:
+
+1. **No policy is documented or tested**, so nothing stops a future
+   change from adding `CORSMiddleware(allow_origins=["*"],
+   allow_credentials=True)` to "fix a CORS error" someone hits while
+   experimenting with a different frontend origin — this exact
+   combination is invalid per the Fetch spec with real browsers (a
+   wildcard origin can't carry credentials) in SOME browsers, but not
+   reliably enforced by all HTTP clients/older behavior, and is exactly
+   the anti-pattern this task's acceptance criteria (1) and (6) name
+   directly.
+2. **Even today's "no CORS headers" state has a structural blind spot**,
+   found during inspection (see "Bugs found" below): every location
+   in `nginx.conf.template` guarded by `auth_request` would 401 a CORS
+   preflight `OPTIONS` request (which never carries `Authorization`),
+   which — the moment ANY cross-origin use of this API is ever
+   introduced — would silently and confusingly break, not fail
+   loudly/obviously.
+
+### Repository inspection performed
+
+- **All 4 FastAPI apps** (`services/*/app/main.py`): no `CORSMiddleware`,
+  no manual CORS header anywhere in any router.
+- **Nginx config** (`infra/nginx/nginx.conf.template`): no
+  `Access-Control-*` header anywhere; every `/api/*` location proxies
+  every method (including `OPTIONS`) straight through — for the 8
+  locations with `auth_request /_verify;`, that would include a
+  preflight `OPTIONS`, which never carries `Authorization`, hitting the
+  auth gate and 401ing (see "Security problem" #2 above).
+- **Frontend** (`web/index.html`): `API_BASE = '/api'` — every fetch
+  call is same-origin by construction (the frontend is static files
+  served by the SAME Nginx that serves `/api/*`; there is no separate
+  frontend origin, dev server, or CDN in this project's actual
+  deployment). Methods actually used:
+  `grep -oE "method:\s*'[A-Z]+'" web/index.html` → `POST`, `PATCH`,
+  `DELETE` (plus the implicit default `GET` on every argument-less
+  `apiFetch()` call) — never `PUT`. Headers actually sent:
+  `Authorization` (every authenticated call) and `Content-Type`
+  (only when a body is present). Response headers actually read by JS:
+  `grep -n "headers.get\|\.headers\[" web/index.html` → **none** — the
+  frontend only ever reads JSON response bodies, never a response
+  header.
+- **Auth flow / refresh-token cookie** (Task 6): the refresh cookie is
+  `HttpOnly`, delivered only to `/api/auth/*` via the SAME origin — a
+  cross-origin `fetch` with `credentials: 'include'` targeting this API
+  would need `Access-Control-Allow-Credentials: true` AND an exact
+  (non-wildcard) `Access-Control-Allow-Origin` to ever receive it, per
+  the Fetch spec. See "Whether credentialed CORS is actually required"
+  below for the actual finding.
+- **Service-to-service traffic** (Task 4's `X-Internal-Secret` calls,
+  `catalogue_client.py`/`document_client.py`/`document_client.py` in
+  the other services): plain `httpx` server-to-server calls, several of
+  which bypass Nginx entirely (direct container-to-container on the
+  Docker network) and none of which ever send an `Origin` header —
+  **CORS is a browser-enforced mechanism only**; a non-browser HTTP
+  client simply ignores any `Access-Control-*` response header
+  entirely. Confirmed unaffected by construction, not just by testing
+  (though also re-tested — see "Tests").
+- **Existing tests/CI**: no CORS-related test existed anywhere before
+  this task.
+
+### Whether credentialed cross-origin CORS is actually required
+
+**No** — this application is same-origin end-to-end in its real,
+intended deployment (Nginx serves both the static frontend and every
+`/api/*` path from exactly one origin). No legitimate normal use of
+this app — login, refresh, logout, any authenticated API call, file/
+document operations — is ever a cross-origin browser request. This is
+stated explicitly here per this task's requirement 6 ("verify whether
+credentialed CORS is actually required") rather than silently building
+a permissive policy nobody asked for.
+
+Given that finding, this task still implements a real, explicit,
+narrowly-scoped CORS policy (not a no-op) because:
+- It replaces *implicit* safety (nothing configured, so nothing works
+  cross-origin, entirely by accident of there being no
+  `CORSMiddleware` import anywhere) with an *explicit, tested, and
+  fail-safe* one — closing off the "someone adds `allow_origins=["*"]`
+  during dev and it ships" risk structurally, not by convention.
+- It fixes the real preflight-vs-`auth_request` bug found during
+  inspection (see above) — relevant regardless of whether cross-origin
+  access is used TODAY, since it would otherwise fail silently and
+  confusingly the moment it ever is.
+- It gives local dev / a future staging frontend on a different port/
+  host a real, working, narrowly-scoped path to opt in via
+  configuration — without ever needing a wildcard to get there.
+
+### Exact implementation
+
+**Where:** Nginx only — the single edge every browser ever talks to.
+Deliberately **not** added to any FastAPI app via `CORSMiddleware`.
+Two reasons: (1) `auth_request`-gated locations would still 401 a
+preflight before it ever reached a backend's own `CORSMiddleware`, so
+FastAPI-level CORS could never correctly answer preflight for those
+locations anyway (see requirement 10) — Nginx has to own preflight
+regardless; (2) if EITHER layer also added its own
+`Access-Control-Allow-Origin`, the response would carry two, which
+browsers treat as an invalid header set and reject outright (the exact
+"duplicate/conflicting headers" failure mode requirement 13 asks to be
+checked for) — keeping CORS in exactly one place (Nginx) makes that
+failure mode structurally impossible rather than something to
+carefully avoid.
+
+**New files:**
+- `infra/nginx/cors.conf` — the CORS header logic, `include`d as the
+  FIRST directive inside every browser-facing API location (14 of
+  them: `/api/auth/login`, `/register`, `/groups-public`, `/refresh`,
+  `/logout`, `/users`, `/api/admin/`, `/api/documents`, `/customers`,
+  `/companies`, `/projects`, `/products`, `/categories`, `/search`).
+  NOT included in `/documents/`/`/products/` (the unauthenticated MinIO
+  presigned-download passthroughs — simple GETs, no credentials, not
+  part of the credentialed-JS-fetch surface this exists for) or the
+  internal-only `= /_verify` location (never browser-reachable
+  directly). Sets `Access-Control-Allow-Origin`/`-Credentials`/`Vary`
+  on every response, and short-circuits `OPTIONS` preflight with a 204
+  BEFORE any `auth_request` in the same location — see "Exact
+  configuration" below for the full header set.
+- `infra/nginx/validate-cors-config.sh` — the production fail-safe
+  check (see "Configuration/environment variables").
+- `infra/nginx/docker-entrypoint.sh` — replaces the inline
+  `entrypoint:` one-liner `docker-compose.yml` used to have; runs the
+  validation script, then the same `envsubst` render step as before
+  (now substituting `$CORS_ALLOWED_ORIGIN` too), then execs Nginx.
+
+**Changed files:**
+- `infra/nginx/nginx.conf.template` — new `map $http_origin
+  $cors_allowed_origin { default ""; "${CORS_ALLOWED_ORIGIN}"
+  $http_origin; }` block in the `http {}` context (the ONE place the
+  real configured origin is substituted in); `include
+  /etc/nginx/cors.conf;` added to the 14 locations listed above.
+- `infra/docker-compose.yml` — `nginx` service: added
+  `CORS_ALLOWED_ORIGIN`/`ENVIRONMENT` env vars, mounted the three new
+  files, entrypoint now runs `docker-entrypoint.sh`.
+
+### Configuration/environment variables
+
+- `CORS_ALLOWED_ORIGIN` (Nginx container env var) — the single browser
+  origin this deployment trusts for cross-origin requests. Default in
+  `docker-compose.yml`: `http://localhost:8080` (matches how the CI/
+  dev stack is actually reached — the same "dev-convenience default
+  that matches the compose stack's own setup" pattern every other
+  secret in this project already uses, see `.env.example` files).
+- `ENVIRONMENT` (Nginx container env var, newly passed through — it
+  previously wasn't) — gates `validate-cors-config.sh`'s fail-fast
+  check, same meaning as every other service's `ENVIRONMENT` setting.
+
+### Allowed origins
+
+Exactly one, explicitly configured: whatever `CORS_ALLOWED_ORIGIN`
+resolves to. Never a wildcard. An `Origin` request header that doesn't
+byte-for-byte match it gets `$cors_allowed_origin = ""` — no
+`Access-Control-Allow-Origin` value granted, so the browser blocks the
+cross-origin response itself.
+
+### Allowed methods
+
+`GET, POST, PATCH, DELETE, OPTIONS` — exactly what `web/index.html`
+actually issues (confirmed by grep, see "Repository inspection") plus
+`OPTIONS` itself. `PUT` and `HEAD`/`TRACE`/`CONNECT` are never
+advertised.
+
+### Allowed headers
+
+`Authorization, Content-Type` — exactly what the frontend actually
+sends (confirmed by grep). Nothing else is allowed through preflight.
+
+### Exposed response headers
+
+**None** (`Access-Control-Expose-Headers` is never set). The frontend
+never reads a response header via JS (confirmed by grep — see
+"Repository inspection") — there is nothing to expose, so nothing is
+exposed. A browser can always read the CORS-safelisted response
+headers (`Content-Type`, `Content-Length`, etc.) regardless; this
+setting only controls anything BEYOND that safelist, and this app
+needs none of it.
+
+### Credential behavior
+
+`Access-Control-Allow-Credentials: true` on every CORS-enabled
+location, ALWAYS paired with the exact-match origin echo above —
+**never** with a wildcard `Access-Control-Allow-Origin: *` (which the
+Fetch spec forbids combining with credentials, and which
+`$cors_allowed_origin` structurally cannot produce — it's either the
+one configured origin or empty string, never `*`).
+
+### Preflight behavior
+
+Every CORS-enabled location answers `OPTIONS` with `204` directly in
+Nginx — before `auth_request` (for the 8 locations that have one) and
+before ever proxying to a backend. This is the fix for the real bug
+found during inspection: previously, an `OPTIONS` preflight against
+any `auth_request`-gated location would 401 (since preflight never
+carries `Authorization`), which would have silently broken any future
+credentialed cross-origin use of this API. `Access-Control-Max-Age:
+600` caps how often a browser needs to re-preflight the same request
+shape.
+
+### Bugs found
+
+1. **Preflight `OPTIONS` would 401 on every `auth_request`-gated
+   location** (see "Security problem" #2 and "Preflight behavior"
+   above) — a real, previously-undetected bug (no test exercised
+   `OPTIONS` against any of these locations before this task), fixed
+   as part of this task's own design rather than as a separate patch,
+   since the CORS-preflight short-circuit is what both implements CORS
+   AND fixes this in the same change.
+2. No other bugs found — the rest of the existing Nginx/FastAPI/
+   frontend auth flow needed zero changes for this task (see "Whether
+   credentialed CORS is actually required").
+
+### Tests
+
+New: `.github/workflows/tests.yml`, `infra-integration` job — TWO new
+steps (real HTTP through the real Nginx/docker-compose stack, per this
+task's explicit "do not merely test FastAPI's TestClient" instruction
+— there is no FastAPI-level CORS code to unit test in the first place,
+since it's implemented entirely in Nginx):
+
+1. **"Acceptance — CORS production config fails safe (no stack
+   needed)"** — runs `infra/nginx/validate-cors-config.sh` directly (no
+   Docker stack required) against 5 scenarios: production + empty
+   origin (must refuse, exit 1), production + the dev-default
+   `http://localhost:8080` (must refuse — dev origins must never
+   silently pass as production, requirement 5), production + a
+   `https://localhost...` placehoder (must refuse), production + a
+   real `https://` origin (must succeed, exit 0), development + empty
+   origin (must succeed with only a warning, never refuse).
+2. **"Acceptance — CORS policy (trusted/untrusted origins, preflight,
+   headers, credentials)"** — against the live stack: preflight from
+   the trusted origin on a PROTECTED endpoint succeeds (204) WITHOUT
+   an `Authorization` header (proves the preflight-before-`auth_request`
+   fix); response carries the exact trusted-origin
+   `Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials:
+   true`, `Access-Control-Allow-Methods` containing `GET` but NOT
+   `PUT`, `Access-Control-Allow-Headers` containing `Authorization`;
+   preflight from an untrusted origin never gets that origin (or a
+   wildcard) granted; a real (non-preflight) request from the trusted
+   origin gets the CORS header, exactly once (no duplicates); a real
+   request from an untrusted origin never gets it; login/refresh/
+   logout all still work normally with a trusted `Origin` header
+   present (Task 6's flows, re-verified under this task's changes);
+   service-to-service (`X-Internal-Secret`) traffic — no `Origin`
+   header at all — still works, confirming CORS doesn't touch it.
+
+### Exact results
+
+*(Filled in once this commit's CI run completes — evidence can't
+predate the run it evidences, same reasoning as every prior task's
+addendum commit in this log. See the FINAL REPORT for this task for
+the actual run ID, job IDs, and quoted pass/fail output pulled
+directly from GitHub Actions.)*
+
+### Regression
+
+No file outside `infra/nginx/*`, `infra/docker-compose.yml`, and
+`.github/workflows/tests.yml` was touched this task. Tasks 1–6's own
+CI jobs (`auth-service`, `catalogue-service`, `document-service`,
+`search-service` unit tests) are unaffected — this task touched only
+Nginx/infra-integration-level configuration. Every existing
+infra-integration acceptance step (Tasks 3–6's) still runs unmodified,
+after the two new CORS steps, and is expected to keep passing since
+`include /etc/nginx/cors.conf;` only ADDS response headers — it never
+changes routing, rewrites, or `proxy_pass` targets on any existing
+location.
+
+### Documentation updated
+
+- `docs/SECURITY_HARDENING_LOG.md`: this entry.
+- `docs/SECURITY_PROJECT_REPORT.md`: Task 7 row and section.

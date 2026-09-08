@@ -96,6 +96,38 @@ jobs:
             cp "services/$svc/.env.example" "services/$svc/.env"
           done
 
+      - name: Acceptance — CORS production config fails safe (no stack needed)
+        run: |
+          fail=0
+          script="infra/nginx/validate-cors-config.sh"
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN= sh "$script" || code=$?
+          echo "production, empty origin -> exit $code"
+          [ "$code" = "1" ] || { echo "FAIL: expected exit 1 (missing origin in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN=http://localhost:8080 sh "$script" || code=$?
+          echo "production, dev-default http origin -> exit $code"
+          [ "$code" = "1" ] || { echo "FAIL: expected exit 1 (dev-default http:// origin must never pass in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN=https://localhost:8080 sh "$script" || code=$?
+          echo "production, https localhost origin -> exit $code"
+          [ "$code" = "1" ] || { echo "FAIL: expected exit 1 (localhost origin must never pass in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN=https://ledger.example.com sh "$script" || code=$?
+          echo "production, valid https origin -> exit $code"
+          [ "$code" = "0" ] || { echo "FAIL: expected exit 0 (a real https:// origin must be accepted in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=development CORS_ALLOWED_ORIGIN= sh "$script" || code=$?
+          echo "development, empty origin -> exit $code"
+          [ "$code" = "0" ] || { echo "FAIL: expected exit 0 (development must only warn, never refuse to start)"; fail=1; }
+
+          exit $fail
+
       - name: Build and start the full stack
         working-directory: infra
         run: docker compose up -d --build
@@ -470,6 +502,103 @@ jobs:
             -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}')
           echo "fresh login after logout -> $relogin_code"
           [ "$relogin_code" = "200" ] || { echo "FAIL: a fresh login after logout should still work"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — CORS policy (trusted/untrusted origins, preflight, headers, credentials)
+        run: |
+          fail=0
+          trusted="http://localhost:8080"
+          untrusted="http://evil.example.com"
+
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+
+          # --- (preflight, trusted origin, PROTECTED endpoint) ---
+          # A real browser preflight never carries Authorization — this
+          # must succeed WITHOUT one, proving it's answered before this
+          # location's auth_request ever runs (see infra/nginx/cors.conf).
+          preflight_headers=$(curl -s -D - -o /dev/null -X OPTIONS http://localhost:8080/api/products \
+            -H "Origin: $trusted" \
+            -H 'Access-Control-Request-Method: GET' \
+            -H 'Access-Control-Request-Headers: authorization,content-type')
+          preflight_code=$(echo "$preflight_headers" | head -1 | tr -d '\r')
+          echo "preflight (trusted origin, no auth) -> $preflight_code"
+          echo "$preflight_headers" | grep -qi '^HTTP/.* 204' || { echo "FAIL: expected 204 for a trusted-origin preflight, got: $preflight_code"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -qi "^access-control-allow-origin: $trusted\$" \
+            || { echo "FAIL: preflight response missing/wrong Access-Control-Allow-Origin for trusted origin"; echo "$preflight_headers"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -qi '^access-control-allow-credentials: true$' \
+            || { echo "FAIL: preflight response missing Access-Control-Allow-Credentials: true"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -i '^access-control-allow-methods:' | grep -q 'GET' \
+            || { echo "FAIL: Access-Control-Allow-Methods missing GET"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -i '^access-control-allow-methods:' | grep -qi 'PUT' \
+            && { echo "FAIL: Access-Control-Allow-Methods advertises PUT, which the frontend never uses"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -i '^access-control-allow-headers:' | grep -qi 'Authorization' \
+            || { echo "FAIL: Access-Control-Allow-Headers missing Authorization"; fail=1; }
+
+          # --- (preflight, UNTRUSTED origin) ---
+          untrusted_preflight=$(curl -s -D - -o /dev/null -X OPTIONS http://localhost:8080/api/products \
+            -H "Origin: $untrusted" \
+            -H 'Access-Control-Request-Method: GET' \
+            -H 'Access-Control-Request-Headers: authorization,content-type')
+          echo "untrusted preflight -> $(echo "$untrusted_preflight" | head -1 | tr -d '\r')"
+          echo "$untrusted_preflight" | tr -d '\r' | grep -qi "^access-control-allow-origin: $untrusted\$" \
+            && { echo "FAIL: an UNTRUSTED origin was granted Access-Control-Allow-Origin"; fail=1; }
+          echo "$untrusted_preflight" | tr -d '\r' | grep -qi '^access-control-allow-origin: \*$' \
+            && { echo "FAIL: wildcard Access-Control-Allow-Origin used"; fail=1; }
+
+          # --- (actual request, trusted origin) ---
+          trusted_resp=$(curl -s -D - -o /dev/null http://localhost:8080/api/products \
+            -H "Authorization: Bearer $token" -H "Origin: $trusted")
+          echo "GET /api/products, trusted origin -> $(echo "$trusted_resp" | head -1 | tr -d '\r')"
+          echo "$trusted_resp" | tr -d '\r' | grep -qi "^access-control-allow-origin: $trusted\$" \
+            || { echo "FAIL: a real request from the trusted origin did not get Access-Control-Allow-Origin"; fail=1; }
+          # No duplicate/conflicting header (Nginx AND a FastAPI-level
+          # CORS layer both emitting one, or Nginx emitting it twice).
+          dup_count=$(echo "$trusted_resp" | tr -d '\r' | grep -ci '^access-control-allow-origin:')
+          [ "$dup_count" = "1" ] || { echo "FAIL: expected exactly 1 Access-Control-Allow-Origin header, got $dup_count"; fail=1; }
+
+          # --- (actual request, untrusted origin — must still succeed for
+          # a non-browser client like curl; what matters is the response
+          # never grants that origin CORS access, exactly like the
+          # preflight check above) ---
+          untrusted_resp=$(curl -s -D - -o /dev/null http://localhost:8080/api/products \
+            -H "Authorization: Bearer $token" -H "Origin: $untrusted")
+          echo "GET /api/products, untrusted origin -> $(echo "$untrusted_resp" | head -1 | tr -d '\r')"
+          echo "$untrusted_resp" | tr -d '\r' | grep -qi "^access-control-allow-origin: $untrusted\$" \
+            && { echo "FAIL: an UNTRUSTED origin's real request was granted Access-Control-Allow-Origin"; fail=1; }
+
+          # --- (login/refresh/logout still work normally with a trusted
+          # Origin header present — CORS must not interfere with any of
+          # this task's existing Task 6 flows) ---
+          jar=/tmp/cors_cookies.txt
+          rm -f "$jar"
+          login_with_origin=$(curl -s -D - -o /tmp/cors_login.json -c "$jar" -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -H "Origin: $trusted" -d '{"username":"admin","password":"CHANGE_ME"}')
+          echo "login with Origin header -> $(echo "$login_with_origin" | head -1 | tr -d '\r')"
+          echo "$login_with_origin" | tr -d '\r' | grep -qi "^access-control-allow-origin: $trusted\$" \
+            || { echo "FAIL: login response missing CORS header for trusted origin"; fail=1; }
+          grep -q refresh_token "$jar" || { echo "FAIL: login with Origin header did not set the refresh cookie"; fail=1; }
+
+          refresh_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/refresh \
+            -H "Origin: $trusted")
+          echo "refresh with Origin header -> $refresh_code"
+          [ "$refresh_code" = "200" ] || { echo "FAIL: refresh with a trusted Origin header was rejected"; fail=1; }
+
+          logout_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/logout \
+            -H "Origin: $trusted")
+          echo "logout with Origin header -> $logout_code"
+          [ "$logout_code" = "204" ] || { echo "FAIL: logout with a trusted Origin header was rejected"; fail=1; }
+
+          # --- (service-to-service traffic is unaffected — same
+          # direct-to-backend check pattern as Task 4, no Origin header
+          # involved at all, since non-browser clients never send one) ---
+          direct_code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H "X-Internal-Secret: local_dev_internal_secret_change_me" \
+            http://catalogue-service:8000/health)
+          echo "direct-to-backend health check (no Origin header at all) -> $direct_code"
+          [ "$direct_code" = "200" ] || { echo "FAIL: service-to-service traffic broke after adding CORS to Nginx"; fail=1; }
 
           exit $fail
 

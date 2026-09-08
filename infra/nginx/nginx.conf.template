@@ -1,13 +1,15 @@
 # This is a TEMPLATE, not a config Nginx reads directly — the nginx
-# container's entrypoint (see infra/docker-compose.yml's `nginx` service)
-# runs `envsubst` on it at startup, substituting the placeholder for the
-# internal shared secret (see the X-Internal-Secret lines below) with
-# the real value, and writing the result to nginx.conf. envsubst is
-# invoked with an explicit single-variable list, so it does NOT touch
-# Nginx's own $variables ($host, $uri, $upstream_http_..., etc.) below —
-# only that one placeholder is replaced. (Not spelled out literally in
-# this comment on purpose — envsubst is a dumb text substitution and
-# would replace it here too if it appeared verbatim.)
+# container's entrypoint (infra/nginx/docker-entrypoint.sh, run by
+# infra/docker-compose.yml's `nginx` service) runs `envsubst` on it at
+# startup, substituting the placeholders for the internal shared secret
+# (see the X-Internal-Secret lines below) and the trusted CORS origin
+# (see the `map` block below) with their real values, and writing the
+# result to nginx.conf. envsubst is invoked with an explicit two-variable
+# list, so it does NOT touch Nginx's own $variables ($host, $uri,
+# $upstream_http_..., etc.) below — only those two placeholders are
+# replaced. (Not spelled out literally in this comment on purpose —
+# envsubst is a dumb text substitution and would replace it here too if
+# it appeared verbatim.)
 events {}
 
 http {
@@ -15,6 +17,26 @@ http {
     # that size with a plain (non-JSON) error page before it even reaches
     # the app — bump it so real uploads (spec sheets, brochures, etc.) work.
     client_max_body_size 25m;
+
+    # Task 7 — CORS. This app is same-origin end-to-end in its real
+    # deployment (Nginx serves both the static frontend and every API
+    # path from one origin — see web/index.html's API_BASE), so no
+    # legitimate normal use of this app is a cross-origin browser
+    # request at all; nothing here is required for login/refresh/logout/
+    # any authenticated API call to keep working. What this closes off
+    # is the *implicit* safety of "no CORS headers exist anywhere" —
+    # accidental, not policy — which is one dropped-in
+    # `allow_origins=["*"]` away from becoming a real hole. $http_origin
+    # is matched against exactly ONE configured trusted origin
+    # (CORS_ALLOWED_ORIGIN); anything else maps to the empty string,
+    # which infra/nginx/cors.conf then sends as-is — an unrecognized or
+    # absent Origin gets NO Access-Control-Allow-Origin header at all,
+    # so the browser blocks the response itself. Never a wildcard, never
+    # every Origin echoed back unconditionally.
+    map $http_origin $cors_allowed_origin {
+        default "";
+        "${CORS_ALLOWED_ORIGIN}" $http_origin;
+    }
 
     server {
         listen 80;
@@ -71,6 +93,7 @@ http {
 
         # Public: no auth required to log in
         location /api/auth/login {
+            include /etc/nginx/cors.conf;
             rewrite ^/api/auth/login$ /login break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -82,6 +105,7 @@ http {
         # Public: no auth required to self-register (account stays pending
         # approval until a superuser approves it — see /api/admin/users/pending)
         location /api/auth/register {
+            include /etc/nginx/cors.conf;
             rewrite ^/api/auth/register$ /register break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -90,6 +114,7 @@ http {
         # Public: lets the registration form offer "which group are you
         # requesting to join?" without requiring a login first.
         location /api/auth/groups-public {
+            include /etc/nginx/cors.conf;
             rewrite ^/api/auth/groups-public$ /groups-public break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -101,6 +126,7 @@ http {
         # and the Set-Cookie response header by default, no extra
         # directives needed for either.
         location /api/auth/refresh {
+            include /etc/nginx/cors.conf;
             rewrite ^/api/auth/refresh$ /refresh break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -109,6 +135,7 @@ http {
         # Public: same reasoning as /refresh — authenticates via the
         # refresh cookie, always succeeds either way.
         location /api/auth/logout {
+            include /etc/nginx/cors.conf;
             rewrite ^/api/auth/logout$ /logout break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -118,6 +145,7 @@ http {
         # authorization themselves (superuser / group-admin logic), so these
         # just pass through — no auth_request needed at the gateway for them.
         location /api/auth/users {
+            include /etc/nginx/cors.conf;
             rewrite ^/api/auth/users(.*)$ /users$1 break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -125,6 +153,7 @@ http {
         }
 
         location /api/admin/ {
+            include /etc/nginx/cors.conf;
             rewrite ^/api/admin/(.*)$ /admin/$1 break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -148,6 +177,7 @@ http {
         # logging) from silently reopening a header-forgery gap just
         # because nobody remembered to update Nginx too.
         location /api/documents {
+            include /etc/nginx/cors.conf;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
@@ -176,6 +206,7 @@ http {
         }
 
         location /api/customers {
+            include /etc/nginx/cors.conf;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $access_level $upstream_http_x_access_level;
@@ -190,6 +221,7 @@ http {
         }
 
         location /api/companies {
+            include /etc/nginx/cors.conf;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $access_level $upstream_http_x_access_level;
@@ -204,6 +236,7 @@ http {
         }
 
         location /api/projects {
+            include /etc/nginx/cors.conf;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
@@ -219,6 +252,7 @@ http {
         }
 
         location /api/products {
+            include /etc/nginx/cors.conf;
             set $service_name "products";
             auth_request /_verify;
             auth_request_set $has_category_access $upstream_http_x_has_category_access;
@@ -232,6 +266,7 @@ http {
         }
 
         location /api/categories {
+            include /etc/nginx/cors.conf;
             set $service_name "products";
             auth_request /_verify;
             auth_request_set $has_category_access $upstream_http_x_has_category_access;
@@ -244,6 +279,7 @@ http {
         }
 
         location /api/search {
+            include /etc/nginx/cors.conf;
             set $service_name "search";
             auth_request /_verify;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;

@@ -99,17 +99,33 @@ services:
       # infra/nginx/nginx.conf.template and each service's
       # app/core/gateway_auth.py.
       INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:-local_dev_internal_secret_change_me}
+      # Task 7 (CORS): the single browser origin this deployment trusts
+      # for cross-origin requests — see infra/nginx/nginx.conf.template's
+      # `map` block and infra/nginx/cors.conf. Defaults to this stack's
+      # own published port, matching how it's actually reached in local
+      # dev/CI (http://localhost:8080) — see infra/nginx/
+      # validate-cors-config.sh for why this default can never pass as a
+      # production value.
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-http://localhost:8080}
+      # Gates infra/nginx/validate-cors-config.sh's production fail-fast
+      # check — same "development" default/meaning as every other
+      # service's ENVIRONMENT setting in this project.
+      ENVIRONMENT: ${ENVIRONMENT:-development}
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./nginx/cors.conf:/etc/nginx/cors.conf:ro
+      - ./nginx/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+      - ./nginx/validate-cors-config.sh:/validate-cors-config.sh:ro
       - ../web:/usr/share/nginx/html:ro
-    # Render the template (substituting ONLY $INTERNAL_SHARED_SECRET —
-    # see the comment at the top of nginx.conf.template for why the
-    # variable list passed to envsubst must stay this explicit) into the
-    # real config, then start Nginx normally.
+    # Render the template (substituting ONLY $INTERNAL_SHARED_SECRET and
+    # $CORS_ALLOWED_ORIGIN — see the comment at the top of
+    # nginx.conf.template for why the variable list passed to envsubst
+    # must stay this explicit) into the real config, then start Nginx —
+    # see infra/nginx/docker-entrypoint.sh (also runs the Task 7
+    # production CORS-config fail-fast check before rendering).
     entrypoint:
       - /bin/sh
-      - -c
-      - envsubst '$$INTERNAL_SHARED_SECRET' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
+      - /docker-entrypoint.sh
     ports:
       - "8080:80"
     depends_on:

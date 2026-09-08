@@ -15,7 +15,7 @@ not replace the log.
 | 4 | Authenticate gateway trust headers | PASS | `3d3f014` (fix: `12b1da0`) |
 | 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix: `e49d7f1`) |
 | 6 | JWT storage and rotation | PASS | `72a9af5` (fixes: `d727155`, `e7ed0a1` — see below) |
-| 7 | CORS policy | not started | - |
+| 7 | CORS policy | implemented, CI verification pending | this pass — see below |
 | 8 | Security headers / Nginx hardening | not started | - |
 
 ## Task 5 — Secure Uploaded Content-Type
@@ -452,6 +452,117 @@ See the chat FINAL REPORT for this task for the exact commit SHA(s),
 push confirmation, and CI evidence (not duplicated here to avoid this
 file going stale the moment a later commit lands on the branch — same
 convention as Task 5 above). Branch remains `security/auth-hardening`;
-no PR opened, no merge to `main`. Next task once directed to resume
-the broader chain: Task 7 (CORS policy), then Task 8 (security headers
-/ Nginx hardening), then the final full security audit.
+no PR opened, no merge to `main`. Task 7 (CORS policy) is next,
+detailed below.
+
+## Task 7 — CORS Policy Hardening
+
+**Status: implemented, CI verification pending** — not claimed PASS
+until this section is updated with actual raw CI evidence (see
+`docs/SECURITY_HARDENING_LOG.md`'s Task 7 entry for the full design).
+
+### Original problem
+
+No FastAPI app in this project (`auth-service`, `catalogue-service`,
+`document-service`, `search-service`) has ever configured
+`CORSMiddleware`, and Nginx never emitted an `Access-Control-*` header
+either — confirmed by a full repository grep, not assumed. That
+absence happened to be safe (no browser cross-origin access ever
+worked, by omission) but was never an explicit, tested, fail-safe
+policy — one dropped-in `allow_origins=["*"]` during future debugging
+away from becoming a real hole. Inspection also found a real,
+previously-undetected bug this task's design fixes as a side effect:
+every `auth_request`-gated Nginx location would 401 a CORS preflight
+`OPTIONS` request (which never carries `Authorization`), since nothing
+answered preflight before the auth gate ran.
+
+### Whether credentialed CORS is actually required
+
+No — this app is same-origin end-to-end (Nginx serves both the static
+frontend and every `/api/*` path from one origin; confirmed via
+`web/index.html`'s `API_BASE = '/api'`). This is implemented anyway,
+narrowly, because explicit-and-tested beats implicit-and-accidental,
+and because it fixes the real preflight bug above regardless.
+
+### Exact configuration
+
+Implemented entirely in Nginx (`infra/nginx/`), never as FastAPI
+`CORSMiddleware` — deliberately, to keep CORS in exactly one place (a
+second, independent CORS layer risks emitting a duplicate/conflicting
+`Access-Control-Allow-Origin`, which browsers reject outright) and
+because `auth_request`-gated locations need preflight answered before
+they'd ever reach a backend's own CORS layer anyway.
+
+- **New:** `infra/nginx/cors.conf` (the header/preflight logic,
+  `include`d into 14 browser-facing locations),
+  `infra/nginx/validate-cors-config.sh` (production fail-safe check),
+  `infra/nginx/docker-entrypoint.sh` (runs the check, then the
+  existing `envsubst` render step, then execs Nginx).
+- **Changed:** `infra/nginx/nginx.conf.template` (new `map` block +
+  14 `include` lines), `infra/docker-compose.yml` (new
+  `CORS_ALLOWED_ORIGIN`/`ENVIRONMENT` env vars on the `nginx` service,
+  new volume mounts, new entrypoint).
+
+### Allowed origins
+
+Exactly one, explicitly configured via `CORS_ALLOWED_ORIGIN` — never a
+wildcard. Any other `Origin` gets no CORS grant at all.
+
+### Allowed methods
+
+`GET, POST, PATCH, DELETE, OPTIONS` — exactly what `web/index.html`
+uses (confirmed by grep). Never `PUT`.
+
+### Allowed headers
+
+`Authorization, Content-Type` — exactly what the frontend sends
+(confirmed by grep).
+
+### Credential behavior
+
+`Access-Control-Allow-Credentials: true`, always paired with the
+exact-match origin echo — never a wildcard (structurally impossible
+given the design: `$cors_allowed_origin` is either the one configured
+origin or empty string).
+
+### Preflight behavior
+
+Every CORS-enabled location answers `OPTIONS` with `204` directly in
+Nginx, before `auth_request` — the fix for the bug found during
+inspection.
+
+### Security tests executed
+
+Two new real-HTTP `infra-integration` CI steps (no FastAPI
+`TestClient` — there's no FastAPI-level CORS code to unit-test, and
+this task's own instructions require real HTTP through real Nginx):
+production fail-safe validation (5 scenarios, run directly against
+`validate-cors-config.sh`, no Docker stack needed) and a full CORS
+acceptance step (trusted/untrusted origin, preflight with and without
+auth headers, methods/headers enforcement, no wildcard, no duplicate
+headers, login/refresh/logout still work with an `Origin` header
+present, service-to-service traffic unaffected). See
+`docs/SECURITY_HARDENING_LOG.md` for the complete list.
+
+### Full test results / integration test results
+
+*(Filled in once this commit's CI run completes — see the FINAL
+REPORT for this task, which quotes the actual run ID, job IDs, and
+pass/fail per job pulled directly from GitHub Actions.)*
+
+### Bugs/failures encountered
+
+The preflight-vs-`auth_request` 401 bug described above (found during
+inspection, fixed as part of this task's own design, not a separate
+patch).
+
+### Documentation updated
+
+- `docs/SECURITY_HARDENING_LOG.md`: yes — full Task 7 entry.
+- `docs/SECURITY_PROJECT_REPORT.md`: yes — this section, and the
+  status table.
+
+### Remaining security tasks
+
+Task 8 (security headers / Nginx hardening), then the final full
+security audit.
