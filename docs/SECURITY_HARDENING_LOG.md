@@ -1153,3 +1153,51 @@ re-verification rather than accepting the prior summary. The fix here
 is not just the code change but the corrected process: every claim in
 this entry was checked against raw log content re-fetched in this same
 session, not against memory of what was expected to happen.
+
+### Second independent verification pass (2026-09-08, on request)
+
+Requested a further audit of items not explicitly spelled out above.
+Checked directly against the current tree (no code changes needed —
+all came back clean):
+
+- **Browser cannot learn `X-Internal-Secret`**: `grep`'d
+  `infra/nginx/nginx.conf.template` for every occurrence of
+  `X-Internal-Secret` — all 7 are `proxy_set_header` (a request header
+  Nginx sends to the upstream service), none are `add_header` or
+  `proxy_pass_header` (which would put it on the *response* sent back
+  to the client). `gateway_auth.py`'s rejection response is a fixed
+  `{"detail": "missing or invalid gateway credential"}` — it echoes
+  neither the expected nor the provided secret value.
+- **Secret is not logged anywhere**: `grep`'d every service's `app/`
+  for a `logger.*` call referencing headers, requests, or
+  `internal_shared_secret`/`Internal-Secret` — no matches.
+  `gateway_auth.py` itself contains no `logger`/`print` call at all.
+- **auth-service correctly has no `gateway_auth.py`**: re-confirmed
+  this is by design, not an oversight — `auth-service` is the
+  *producer* of the trust headers (computed fresh from the JWT + DB on
+  every `/verify` call), never a *consumer* of them, so there is
+  nothing for it to gate against forgery. Its own protections (rate
+  limiting on `/login`, JWT signature verification, superuser/DB checks
+  in `admin.py`) are separate concerns already covered by Tasks 1 and
+  the pre-existing authz logic, not part of this task's scope.
+- **All three consuming services have consistent protection**: each of
+  `document-service`, `catalogue-service`, `search-service` has its own
+  `app/core/gateway_auth.py` (identical logic), registered in `main.py`,
+  with its own `test_gateway_auth.py` suite (6, 6, 5 tests
+  respectively — all passing per commit `12b1da0`'s CI run).
+- **Service-to-service calls verified carrying the secret**: re-read
+  `catalogue-service/app/core/document_client.py`,
+  `search-service/app/core/document_client.py`, and
+  `document-service/app/core/catalogue_client.py` directly — every
+  `httpx.get(...)` call in all three includes
+  `"X-Internal-Secret": settings.internal_shared_secret` in its headers
+  (4 call sites in `catalogue_client.py` alone: `get_product`,
+  `get_product_sub_items`, `get_product_file_bytes`,
+  `get_product_download_bundle_bytes`), confirmed via the earlier
+  exhaustive repo grep and by re-reading each file directly again this
+  pass.
+
+No new bugs found; no code changes made in this pass. This addendum
+documents the check itself, not a new fix — Task 4's PASS status and
+the commits it rests on (`3d3f014` original implementation,
+`12b1da0` fix/hardening) are unchanged.
