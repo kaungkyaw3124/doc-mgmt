@@ -4,7 +4,17 @@ WORKDIR /app
 
 # libpq-dev + gcc needed to build psycopg2 if a wheel isn't available for the platform
 # The rest (pango, cairo, gdk-pixbuf, fonts) are required by WeasyPrint for PDF generation
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# Override with --build-arg APT_MIRROR=<host> on networks where the default
+# Fastly-fronted deb.debian.org is unreachable (e.g. some restricted-egress
+# hosts block that CDN's IP ranges outright). Drops the security suite when
+# switched, since third-party mirrors don't carry it — acceptable here since
+# these are build-time toolchain packages, not runtime app dependencies.
+ARG APT_MIRROR=deb.debian.org
+RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+        sed -i -e '/bookworm-security/d' -e "s#deb.debian.org#${APT_MIRROR}#g" /etc/apt/sources.list; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     libpango-1.0-0 \

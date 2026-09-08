@@ -34,7 +34,13 @@ services:
     restart: unless-stopped
 
   document-service:
-    build: ../services/document-service
+    build:
+      context: ../services/document-service
+      # Only needed on networks where the default deb.debian.org (Fastly)
+      # is unreachable — see the ARG's comment in the Dockerfile. Leave
+      # unset for normal use; CI and most local dev never need this.
+      args:
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     env_file: ../services/document-service/.env
     depends_on:
       - postgres
@@ -46,7 +52,10 @@ services:
     restart: unless-stopped
 
   catalogue-service:
-    build: ../services/catalogue-service
+    build:
+      context: ../services/catalogue-service
+      args:
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     env_file: ../services/catalogue-service/.env
     depends_on:
       - postgres
@@ -83,7 +92,10 @@ services:
     restart: unless-stopped
 
   auth-service:
-    build: ../services/auth-service
+    build:
+      context: ../services/auth-service
+      args:
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     env_file: ../services/auth-service/.env
     depends_on:
       - postgres
