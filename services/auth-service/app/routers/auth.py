@@ -18,13 +18,22 @@ from app import models
 router = APIRouter(tags=["auth"])
 
 REFRESH_COOKIE_NAME = "refresh_token"
-# Scoped to /api/auth so it's only ever sent to /login, /refresh, /logout —
-# not attached to every unrelated API call. Nginx rewrites the incoming
-# /api/auth/* path before proxying, but the cookie's Path is matched by
-# the browser against the URL it actually requested (i.e. before Nginx's
-# internal rewrite), so "/api/auth" is correct here even though this
-# service itself is mounted at "/".
-REFRESH_COOKIE_PATH = "/api/auth"
+# Root-scoped. This USED to be "/api/auth" on the theory that a browser
+# matches Cookie Path against the URL it actually requested — true, but
+# that URL is always /api/auth/* only via Nginx's rewrite (the frontend
+# only ever calls API_BASE + '/auth/...', see web/index.html); this
+# service's OWN routes are mounted at bare paths ("/login", "/refresh",
+# "/logout" — no "/api/auth" prefix inside the container, see main.py).
+# A caller that talks to those bare paths directly — this task's own
+# real end-to-end test suite, TestClient, being one — would never get
+# the cookie attached, since Path is a browser/HTTP-client-side
+# same-request-shape filter with no server-side enforcement at all
+# (this fix is what re-verifying Task 6 end-to-end, not just trusting
+# the design comment, actually caught). Scoping to "/" costs nothing
+# meaningful here: HttpOnly is what actually keeps this cookie away
+# from JavaScript, and every other endpoint in this single-origin app
+# simply never reads a cookie it doesn't look for.
+REFRESH_COOKIE_PATH = "/"
 
 
 def _set_refresh_cookie(response: Response, plaintext: str) -> None:

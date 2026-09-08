@@ -1533,12 +1533,12 @@ disabled-user handling), and admin disable/password-change revocation
   a silent `POST /refresh` against the HttpOnly cookie on page load —
   proven already working end-to-end by this task's new CI integration
   check (see "Tests" below).
-- **Cookie settings** (`routers/auth.py: _set_refresh_cookie`) were
-  already correct: `httponly=True`, `samesite="lax"`,
-  `secure=(settings.environment == "production")`, scoped to
-  `path="/api/auth"` so it's never attached to unrelated API calls.
-  Not previously verified end-to-end over real HTTP, only by
-  inspection — this pass adds that verification (see "Tests").
+- **Cookie settings** (`routers/auth.py: _set_refresh_cookie`):
+  `httponly=True`, `samesite="lax"`,
+  `secure=(settings.environment == "production")` were already
+  correct. `path="/api/auth"` LOOKED correct by inspection but wasn't
+  — verifying it end-to-end (not just reading the code) is what caught
+  a real bug; see "Second CI pass" below for the fix (`path="/"`).
 - **Rotation/revocation/replay-detection design**
   (`refresh_tokens.py`) was already correct in design: single-use
   tokens (the presented one is revoked, a new one issued), a replayed
@@ -1581,14 +1581,18 @@ re-reading everything, not assumed to be isolated in advance.
   patch, per the "do not simply fix the one datetime exception"
   instruction.
 
-No change was needed to `jwt_utils.py`, `routers/auth.py`,
-`routers/admin.py`, `models.py`, or `web/index.html` — all confirmed
-already correct by the re-audit above.
+**Correction, added after actually running this fix against real CI**
+(the static re-audit above claimed `jwt_utils.py`/`routers/auth.py`
+needed no changes — that claim was wrong, caught only by pushing and
+reading the raw CI output rather than trusting the read-through; see
+"Second CI pass" below for the two additional, genuinely real bugs
+that surfaced and were fixed before Task 6 could honestly be called
+PASS).
 
 ### Tests
 
 `services/auth-service/tests/test_refresh_tokens.py` grew from 16 to
-23 tests. New tests added this pass:
+24 tests. New tests added this pass:
 
 - `test_expired_refresh_token_is_rejected` — time-based expiry (not
   the pre-existing revoked_at/replay path), a real end-to-end
@@ -1615,6 +1619,11 @@ already correct by the re-audit above.
   — same naive-datetime scenario, but expired: proves the fix doesn't
   just avoid crashing, it still compares correctly (an expired naive
   timestamp is still rejected, not silently treated as valid forever).
+- `test_two_access_tokens_minted_in_the_same_second_are_still_distinct`
+  — added after the second CI pass (see below); regression test for
+  the `jti`-nonce fix.
+- `test_jwt_does_not_contain_username_or_password` (pre-existing)
+  updated to expect `{"sub", "exp", "jti"}` instead of `{"sub", "exp"}`.
 
 `.github/workflows/tests.yml`'s existing infra-integration step
 "Acceptance — cookie-based refresh-token rotation, replay rejection,
@@ -1630,6 +1639,69 @@ and logout" was extended with:
   using the access token that `/refresh` just issued — proving the
   rotated token actually works for a live request, not just that
   `/refresh` returned 200.
+
+### Second CI pass — two additional bugs found
+
+The first fix commit (`d727155`, datetime-only) was pushed and its CI
+run (https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34188243042)
+was actually read, not assumed green. The original `TypeError` was
+gone (`auth-service` went from 40 passed/4 failed to 44 passed/3
+failed), but two DIFFERENT, previously-masked bugs surfaced — both
+real, both pre-existing in `72a9af5`, neither caused by the datetime
+fix itself:
+
+1. **Refresh cookie `Path` never matches this service's own routes.**
+   `auth-service` unit tests: `test_refresh_rotates_token_and_issues_new_access_token`
+   and `test_replay_of_a_rotated_refresh_token_is_rejected` both failed
+   with `assert 401 == 200` — the very first `POST /refresh` right
+   after login was rejected as if no cookie had been sent at all.
+   Root cause: `REFRESH_COOKIE_PATH` was `"/api/auth"`, on the
+   documented theory that a browser matches cookie `Path` against the
+   URL it actually requested (true) and that URL is always
+   `/api/auth/*` (also true, confirmed — the frontend only ever calls
+   `API_BASE + '/auth/...'`). What that reasoning missed: `Path`
+   matching is enforced entirely client-side (by whatever HTTP client
+   holds the cookie jar — a real browser, or httpx's `TestClient`,
+   which is what this task's own real, non-mocked test suite uses),
+   not by the server, and it matches against whatever path is actually
+   requested of THAT client — and `auth-service`'s own routes are
+   mounted at bare paths (`/login`, `/refresh`, `/logout`, no
+   `/api/auth` prefix inside the container — see `main.py`). A test (or
+   any other direct, non-Nginx caller) hitting `/refresh` directly
+   never satisfies `Path=/api/auth`, so the cookie is silently never
+   attached. This is exactly why "verify end-to-end, don't just
+   inspect the code" matters: the design comment was internally
+   consistent and plausible, and was wrong regardless. Fixed by
+   scoping the cookie to `Path=/` — this app is single-origin
+   end-to-end, HttpOnly is what actually keeps the cookie out of
+   JavaScript, and every other endpoint simply never reads a cookie it
+   doesn't look for, so nothing meaningful is lost.
+2. **Two access tokens minted in the same wall-clock second are
+   byte-for-byte identical.** The NEW `infra-integration` end-to-end
+   check (real curl calls, fast enough to land login+refresh in the
+   same second) caught: `first refresh -> 200` (succeeded!) but
+   `FAIL: refresh did not issue a new access token`. Root cause: a JWT
+   is a deterministic function of its payload; `exp` only has
+   1-second resolution; `sub` is unchanged across a refresh for the
+   same user — so two tokens minted for the same user within the same
+   second are literally the same string. Not a security hole on its
+   own (both tokens are equally valid for the same short window
+   either way), but it defeats the expectation that a refresh actually
+   mints a new credential, and is exactly the kind of thing "do not
+   silently extend an expired access token" implicitly assumes doesn't
+   happen by coincidence. Fixed by adding a random `jti` (JWT ID)
+   nonce to every access token's payload
+   (`services/auth-service/app/core/jwt_utils.py`) — not an identity/
+   PII claim, purely a per-token uniqueness guarantee independent of
+   timing. `test_jwt_does_not_contain_username_or_password` was
+   updated to expect `{"sub", "exp", "jti"}` (still asserting no
+   username/password ever appears — its actual security intent,
+   unchanged); a new
+   `test_two_access_tokens_minted_in_the_same_second_are_still_distinct`
+   test directly reproduces and guards against the exact scenario.
+
+Both fixes, plus their tests, were pushed in a follow-up commit; see
+"Exact results" below for that run's evidence.
 
 ### Exact results
 

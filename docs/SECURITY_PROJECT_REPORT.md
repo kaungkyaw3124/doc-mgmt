@@ -267,14 +267,20 @@ pass began fixing it.
 
 ### Exact files changed (this pass)
 
-- `services/auth-service/app/core/refresh_tokens.py`
+- `services/auth-service/app/core/refresh_tokens.py` (datetime fix)
+- `services/auth-service/app/routers/auth.py` (cookie `Path` fix — see
+  "Bugs/failures encountered")
+- `services/auth-service/app/core/jwt_utils.py` (`jti` nonce fix — see
+  "Bugs/failures encountered")
 - `services/auth-service/tests/test_refresh_tokens.py`
 - `.github/workflows/tests.yml`
 - `docs/SECURITY_HARDENING_LOG.md`
 - `docs/SECURITY_PROJECT_REPORT.md` (this file)
 
-No other file needed changes — see "Re-audit" below for what was
-checked and found already correct.
+The initial re-audit (before any CI run) claimed `routers/auth.py` and
+`jwt_utils.py` needed no changes — that claim turned out to be wrong,
+caught only by actually pushing and reading the resulting CI failures
+rather than trusting the read-through. See "Bugs/failures encountered".
 
 ### JWT/session architecture after the fix
 
@@ -286,14 +292,23 @@ checked and found already correct.
 - **Refresh token**: a cryptographically random value
   (`secrets.token_urlsafe(32)`), stored server-side only as a SHA-256
   hash (`RefreshToken.token_hash`), delivered to the browser solely as
-  an `HttpOnly` cookie scoped to `path=/api/auth` — never reachable
-  from JavaScript, never in a JSON response body.
+  an `HttpOnly` cookie scoped to `path=/` — never reachable from
+  JavaScript, never in a JSON response body. (`path` changed from
+  `/api/auth` to `/` this pass — see "Bugs/failures encountered": the
+  original scoping assumed the cookie's Path would always be matched
+  against a URL of the form `/api/auth/*`, true only for browser
+  traffic through Nginx's rewrite, not for a direct caller hitting
+  this service's own bare route paths.)
 - **Datetime handling** (this pass's fix): every write in
   `refresh_tokens.py` uses `datetime.now(timezone.utc)`; every
   comparison normalizes through a new `_aware()` helper that treats a
   naive value as UTC and converts any other-offset aware value to UTC
   before comparing — robust regardless of what a given DB driver hands
   back, instead of assuming one or the other.
+- **Access-token uniqueness**: every access token now carries a random
+  `jti` nonce (`jwt_utils.py`), so two tokens minted for the same user
+  within the same wall-clock second are still distinct strings — see
+  "Bugs/failures encountered".
 
 ### Refresh-token rotation/revocation design
 
@@ -337,18 +352,23 @@ this pass: a new unit test forces `ENVIRONMENT=production` and asserts
 `Secure` is present; the CI infra-integration check (real HTTP, real
 dev-mode stack) asserts `Secure` is absent and `HttpOnly`/`SameSite=Lax`
 are present, reading the actual `Set-Cookie` response header rather
-than the cookie-jar file (which drops flags).
+than the cookie-jar file (which drops flags). `Path` widened from
+`/api/auth` to `/` this pass (see "Bugs/failures encountered") — not a
+weakening: HttpOnly is the actual JS-exposure boundary, Path only ever
+controlled which same-origin requests carried the cookie at all.
 
 ### Tests executed
 
-23 tests in `services/auth-service/tests/test_refresh_tokens.py` (16
-pre-existing + 7 new this pass — see `docs/SECURITY_HARDENING_LOG.md`
+24 tests in `services/auth-service/tests/test_refresh_tokens.py` (16
+pre-existing + 8 new this pass — see `docs/SECURITY_HARDENING_LOG.md`
 for the full list: expired-token rejection, cookie-Secure-in-production,
-access-token-lifetime bound, two direct `_aware()` unit tests, and two
+access-token-lifetime bound, two direct `_aware()` unit tests, two
 tests reproducing the exact original naive-datetime crash scenario
-directly). Plus the extended `infra-integration` CI step (invalid
-login, real `Set-Cookie` header attribute checks, rotated-token
-authenticated-request check).
+directly, and — added after the second CI pass — a JWT-uniqueness
+regression test, plus updating the pre-existing JWT-claims test for
+the new `jti` field). Plus the extended `infra-integration` CI step
+(invalid login, real `Set-Cookie` header attribute checks,
+rotated-token authenticated-request check).
 
 ### Exact test results
 
@@ -358,16 +378,44 @@ pass/fail per job pulled directly from GitHub Actions.)*
 
 ### Bugs/failures encountered
 
-The one known, pre-flagged datetime bug — see "Root cause" above. No
-other bugs found during the re-audit or while writing/running the new
-tests.
+Three bugs total, all pre-existing in `72a9af5`, all found and fixed
+this pass — the first was pre-flagged going in, the other two were
+only found by actually running CI after the first fix and reading the
+raw failures rather than assuming green:
+
+1. **The known datetime bug** — see "Known CI failure and root cause"
+   above.
+2. **Refresh cookie `Path=/api/auth` never matched this service's own
+   bare route paths** (`/login`/`/refresh`/`/logout`, no `/api/auth`
+   prefix inside the container) — so any caller hitting those routes
+   directly (this task's own real end-to-end unit tests included)
+   never got the cookie attached at all, failing with 401 on what
+   should have been a normal, successful refresh. Real browser/Nginx
+   traffic was unaffected (it always goes through `/api/auth/*`), but
+   the design assumption behind the original scoping didn't hold for
+   every legitimate caller. Fixed by scoping to `Path=/`.
+3. **Two access tokens minted within the same wall-clock second were
+   byte-for-byte identical** — a JWT is a deterministic function of its
+   payload, and `exp` only has 1-second resolution, so a fast
+   login-then-refresh (exactly what the new `infra-integration` curl
+   check does) could produce the exact same token string twice. Not a
+   security hole by itself, but defeats the expectation that a refresh
+   mints a genuinely new credential. Fixed by adding a random `jti`
+   nonce to every access token.
 
 ### Fixes applied
 
-See "JWT/session architecture" and "Root cause" above:
-`_aware()` normalization helper + switching every write in
-`refresh_tokens.py` from `datetime.utcnow()` to
-`datetime.now(timezone.utc)`.
+- `_aware()` normalization helper + switching every write in
+  `refresh_tokens.py` from `datetime.utcnow()` to
+  `datetime.now(timezone.utc)` (bug 1).
+- `REFRESH_COOKIE_PATH` changed from `/api/auth` to `/` in
+  `routers/auth.py` (bug 2).
+- Random `jti` claim added to every access token in `jwt_utils.py`;
+  `test_jwt_does_not_contain_username_or_password` updated to expect
+  `{"sub", "exp", "jti"}` (still asserting no username/password ever
+  appears); new
+  `test_two_access_tokens_minted_in_the_same_second_are_still_distinct`
+  test added (bug 3).
 
 ### Security verification
 

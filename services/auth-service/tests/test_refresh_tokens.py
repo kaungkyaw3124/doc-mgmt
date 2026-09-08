@@ -233,8 +233,27 @@ def test_jwt_does_not_contain_username_or_password():
 
     token = create_access_token(subject="00000000-0000-0000-0000-000000000000")
     payload = pyjwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    assert set(payload.keys()) == {"sub", "exp"}
+    # sub (the user's immutable UUID) + exp (expiry) + jti (a random
+    # per-token nonce, not an identity claim — see jwt_utils.py) is the
+    # complete, intentional claim set. Nothing else — in particular
+    # never a username, password, or password hash — belongs in here.
+    assert set(payload.keys()) == {"sub", "exp", "jti"}
     assert payload["sub"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_two_access_tokens_minted_in_the_same_second_are_still_distinct():
+    """Regression for a real bug this task's own end-to-end test caught:
+    a JWT is a deterministic function of its payload, and `exp` only has
+    1-second resolution — so two tokens for the same subject issued
+    within the same wall-clock second used to come out byte-for-byte
+    identical (e.g. a refresh landing in the same second as the login it
+    followed), defeating the expectation that a refresh mints a new
+    credential. The jti nonce fixes this regardless of timing."""
+    from app.core.jwt_utils import create_access_token
+
+    token_1 = create_access_token(subject="00000000-0000-0000-0000-000000000000")
+    token_2 = create_access_token(subject="00000000-0000-0000-0000-000000000000")
+    assert token_1 != token_2
 
 
 def test_expired_refresh_token_is_rejected(client, make_user, db):
