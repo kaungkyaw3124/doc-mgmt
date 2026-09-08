@@ -5,15 +5,46 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.db import get_db
 from app.core.jwt_utils import create_access_token, decode_access_token
 from app.core.security import hash_password, verify_password
 from app.core.deps import require_superuser
 from app.core.authz import user_has_service_access, get_user_allowed_project_ids, get_user_access_level
 from app.core.rate_limit import RateLimitExceeded, check_login_rate_limit, get_client_ip, record_failed_attempt
+from app.core.refresh_tokens import issue_refresh_token, revoke_refresh_token, rotate_refresh_token
 from app import models
 
 router = APIRouter(tags=["auth"])
+
+REFRESH_COOKIE_NAME = "refresh_token"
+# Scoped to /api/auth so it's only ever sent to /login, /refresh, /logout —
+# not attached to every unrelated API call. Nginx rewrites the incoming
+# /api/auth/* path before proxying, but the cookie's Path is matched by
+# the browser against the URL it actually requested (i.e. before Nginx's
+# internal rewrite), so "/api/auth" is correct here even though this
+# service itself is mounted at "/".
+REFRESH_COOKIE_PATH = "/api/auth"
+
+
+def _set_refresh_cookie(response: Response, plaintext: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=plaintext,
+        max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
+        path=REFRESH_COOKIE_PATH,
+        httponly=True,
+        samesite="lax",
+        # Secure requires HTTPS — only turned on in production, where TLS
+        # termination is assumed (see docs/deployment.md). Forcing it on
+        # in dev (plain http://localhost:8080) would make the browser
+        # silently refuse to ever send the cookie back.
+        secure=(settings.environment == "production"),
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
 
 
 class LoginRequest(BaseModel):
@@ -93,7 +124,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     client_ip = get_client_ip(request)
 
     try:
@@ -124,7 +155,47 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=403, detail="Your account has been disabled. Contact an administrator.")
 
     token = create_access_token(subject=str(user.id))
+    refresh_plaintext = issue_refresh_token(db, user)
+    _set_refresh_cookie(response, refresh_plaintext)
     return TokenResponse(access_token=token)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """
+    Mints a new access token from the HttpOnly refresh cookie, rotating
+    the refresh token in the process (the presented one is revoked, a new
+    one takes its place in the cookie) — called by the frontend on page
+    load (silent re-auth) and transparently when an API call gets a 401
+    for an expired access token. 401 if the cookie is missing, expired,
+    already-used (replayed), or belongs to a since-disabled/un-approved
+    user.
+    """
+    presented = request.cookies.get(REFRESH_COOKIE_NAME)
+    result = rotate_refresh_token(db, presented)
+    if result is None:
+        _clear_refresh_cookie(response)
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+
+    user, new_plaintext = result
+    _set_refresh_cookie(response, new_plaintext)
+    token = create_access_token(subject=str(user.id))
+    return TokenResponse(access_token=token)
+
+
+@router.post("/logout", status_code=204)
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Revokes the current refresh token server-side (not just a client-
+    side "forget the token" — the cookie's token can no longer be used to
+    mint a new access token even if it leaks) and clears the cookie.
+    Always succeeds, even with no/an already-invalid cookie."""
+    presented = request.cookies.get(REFRESH_COOKIE_NAME)
+    revoke_refresh_token(db, presented)
+    _clear_refresh_cookie(response)
 
 
 @router.get("/verify")

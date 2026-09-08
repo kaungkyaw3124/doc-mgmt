@@ -89,6 +89,25 @@ http {
             proxy_set_header Host $host;
         }
 
+        # Public: authenticates via the HttpOnly refresh cookie itself
+        # (see auth-service/app/routers/auth.py), not a Bearer token, so
+        # no auth_request here — Nginx forwards the Cookie request header
+        # and the Set-Cookie response header by default, no extra
+        # directives needed for either.
+        location /api/auth/refresh {
+            rewrite ^/api/auth/refresh$ /refresh break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+        }
+
+        # Public: same reasoning as /refresh — authenticates via the
+        # refresh cookie, always succeeds either way.
+        location /api/auth/logout {
+            rewrite ^/api/auth/logout$ /logout break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+        }
+
         # auth-service's own admin endpoints (users/groups/roles/access) check
         # authorization themselves (superuser / group-admin logic), so these
         # just pass through — no auth_request needed at the gateway for them.

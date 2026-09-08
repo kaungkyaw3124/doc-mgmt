@@ -18,7 +18,18 @@ class Settings(BaseSettings):
 
     jwt_secret: str = "local_dev_jwt_secret_change_me"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60
+    # Short-lived on purpose — the browser never persists this token
+    # (kept in a JS variable only, not localStorage); a refresh token in
+    # an HttpOnly cookie (see refresh_token_expire_days below) transparently
+    # renews it, so a short access-token lifetime costs nothing in UX while
+    # capping how long a stolen-from-memory/XSS'd token stays useful.
+    jwt_expire_minutes: int = 15
+
+    # Refresh token lifetime — the HttpOnly/SameSite cookie set on login,
+    # used only to mint new access tokens via POST /refresh (see
+    # app/core/refresh_tokens.py). Each use rotates it (the old one is
+    # revoked), so a given refresh token is single-use.
+    refresh_token_expire_days: int = 14
 
     # Login rate limiting (see app/core/rate_limit.py). All windows are
     # sliding, backed by the shared `login_attempts` table in Postgres, so

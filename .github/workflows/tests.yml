@@ -301,6 +301,61 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — cookie-based refresh-token rotation, replay rejection, and logout
+        run: |
+          fail=0
+          jar=/tmp/cookies.txt
+          rm -f "$jar"
+
+          # Login sets the HttpOnly refresh cookie in the jar.
+          login_body=$(curl -s -c "$jar" -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}')
+          access_token_1=$(echo "$login_body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          grep -q refresh_token "$jar" || { echo "FAIL: no refresh_token cookie set by login"; fail=1; }
+
+          # A legitimate refresh (silent re-auth) works and rotates the token.
+          refresh1_code=$(curl -s -o /tmp/refresh1.json -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/refresh)
+          echo "first refresh -> $refresh1_code"
+          [ "$refresh1_code" = "200" ] || { echo "FAIL: legitimate refresh rejected"; cat /tmp/refresh1.json; fail=1; }
+          access_token_2=$(python3 -c 'import json; print(json.load(open("/tmp/refresh1.json"))["access_token"])')
+          [ "$access_token_1" != "$access_token_2" ] || { echo "FAIL: refresh did not issue a new access token"; fail=1; }
+
+          # Replay check: a separate login/cookie-jar so it doesn't interfere
+          # with $jar above. Capture the cookie right after login, rotate it
+          # once via a normal refresh, then re-present the ORIGINAL
+          # (now-rotated-away) cookie value and confirm it's rejected.
+          jar2=/tmp/cookies2.txt
+          rm -f "$jar2"
+          curl -s -c "$jar2" -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' > /dev/null
+          cp "$jar2" /tmp/cookies2_original.txt
+          curl -s -o /dev/null -b "$jar2" -c "$jar2" -X POST http://localhost:8080/api/auth/refresh
+          replay_code=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/cookies2_original.txt -X POST http://localhost:8080/api/auth/refresh)
+          echo "replay of rotated-away refresh token -> $replay_code"
+          [ "$replay_code" = "401" ] || { echo "FAIL: expected 401 replaying a rotated refresh token, got $replay_code"; fail=1; }
+
+          # Logout revokes the (still-current, un-replayed) session's refresh token.
+          logout_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/logout)
+          echo "logout -> $logout_code"
+          [ "$logout_code" = "204" ] || { echo "FAIL: expected 204 from logout, got $logout_code"; fail=1; }
+
+          after_logout_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -X POST http://localhost:8080/api/auth/refresh)
+          echo "refresh after logout -> $after_logout_code"
+          [ "$after_logout_code" = "401" ] || { echo "FAIL: expected 401 refreshing after logout, got $after_logout_code"; fail=1; }
+
+          # No refresh cookie at all -> rejected.
+          no_cookie_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/refresh)
+          echo "refresh with no cookie -> $no_cookie_code"
+          [ "$no_cookie_code" = "401" ] || { echo "FAIL: expected 401 with no cookie, got $no_cookie_code"; fail=1; }
+
+          # A fresh login still works end-to-end after all of the above.
+          relogin_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}')
+          echo "fresh login after logout -> $relogin_code"
+          [ "$relogin_code" = "200" ] || { echo "FAIL: a fresh login after logout should still work"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

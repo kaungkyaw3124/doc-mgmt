@@ -9,6 +9,7 @@ from app.core.db import get_db
 from app.core.deps import get_current_user, require_superuser
 from app.core.security import hash_password
 from app.core.authz import can_manage_group, is_member_of, user_has_service_access
+from app.core.refresh_tokens import revoke_all_user_tokens
 from app import models
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -272,6 +273,7 @@ def edit_user(
             raise HTTPException(status_code=409, detail="that username is already taken")
         target.username = payload.username
 
+    password_changed = bool(payload.password)
     if payload.password:
         target.hashed_password = hash_password(payload.password)
 
@@ -280,6 +282,15 @@ def edit_user(
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="that username is already taken")
+
+    if password_changed:
+        # A password change invalidates any outstanding refresh token —
+        # whoever set the new password is the only one who should be able
+        # to mint fresh access tokens from here on (e.g. an admin
+        # resetting a compromised account's password shouldn't leave the
+        # old session silently refreshable).
+        revoke_all_user_tokens(db, target.id)
+
     return {"id": str(target.id), "username": target.username}
 
 
@@ -369,6 +380,14 @@ def set_user_active(
 
     target.is_active = payload.is_active
     db.commit()
+
+    if not target.is_active:
+        # /verify already blocks a disabled user's very next API request
+        # (checked fresh from the DB every time), but their refresh
+        # cookie — if they have one — could otherwise still mint new
+        # access tokens. Revoke it too, so disabling truly cuts them off.
+        revoke_all_user_tokens(db, target.id)
+
     return {"id": str(target.id), "is_active": target.is_active}
 
 

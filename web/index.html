@@ -1529,7 +1529,13 @@ function startLoad(key) {
 function isStaleLoad(key, mySeq) {
   return mySeq !== loadSeq[key];
 }
-let token = localStorage.getItem('ledger_token') || null;
+// Access token lives ONLY in this in-memory variable — never persisted to
+// localStorage — so it disappears on page reload/close rather than sitting
+// around indefinitely for an XSS payload to read at any later time. A page
+// load re-establishes it (if there's a still-valid session) via the
+// HttpOnly refresh cookie instead — see bootstrap() below.
+let token = null;
+let refreshPromise = null;
 
 // ---------- helpers ----------
 function fmtMoney(v) {
@@ -1585,11 +1591,42 @@ function formatApiErrorDetail(detail) {
   return null;
 }
 
-async function apiFetch(path, options = {}) {
+// Silently mints a new access token from the HttpOnly refresh cookie.
+// Concurrent callers share one in-flight request (not one each) so a
+// burst of 401s from several parallel API calls doesn't rotate the
+// refresh token multiple times and invalidate itself mid-burst.
+function refreshAccessToken() {
+  if (!refreshPromise) {
+    refreshPromise = fetch(API_BASE + '/auth/refresh', { method: 'POST', credentials: 'include' })
+      .then(async res => {
+        if (!res.ok) throw new Error('refresh failed');
+        const data = await res.json();
+        token = data.access_token;
+        return token;
+      })
+      .finally(() => { refreshPromise = null; });
+  }
+  return refreshPromise;
+}
+
+async function apiFetch(path, options = {}, _retriedAfterRefresh = false) {
   const headers = Object.assign({}, options.headers, { 'Authorization': 'Bearer ' + token });
   if (options.body) headers['Content-Type'] = 'application/json';
   const res = await fetch(API_BASE + path, Object.assign({}, options, { headers }));
   if (res.status === 401) {
+    // 401 here means the access token itself is invalid/expired (Nginx's
+    // auth_request returns 403, not 401, for a valid-token-but-no-access
+    // case — see infra/nginx/nginx.conf.template) — so it's always safe
+    // to try a silent refresh-and-retry once before giving up.
+    if (!_retriedAfterRefresh) {
+      try {
+        await refreshAccessToken();
+        return apiFetch(path, options, true);
+      } catch (e) {
+        doLogout();
+        throw new Error('Session expired — please sign in again.');
+      }
+    }
     doLogout();
     throw new Error('Session expired — please sign in again.');
   }
@@ -1620,6 +1657,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   try {
     const res = await fetch(API_BASE + '/auth/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
@@ -1628,8 +1666,9 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
       throw new Error(body.detail || 'Invalid username or password.');
     }
     const data = await res.json();
+    // Kept in memory only — the server also set an HttpOnly refresh
+    // cookie, which is what survives a page reload, not this variable.
     token = data.access_token;
-    localStorage.setItem('ledger_token', token);
     enterApp();
   } catch (err) {
     document.getElementById('login-error').innerHTML =
@@ -1684,8 +1723,14 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
 document.getElementById('logout-btn').addEventListener('click', doLogout);
 
 function doLogout() {
+  // Best-effort server-side revocation of the refresh cookie — this is
+  // what makes logout actually invalidate the session (rather than just
+  // forgetting the access token client-side while it — and the refresh
+  // cookie — would otherwise still be perfectly valid). Fire-and-forget:
+  // the UI logs out regardless of whether this succeeds.
+  fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
   token = null;
-  localStorage.removeItem('ledger_token');
+  localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('login-username').value = '';
@@ -5222,11 +5267,19 @@ async function loadPublicGroups() {
 }
 loadPublicGroups();
 
-if (token) {
-  enterApp();
-} else {
-  document.getElementById('login-screen').style.display = 'flex';
-}
+// No token lives in localStorage anymore, so there's nothing to check
+// synchronously on load — instead, try a silent refresh against the
+// HttpOnly cookie (present only if there's a still-valid prior session).
+// Success re-enters the app exactly as before; failure (no cookie, or an
+// expired/revoked one) just leaves the login screen showing.
+(async function bootstrap() {
+  try {
+    await refreshAccessToken();
+    enterApp();
+  } catch (e) {
+    document.getElementById('login-screen').style.display = 'flex';
+  }
+})();
 </script>
 </body>
 </html>
