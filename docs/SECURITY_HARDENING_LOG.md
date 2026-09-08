@@ -1375,9 +1375,59 @@ bug Task 5 exists to fix, and is out of this task's scope.
 
 ### Verification
 
-*(Filled in once this commit's CI run completes — see the FINAL REPORT
-for this task, which quotes the actual run ID, job IDs, and pass/fail
-per job pulled directly from GitHub Actions.)*
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34187405746
+(commit `e49d7f1`). Per-job results, pulled directly via
+`mcp__github__get_job_logs` with `return_content: true` (raw log
+content, not the `conclusion` field alone):
+
+- `auth-service` (job `101938407688`): **FAILED** — pre-existing,
+  unrelated to this task. Root cause confirmed from the raw traceback:
+  `TypeError: can't compare offset-naive and offset-aware datetimes` at
+  `app/core/refresh_tokens.py:56` (`rotate_refresh_token`), a Task 6
+  bug in code this task never touched. Confirmed pre-existing by
+  checking the immediately prior run
+  (https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34186170015,
+  commit `72a9af5`, Task 6's own commit): the identical failure, same
+  step, same traceback, already present before this task's commit.
+- `catalogue-service` (job `101938407802`): **PASSED**.
+- `document-service` (job `101938407822`): **PASSED**.
+- `search-service` (job `101938407778`): **PASSED**.
+- `infra-integration` (job `101938407783`): step 12, "Acceptance —
+  uploaded file Content-Type is derived server-side, not trusted from
+  the client" (this task's own test) — **PASSED**, all 9 scenarios,
+  real output quoted directly from the raw log:
+  ```
+  HTML content named evil.pdf -> 400
+  {"detail":"file content does not match its extension"}
+  file-url after rejected upload -> 404
+  garbage content named evil.png -> 400
+  real JPEG bytes named .png -> 400
+  ELF binary named evil.jpg -> 400
+  path-traversal filename upload -> {"image_object_key":"PRD-0005/passwd.pdf"}
+  unicode filename upload -> 200
+  double-extension (invoice.pdf.exe) upload -> 200
+  double-extension served -> Content-Type: application/octet-stream
+  svg served -> Content-Disposition: attachment
+  legitimate PDF upload -> 200
+  legitimate PDF served -> 200 / Content-Type: application/pdf
+  ```
+  Step 13 ("Acceptance — cookie-based refresh-token rotation...", a
+  Task 6 test) then **FAILED** in the same job, for the identical
+  pre-existing `refresh_tokens.py:56` reason as the `auth-service`
+  unit-test failure above — this step had previously been silently
+  `skipped` (never even run) in the prior run, because step 12 itself
+  used to fail first and abort the job under `bash -e`. Fixing step 12
+  is what let step 13 run at all and surface Task 6's real, pre-
+  existing bug — not something this task's changes caused.
+
+**Net result: Task 5's own acceptance criteria are fully met and
+independently verified against a live stack. The two remaining CI
+failures (`auth-service` unit tests, `infra-integration` step 13) are
+a single pre-existing Task 6 bug, confirmed unrelated to any file this
+task changed, and out of scope for this pass per the current task
+scoping ("Task 5 is now the ONLY task to work on"). It is flagged here
+rather than silently left unmentioned — see `docs/
+SECURITY_PROJECT_REPORT.md`'s Task 6 row and "Next task" section.**
 
 ### Notes / scope boundaries
 

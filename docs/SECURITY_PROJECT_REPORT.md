@@ -13,8 +13,8 @@ not replace the log.
 | 2 | Remove insecure default secrets | PASS | `59d09ce` |
 | 3 | Remove host exposure of internal datastores | PASS | `02957ee` (fix: `db0c219`) |
 | 4 | Authenticate gateway trust headers | PASS | `3d3f014` (fix: `12b1da0`) |
-| 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix — see below) |
-| 6 | JWT storage and rotation | implemented, CI not yet re-verified | `72a9af5` |
+| 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix: `e49d7f1`) |
+| 6 | JWT storage and rotation | implemented, **known CI-failing bug** | `72a9af5` (see below) |
 | 7 | CORS policy | not started | - |
 | 8 | Security headers / Nginx hardening | not started | - |
 
@@ -205,19 +205,39 @@ declared type. Any other extension is accepted and stored as an opaque
 
 ### Commit / push / branch status
 
-Committed on `security/auth-hardening` as a single dedicated commit for
-this Task 5 pass (code + tests + CI workflow + both docs together), and
+Committed on `security/auth-hardening` as a single dedicated commit,
+`e49d7f1` (code + tests + CI workflow + both docs together), and
 pushed to `origin/security/auth-hardening`. No PR opened, no merge to
-`main` — per this project's standing branch policy. The exact commit
-SHA and the CI run/job IDs pulled as evidence are in the chat FINAL
-REPORT for this task (not duplicated here to avoid this file going
-stale the moment a later commit lands on the branch).
+`main` — per this project's standing branch policy.
+
+CI run for `e49d7f1`: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34187405746.
+Task 5's own acceptance test (`infra-integration` job `101938407783`,
+step "Acceptance — uploaded file Content-Type is derived server-side,
+not trusted from the client") **PASSED**, all 9 scenarios, verified
+against the raw log content (not just the green checkmark) — see the
+full quoted output in `docs/SECURITY_HARDENING_LOG.md`'s Task 5
+"Verification" section. `catalogue-service`, `document-service`, and
+`search-service` unit-test jobs all **PASSED**.
+
+**Known, pre-existing, out-of-scope failure**: the `auth-service`
+unit-test job and `infra-integration` step 13 (the Task 6 refresh-
+token test) both **FAILED** on this same run — root-caused to
+`TypeError: can't compare offset-naive and offset-aware datetimes` at
+`services/auth-service/app/core/refresh_tokens.py:56`. This is a Task
+6 bug: confirmed already present, byte-for-byte identical traceback,
+on the immediately prior run for commit `72a9af5` (Task 6's own
+commit, before this Task 5 pass touched anything) — see
+https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34186170015.
+Not fixed in this pass per the explicit current scope ("Task 5 is now
+the ONLY task to work on"); flagged here rather than left silent.
 
 ### Next task
 
 Per the current scope instruction, Task 5 was the only task worked on
-this pass. Task 6 (JWT storage and rotation) is implemented
-(`72a9af5`) but its CI result has not yet been re-verified in this
-pass — that is the next task once directed to resume the broader
-chain, followed by Task 7 (CORS policy), Task 8 (security headers /
-Nginx hardening), and the final full security audit.
+this pass and is now genuinely PASS, independently verified. Task 6
+(JWT storage and rotation, `72a9af5`) has a known, root-caused,
+currently-failing bug in `refresh_tokens.py`'s expiry comparison (naive
+vs. aware `datetime`) — that is the next task once directed to resume
+the broader chain: fix `refresh_tokens.py`, re-verify Task 6's CI, then
+continue to Task 7 (CORS policy), Task 8 (security headers / Nginx
+hardening), and the final full security audit.
