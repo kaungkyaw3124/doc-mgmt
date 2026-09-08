@@ -7,7 +7,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 1 | Login rate limiting | PASS | bc3610f |
 | 2 | Remove insecure default secrets | PASS | 59d09ce |
 | 3 | Remove host exposure of internal datastores | PASS | 02957ee (fix: db0c219) |
-| 4 | Authenticate gateway trust headers | NOT STARTED | - |
+| 4 | Authenticate gateway trust headers | PASS | 3d3f014 (fix: 12b1da0) |
 | 5 | Secure uploaded content type | NOT STARTED | - |
 | 6 | JWT storage and rotation | NOT STARTED | - |
 | 7 | CORS policy | NOT STARTED | - |
@@ -789,3 +789,367 @@ documentation work and this pass is scoped to Task 3 only.
 **Conclusion: Task 3 genuinely PASSES all acceptance criteria**, on
 fresh, independent, evidence-based re-verification — not merely
 because the earlier entry and commit history said so.
+
+---
+
+## Task 4 — Authenticate Gateway Trust Headers
+
+**Date:** 2026-09-07 11:06 (implementation) / 2026-09-08 03:36 (fix + verified PASS)
+
+**Status:** PASS
+
+### Goal
+
+`document-service`, `catalogue-service`, `search-service` trust caller-
+supplied headers (`X-Allowed-Projects`, `X-Access-Level`, `X-Username`,
+`X-Has-Audit-Log`, `X-Has-Category-Access`) as already-resolved
+authorization decisions, with no independent check that the request
+actually came through Nginx's `auth_request` flow. Ensure a client
+cannot manufacture these headers directly and grant itself
+unauthorized access.
+
+### Acceptance Criteria
+
+- [x] Header spoofing cannot escalate privileges
+- [x] Legitimate gateway requests continue working
+- [x] Tampered headers are rejected
+- [x] Missing gateway authentication is rejected
+- [x] No browser-visible shared secret
+- [x] Production rejects an insecure/default/missing shared secret
+- [x] Nginx overwrites (not just adds to) client-supplied copies of
+      every trusted header, not only the ones each route currently reads
+- [x] Tests pass, including security regression tests
+- [ ] **Partial/incomplete**: full RBAC regression across every user
+      type (normal user, group member, group admin, disabled user/
+      group/role, project-restricted user) was **not** independently
+      re-exercised end-to-end for this task — see "Verification" and
+      "Notes" below for why this is a reasoned partial pass, not a gap
+      papered over.
+
+### Initial State
+
+`services/{document,catalogue,search}-service/app/routers/*.py` read
+these headers via FastAPI `Header(default=None, ...)` params with no
+verification of their origin (`docs/known-issues.md` finding #1,
+`docs/decisions.md` #7). Task 3 closed host access to these services,
+but anything else reaching them on the Docker network — a compromised
+sibling container, a future topology change, or (as this task itself
+found) a location in Nginx's own config that forgot to override a
+header a route later started reading — could still set
+`X-Allowed-Projects: ALL` / `X-Access-Level: admin` directly and gain
+unauthorized access.
+
+### End-to-end flow understood before implementing
+
+```
+Browser --Authorization: Bearer <token>--> Nginx
+Nginx --auth_request /_verify (internal)--> auth-service /verify
+auth-service verifies the JWT + DB-backed RBAC, returns 200 with
+  X-Allowed-Projects / X-Access-Level / X-Username / X-Has-Audit-Log /
+  X-Has-Category-Access as RESPONSE headers to Nginx (never seen by
+  the browser)
+Nginx (auth_request_set) captures those into $variables, then
+  proxy_set_header's them onto the request it forwards to
+  document-service / catalogue-service / search-service
+Downstream service routers read those headers via FastAPI Header(...)
+  and use them directly for authorization decisions — with, before
+  this task, no check that the request's headers actually came from
+  Nginx's auth_request step rather than being set by the caller itself.
+```
+Separately, `catalogue-service`/`search-service` call
+`document-service`'s `GET /documents/visible-product-ids` directly
+(`app/core/document_client.py`), bypassing Nginx entirely — a second,
+independent path into a header-trusting service that also needed
+covering.
+
+### Exhaustive header search performed
+
+`grep -rn` across every `.py`/`.conf`/`.template`/`.html`/`.yml` file in
+`services/`, `infra/`, `web/` for: `X-Access-Level`, `X-Allowed-Projects`,
+`X-User\b`, `X-User-ID`, `X-Username`, `X-Auth`, `X-Has-Audit-Log`,
+`X-Has-Category-Access`, `X-Internal-Secret`, `X-Service`. Result: the
+complete set of security-sensitive gateway-trust headers in this
+codebase is exactly `X-Allowed-Projects`, `X-Access-Level`,
+`X-Username`, `X-Has-Audit-Log`, `X-Has-Category-Access`. No
+`X-User`/`X-User-ID`/`X-Auth` header exists anywhere. `X-Service` is
+also nginx-injected but is not client-forgeable in a way that matters:
+its value comes from a per-location `set $service_name "...";` Nginx
+directive (a compile-time constant per location block, never read from
+any client header), and even a forged value only changes which
+service-access check `auth-service`'s `/verify` performs against a
+token the caller must already legitimately hold — it can't grant a
+capability the token's own user doesn't have.
+
+Also checked whether `auth-service` itself trusts any of these headers
+as input (it doesn't — `admin.py` and `auth.py` only ever read
+`Authorization`, `X-Service`, and login-rate-limiting's `X-Real-IP`/
+`X-Forwarded-For`; every authorization decision in `auth-service` comes
+from the Bearer token + a DB lookup, never from a caller-supplied trust
+header). So `auth-service` was correctly out of scope for this fix — it
+produces these headers, it doesn't consume them.
+
+### Changes Made
+
+**Original implementation (commit `3d3f014`):**
+- `services/{catalogue,document,search}-service/app/core/gateway_auth.py`
+  (new, identical file duplicated per service — matches the existing
+  `secrets_check.py` duplication pattern) — an ASGI middleware
+  (`verify_gateway_secret`) that rejects (401) any request lacking a
+  correct `X-Internal-Secret` header, checked via `hmac.compare_digest`
+  (constant-time, avoids a timing side-channel on the comparison),
+  before the request ever reaches a router. `/health` is exempt (no
+  Nginx route to it, used only for container healthchecks).
+- `services/{catalogue,document,search}-service/app/core/config.py` —
+  new `internal_shared_secret` setting (default
+  `local_dev_internal_secret_change_me`, matching the container-default
+  pattern established in Task 2).
+- `services/{catalogue,document,search}-service/app/main.py` —
+  registers the middleware (`app.middleware("http")(verify_gateway_secret)`)
+  and adds `INTERNAL_SHARED_SECRET` to `_secret_problems()`'s
+  production fail-fast check.
+- `services/catalogue-service/app/core/document_client.py`,
+  `services/search-service/app/core/document_client.py`,
+  `services/document-service/app/core/catalogue_client.py` — every
+  direct inter-service HTTP call (these bypass Nginx entirely) now
+  also sends `X-Internal-Secret`.
+- `infra/nginx/nginx.conf` renamed to `infra/nginx/nginx.conf.template`
+  — a real config Nginx cannot read directly. `infra/docker-compose.yml`'s
+  `nginx` service now renders it via `envsubst` at container start
+  (`entrypoint: envsubst '$INTERNAL_SHARED_SECRET' < ...template >
+  nginx.conf && exec nginx ...`), substituting **only** that one
+  variable name — chosen explicitly over the image's automatic
+  template-directory mechanism (which substitutes *every* environment
+  variable name found in the file) specifically because Nginx's own
+  `$host`/`$uri`/`$upstream_http_...` variables in the same file must
+  not be touched. Verified locally (this sandbox has no `envsubst`
+  binary — see the environment note at the top of this log) by
+  simulating the exact restricted substitution in Python and confirming
+  occurrence counts and that every `$host` in the file survived
+  unchanged.
+- 7 of the file's `location` blocks (proxying to `document-service`/
+  `catalogue-service`/`search-service`) gained
+  `proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";`.
+- `services/{catalogue,document,search}-service/tests/test_gateway_auth.py`
+  (new) — missing secret, wrong secret, tampered secret on an otherwise-
+  legitimate request, spoofed trust headers with no secret, `/health`
+  exempt, correct secret clears the middleware (aimed at a nonexistent
+  route to prove it reached FastAPI's own 404, not the gateway's 401) —
+  all DB-independent, since a 401 short-circuits before any router/DB
+  access.
+- `.github/workflows/tests.yml` — two new `infra-integration` steps:
+  a real login + authenticated `/api/products` request through Nginx
+  still succeeds; a direct-to-service call (via an ephemeral
+  `curlimages/curl` container on the compose network) with spoofed
+  trust headers and no/wrong secret is rejected (401), and the same
+  call with the correct secret is not.
+
+**Fix + hardening pass (commit `12b1da0`, after this task's own rigorous
+re-review, done BEFORE trusting the original "complete" report):**
+
+1. **CI was actually failing for `3d3f014`** — never verified before
+   the original implementation was reported. Root cause:
+   `test_valid_production_configuration_has_no_problems` in all three
+   `catalogue`/`document`/`search`-service `test_secrets_check.py`
+   files failed with `['INTERNAL_SHARED_SECRET'] != []`, because
+   `_secret_problems()` was extended to check the new secret but the
+   tests' `_valid_production_settings()`/`restore_settings` helpers
+   were never updated to set/restore it. Fixed by adding
+   `internal_shared_secret` to both in all three files, plus new
+   `test_default_internal_shared_secret_fails_in_production` /
+   `test_missing_internal_shared_secret_fails_in_production` tests
+   (this task's own acceptance criterion — "production must reject
+   insecure/default values" — explicitly requires testing this, which
+   the original pass never did).
+2. **`nginx.conf.template` only overrode the specific trust headers
+   each route's CURRENT handler code happens to read** (e.g.
+   `/api/customers` only set `X-Access-Level`, since `customers.py`
+   only declares that one `Header(...)` param). Nginx forwards
+   arbitrary client request headers to the upstream by default unless a
+   location explicitly overrides that header name — verified by reading
+   Nginx's own documented `proxy_set_header`/`proxy_pass` semantics, not
+   assumed. Cross-checking every router's declared `Header(...)` params
+   against what each location overrides showed **no currently
+   exploitable gap** (every handler's declared headers already matched),
+   but this was fragile: a future handler reading, say, `X-Username`
+   for audit logging on a route nobody remembered to update in Nginx
+   would silently reopen a forgery path. Fixed by having every
+   `document-service`/`catalogue-service` location explicitly set
+   *all* of that service's trust headers, blanking (`""`) any this
+   specific route has no `auth_request_set` value for — this no longer
+   depends on router code and Nginx config staying in sync by
+   convention.
+3. Added an `infra-integration` step proving Nginx's overwrite actually
+   wins over a client's own forged copy sent alongside legitimate auth
+   (see Test Results) — the original pass tested "no secret → rejected"
+   and "direct-to-service → rejected" but never tested "goes through
+   Nginx *with* a forged secret/header attached anyway."
+
+### Tests Performed
+
+Per-service unit tests (pure, DB-independent — a 401 from the
+middleware short-circuits before any router/DB access):
+```text
+cd services/{catalogue,document,search}-service
+pip install -r requirements-dev.txt && python -m pytest -v
+```
+Real end-to-end verification via the `infra-integration` CI job
+(builds and boots the actual `docker-compose.yml` stack — this sandbox
+has no Docker daemon, see the environment note at the top of this log):
+```text
+# legitimate request through Nginx
+curl -X POST http://localhost:8080/api/auth/login -d '{"username":"admin","password":"CHANGE_ME"}'
+curl http://localhost:8080/api/products -H "Authorization: Bearer $token"
+
+# Nginx overwrite proof: same request, WITH forged trust/secret headers attached
+curl http://localhost:8080/api/products -H "Authorization: Bearer $token" \
+  -H 'X-Internal-Secret: attacker-supplied-secret' -H 'X-Access-Level: superuser' \
+  -H 'X-Allowed-Projects: attacker-controlled'
+
+# direct-to-service, bypassing Nginx, from an ephemeral container on the compose network
+docker run --rm --network infra_default curlimages/curl ... \
+  -H 'X-Allowed-Projects: ALL' -H 'X-Access-Level: edit' http://catalogue-service:8000/products
+docker run --rm --network infra_default curlimages/curl ... \
+  -H 'X-Internal-Secret: wrong-secret' -H 'X-Allowed-Projects: ALL' http://catalogue-service:8000/products
+docker run --rm --network infra_default curlimages/curl ... \
+  -H 'X-Allowed-Projects: ALL' -H 'X-Access-Level: edit' -H 'X-Username: admin' http://document-service:8000/documents
+docker run --rm --network infra_default curlimages/curl ... \
+  -H 'X-Internal-Secret: local_dev_internal_secret_change_me' http://catalogue-service:8000/health
+```
+Runs: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34114896792
+(commit `3d3f014`, **FAILED** — 3 of 5 jobs red, see Bugs Found) and
+https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34184063018
+(commit `12b1da0`, **PASSED**, all 5 jobs, raw log content re-pulled
+and re-read directly, not just the stored conclusion field).
+
+### Test Iterations
+
+#### Attempt 1 (commit `3d3f014`) — FAIL, reported complete without checking CI
+
+```text
+FAILED tests/test_secrets_check.py::test_valid_production_configuration_has_no_problems
+AssertionError: assert ['INTERNAL_SHARED_SECRET'] == []
+```
+in `catalogue-service`, `document-service`, and `search-service`
+(`auth-service` and `infra-integration` were unaffected and passed).
+This was NOT caught before the task was originally reported as
+complete — a direct process failure, recorded here rather than
+smoothed over.
+
+#### Attempt 2 (commit `12b1da0`) — PASS
+
+All 5 jobs green. Raw log content re-pulled and confirmed:
+- `catalogue-service`: `14 passed, 4 warnings` (6 secrets-check +
+  2 new internal-secret-specific + 6 gateway_auth).
+- `infra-integration`: all prior steps still green, plus
+  `GET /api/products through Nginx with client-forged trust headers -> 200`
+  (Nginx's own headers won over the client's forged ones) and
+  `direct catalogue-service call, no secret, spoofed headers -> 401`,
+  `direct catalogue-service call, wrong secret -> 401`,
+  `direct document-service call, no secret, spoofed headers -> 401`,
+  `direct catalogue-service call, correct secret, /health -> 200`.
+
+### Bugs Found
+
+1. **CI-verification failure** (see Test Iterations #1): a broken test
+   fixture shipped as part of the original implementation and was
+   reported as "complete" without ever checking whether CI passed.
+   Fixed in `12b1da0`. This is the most important bug in this entry —
+   not because the underlying security fix was wrong, but because the
+   process of claiming completion without verifying tests actually ran
+   is exactly the failure mode this whole logging requirement exists to
+   catch.
+2. **Fragile (not exploitable, but incomplete) header-override
+   coverage** in the original `nginx.conf.template` (see Changes Made
+   #2). Not an active vulnerability at the time — reasoned + verified
+   via exhaustive cross-referencing of every router's declared headers
+   against every location's overrides — but hardened anyway per this
+   task's explicit acceptance criterion #5 ("the gateway must overwrite/
+   remove untrusted versions... do not assume this works merely because
+   it looks correct").
+
+### Verification
+
+- **Forged gateway header → rejected**: confirmed both at the unit
+  level (`test_spoofed_trust_headers_without_secret_cannot_escalate` in
+  each service) and at the real-network level (`infra-integration`:
+  `X-Allowed-Projects: ALL`/`X-Access-Level: edit` direct to
+  `catalogue-service`/`document-service` → `401`).
+- **Missing gateway authentication → rejected**:
+  `test_request_without_secret_is_rejected` (unit) +
+  `direct catalogue-service call, no secret... -> 401` (real network).
+- **Invalid/tampered gateway authentication → rejected**:
+  `test_request_with_wrong_secret_is_rejected` /
+  `test_tampered_secret_on_an_otherwise_legitimate_request_is_rejected`
+  (unit) + `direct catalogue-service call, wrong secret -> 401` (real
+  network).
+- **Valid gateway authentication → accepted**:
+  `test_request_with_correct_secret_passes_the_gateway_check` (unit) +
+  `direct catalogue-service call, correct secret, /health -> 200`
+  (real network).
+- **Legitimate Nginx-authenticated request → still works**: real login
+  as the seeded admin through Nginx, then `GET /api/products` with the
+  real token → `200`.
+- **Nginx overwrites, not just forwards, forged headers**: a real,
+  correctly-authenticated request through Nginx with `X-Internal-Secret`/
+  `X-Access-Level`/`X-Allowed-Projects` ALSO forged by the client still
+  returned `200` — proving Nginx's own `proxy_set_header` values
+  reached the backend, not the client's — verified over the real
+  network, not asserted from reading the config alone.
+- **Existing authorization rules still work — partial**: the superuser
+  (`admin`) login-and-access path was verified end-to-end for real.
+  Full regression across every user type (normal user, group member,
+  group admin, disabled user/group/role, project-restricted user) was
+  **not** independently re-exercised in this task. Reasoning for why
+  this is a defensible partial rather than a silent gap: (a)
+  `auth-service/app/core/authz.py` — the actual RBAC decision logic —
+  was not touched by this task at all; (b) the new gateway-secret check
+  is a request-origin check that runs uniformly for every request
+  regardless of which user or role it belongs to, so it cannot
+  structurally discriminate between user types — it either lets a
+  request from Nginx through to the existing (unmodified) RBAC logic,
+  or it doesn't, with no code path where a normal user is treated
+  differently from a superuser by this specific change. This is
+  reasoning from the diff, not a substitute for an actual multi-role
+  regression pass — that full matrix is explicitly deferred to the
+  Final Security Audit step called for after Task 8, where it belongs
+  once all tasks' cumulative changes can be tested together.
+
+### Security Impact
+
+Fixes a vulnerability (CWE-290, authentication bypass by spoofing —
+specifically, unauthenticated trust of forwarded headers). Closes the
+gap identified in `docs/known-issues.md` finding #1 and
+`docs/decisions.md` #7: `document-service`/`catalogue-service`/
+`search-service` can no longer be tricked into granting elevated
+project/service/category access merely by a caller setting
+`X-Allowed-Projects`/`X-Access-Level`/etc. directly, whether that caller
+reaches the service via a compromised sibling container, a future
+network-topology change, or any path other than Nginx's own
+`auth_request`-gated proxying. Combined with Task 3 (host access
+already closed) and Task 2 (the new secret gets the same
+production fail-fast treatment as every other credential), the
+authorization decision made once in `auth-service` can no longer be
+bypassed downstream by header forgery.
+
+### Commit
+
+```text
+3d3f014  security: authenticate gateway trust headers   (FAILED CI — not verified before reporting)
+12b1da0  fix: harden Task 4 gateway trust headers + repair broken test suite   (PASSED CI, verified)
+```
+
+### Final Result
+
+PASS, with one explicitly-flagged partial item (full multi-role
+authorization regression deferred to the Final Security Audit — see
+Verification above). No fabricated evidence: every claim above is
+backed by a specific, re-pulled CI log line or a specific test name.
+
+### Notes
+
+This task surfaced a real process failure (reporting completion without
+verifying CI) that the user caught by insisting on independent
+re-verification rather than accepting the prior summary. The fix here
+is not just the code change but the corrected process: every claim in
+this entry was checked against raw log content re-fetched in this same
+session, not against memory of what was expected to happen.
