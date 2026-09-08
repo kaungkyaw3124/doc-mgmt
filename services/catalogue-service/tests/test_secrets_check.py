@@ -21,6 +21,7 @@ def restore_settings():
         "minio_access_key": settings.minio_access_key,
         "minio_secret_key": settings.minio_secret_key,
         "database_url": settings.database_url,
+        "internal_shared_secret": settings.internal_shared_secret,
     }
     yield
     for key, value in original.items():
@@ -33,6 +34,21 @@ def _valid_production_settings():
     settings.minio_access_key = "a-real-unique-minio-access-key"
     settings.minio_secret_key = "a-real-unique-minio-secret-key"
     settings.database_url = "postgresql://docmgmt:S3cur3-Unique-Pw@postgres:5432/catalogue"
+    settings.internal_shared_secret = "a-real-unique-internal-secret-abc123"
+
+
+def test_default_internal_shared_secret_fails_in_production(restore_settings):
+    _valid_production_settings()
+    settings.internal_shared_secret = "local_dev_internal_secret_change_me"
+    with pytest.raises(RuntimeError, match="INTERNAL_SHARED_SECRET"):
+        enforce_production_secrets(settings.environment, main._secret_problems())
+
+
+def test_missing_internal_shared_secret_fails_in_production(restore_settings):
+    _valid_production_settings()
+    settings.internal_shared_secret = ""
+    with pytest.raises(RuntimeError, match="INTERNAL_SHARED_SECRET"):
+        enforce_production_secrets(settings.environment, main._secret_problems())
 
 
 def test_default_meili_key_fails_in_production(restore_settings):

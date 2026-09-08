@@ -176,6 +176,30 @@ jobs:
             exit 1
           fi
 
+      - name: Acceptance — Nginx overwrites client-supplied trust/secret headers, not just adds to them
+        run: |
+          # A client sending its OWN X-Internal-Secret and X-Access-Level
+          # through Nginx must not have either survive to document-service:
+          # proxy_set_header REPLACES the header Nginx forwards, so if this
+          # still returns 200 (not 401 from the gateway check, not
+          # elevated/broken behavior), that proves Nginx's real secret won,
+          # not the client's forged one — a client can't smuggle a header
+          # through by sending it alongside legitimate auth.
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          code=$(curl -s -o /tmp/spoofed.json -w '%{http_code}' http://localhost:8080/api/products \
+            -H "Authorization: Bearer $token" \
+            -H 'X-Internal-Secret: attacker-supplied-secret' \
+            -H 'X-Access-Level: superuser' \
+            -H 'X-Allowed-Projects: attacker-controlled')
+          echo "GET /api/products through Nginx with client-forged trust headers -> $code"
+          if [ "$code" != "200" ]; then
+            echo "FAIL: expected this to still succeed via Nginx's own overwritten headers (got $code) — Nginx may not be overwriting the client's forged headers"
+            cat /tmp/spoofed.json
+            exit 1
+          fi
+
       - name: Acceptance — header spoofing directly against a backend service (bypassing Nginx) is rejected
         run: |
           fail=0

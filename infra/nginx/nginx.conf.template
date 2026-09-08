@@ -108,6 +108,20 @@ http {
 
         # --- everything below requires a valid Bearer token AND service access ---
 
+        # NOTE on every document-service/catalogue-service location from
+        # here down: each one explicitly sets ALL of that service's trust
+        # headers — including ones THIS route's own handlers don't
+        # currently read — not just the ones it happens to need.
+        # proxy_set_header replaces whatever value nginx would otherwise
+        # forward (nginx forwards arbitrary client request headers
+        # upstream by default unless a location overrides that name), so
+        # a header this location has no auth_request_set value for is
+        # explicitly blanked (""), never left for a client-supplied copy
+        # to pass through. This is deliberately redundant with what each
+        # handler currently reads — it's what keeps a future handler
+        # change (e.g. a route starts reading X-Username for audit
+        # logging) from silently reopening a header-forgery gap just
+        # because nobody remembered to update Nginx too.
         location /api/documents {
             set $service_name "documents";
             auth_request /_verify;
@@ -145,6 +159,9 @@ http {
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Access-Level $access_level;
+            proxy_set_header X-Allowed-Projects "";
+            proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Username "";
         }
 
         location /api/companies {
@@ -156,6 +173,9 @@ http {
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Access-Level $access_level;
+            proxy_set_header X-Allowed-Projects "";
+            proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Username "";
         }
 
         location /api/projects {
@@ -169,6 +189,8 @@ http {
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Allowed-Projects $allowed_projects;
             proxy_set_header X-Access-Level $access_level;
+            proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Username "";
         }
 
         location /api/products {
@@ -193,6 +215,7 @@ http {
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Has-Category-Access $has_category_access;
+            proxy_set_header X-Allowed-Projects "";
         }
 
         location /api/search {

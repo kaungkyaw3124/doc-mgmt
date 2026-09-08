@@ -12,10 +12,27 @@ import app.main as main
 
 @pytest.fixture
 def restore_settings():
-    original = {"environment": settings.environment, "meili_master_key": settings.meili_master_key}
+    original = {
+        "environment": settings.environment,
+        "meili_master_key": settings.meili_master_key,
+        "internal_shared_secret": settings.internal_shared_secret,
+    }
     yield
     for key, value in original.items():
         setattr(settings, key, value)
+
+
+def _valid_production_settings():
+    settings.environment = "production"
+    settings.meili_master_key = "a-real-unique-meili-key-abc123"
+    settings.internal_shared_secret = "a-real-unique-internal-secret-abc123"
+
+
+def test_default_internal_shared_secret_fails_in_production(restore_settings):
+    _valid_production_settings()
+    settings.internal_shared_secret = "local_dev_internal_secret_change_me"
+    with pytest.raises(RuntimeError, match="INTERNAL_SHARED_SECRET"):
+        enforce_production_secrets(settings.environment, main._secret_problems())
 
 
 def test_default_meili_key_fails_in_production(restore_settings):
@@ -33,8 +50,7 @@ def test_missing_meili_key_fails_in_production(restore_settings):
 
 
 def test_valid_production_configuration_has_no_problems(restore_settings):
-    settings.environment = "production"
-    settings.meili_master_key = "a-real-unique-meili-key-abc123"
+    _valid_production_settings()
     assert main._secret_problems() == []
     enforce_production_secrets(settings.environment, main._secret_problems())  # must not raise
 
