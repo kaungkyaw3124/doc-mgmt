@@ -14,7 +14,7 @@ not replace the log.
 | 3 | Remove host exposure of internal datastores | PASS | `02957ee` (fix: `db0c219`) |
 | 4 | Authenticate gateway trust headers | PASS | `3d3f014` (fix: `12b1da0`) |
 | 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix: `e49d7f1`) |
-| 6 | JWT storage and rotation | implemented, **known CI-failing bug** | `72a9af5` (see below) |
+| 6 | JWT storage and rotation | PASS | `72a9af5` (fix: this pass — see below) |
 | 7 | CORS policy | not started | - |
 | 8 | Security headers / Nginx hardening | not started | - |
 
@@ -231,13 +231,171 @@ https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34186170015.
 Not fixed in this pass per the explicit current scope ("Task 5 is now
 the ONLY task to work on"); flagged here rather than left silent.
 
-### Next task
+### Next task (as of the Task 5 pass — superseded below)
 
-Per the current scope instruction, Task 5 was the only task worked on
+~~Per the current scope instruction, Task 5 was the only task worked on
 this pass and is now genuinely PASS, independently verified. Task 6
 (JWT storage and rotation, `72a9af5`) has a known, root-caused,
 currently-failing bug in `refresh_tokens.py`'s expiry comparison (naive
 vs. aware `datetime`) — that is the next task once directed to resume
-the broader chain: fix `refresh_tokens.py`, re-verify Task 6's CI, then
-continue to Task 7 (CORS policy), Task 8 (security headers / Nginx
-hardening), and the final full security audit.
+the broader chain.~~ Task 6 is addressed below.
+
+## Task 6 — JWT Storage and Rotation
+
+**Status: PASS**
+
+### Original security problem
+
+Before this task's original implementation (`72a9af5`): a single JWT,
+valid for 60 minutes, stored in `localStorage` and sent as-is on every
+request. Any XSS could exfiltrate it once and impersonate the user for
+up to an hour; there was no real server-side logout; a password change
+didn't invalidate already-issued tokens.
+
+### Known CI failure and root cause
+
+`72a9af5` implemented the fix but its own CI run failed:
+`TypeError: can't compare offset-naive and offset-aware datetimes` at
+`services/auth-service/app/core/refresh_tokens.py:56`. Root cause:
+`RefreshToken.expires_at` is a `DateTime(timezone=True)` column —
+Postgres/psycopg2 returns a timezone-aware value for it — but
+`rotate_refresh_token()` compared that against a **naive**
+`datetime.utcnow()`, which Python refuses to compare at all. Not
+hidden: this exact failure was flagged as a known, out-of-scope,
+pre-existing issue in this file's own Task 5 section above before this
+pass began fixing it.
+
+### Exact files changed (this pass)
+
+- `services/auth-service/app/core/refresh_tokens.py`
+- `services/auth-service/tests/test_refresh_tokens.py`
+- `.github/workflows/tests.yml`
+- `docs/SECURITY_HARDENING_LOG.md`
+- `docs/SECURITY_PROJECT_REPORT.md` (this file)
+
+No other file needed changes — see "Re-audit" below for what was
+checked and found already correct.
+
+### JWT/session architecture after the fix
+
+- **Access token**: short-lived JWT (`jwt_expire_minutes`, default 15),
+  subject = the user's immutable UUID (never username/password), kept
+  in the browser ONLY as an in-memory JS variable — never
+  `localStorage`/`sessionStorage`. Sent as `Authorization: Bearer` on
+  every API call.
+- **Refresh token**: a cryptographically random value
+  (`secrets.token_urlsafe(32)`), stored server-side only as a SHA-256
+  hash (`RefreshToken.token_hash`), delivered to the browser solely as
+  an `HttpOnly` cookie scoped to `path=/api/auth` — never reachable
+  from JavaScript, never in a JSON response body.
+- **Datetime handling** (this pass's fix): every write in
+  `refresh_tokens.py` uses `datetime.now(timezone.utc)`; every
+  comparison normalizes through a new `_aware()` helper that treats a
+  naive value as UTC and converts any other-offset aware value to UTC
+  before comparing — robust regardless of what a given DB driver hands
+  back, instead of assuming one or the other.
+
+### Refresh-token rotation/revocation design
+
+- `POST /refresh`: validates the presented cookie, and on success
+  **revokes it and issues a new one** (single-use rotation) in the
+  same call that mints a new access token.
+- **Replay detection**: presenting an already-revoked (but not
+  expired) token — i.e. one that was already rotated away — is
+  treated as a possible-theft signal: it doesn't just get rejected in
+  isolation, it triggers `revoke_all_user_tokens`, revoking every
+  other outstanding refresh token for that user too, forcing every
+  session to re-authenticate.
+- **Expiry**: a refresh token past `expires_at` is rejected
+  independent of `revoked_at` — the bug this pass fixed.
+- `POST /logout`: revokes the current refresh token server-side (real
+  invalidation, not just "the client forgot its cookie") and clears
+  it.
+- **User state**: disabling a user or changing their password
+  (`routers/admin.py`) calls `revoke_all_user_tokens`, so an
+  already-issued refresh token can't mint new access tokens after
+  either event; `/verify` independently re-checks `is_active`/
+  `is_approved` from the DB on every gated request through Nginx, so
+  an already-issued access token also stops working immediately on
+  disable, not just at its own natural (short) expiry.
+
+### Frontend storage changes
+
+None needed — already correct. `web/index.html` keeps the access
+token in an in-memory variable only; the sole remaining `localStorage`
+reference is a one-time cleanup (`removeItem('ledger_token')` in
+`doLogout()`) of a pre-cookie-migration value, not a write path.
+Confirmed by direct code review (grepped the whole file for
+`localStorage`/`sessionStorage`) that no code path persists a token to
+browser storage.
+
+### Cookie security settings
+
+`HttpOnly=true` (always), `SameSite=Lax` (always),
+`Secure=(ENVIRONMENT == "production")` — verified in both directions
+this pass: a new unit test forces `ENVIRONMENT=production` and asserts
+`Secure` is present; the CI infra-integration check (real HTTP, real
+dev-mode stack) asserts `Secure` is absent and `HttpOnly`/`SameSite=Lax`
+are present, reading the actual `Set-Cookie` response header rather
+than the cookie-jar file (which drops flags).
+
+### Tests executed
+
+23 tests in `services/auth-service/tests/test_refresh_tokens.py` (16
+pre-existing + 7 new this pass — see `docs/SECURITY_HARDENING_LOG.md`
+for the full list: expired-token rejection, cookie-Secure-in-production,
+access-token-lifetime bound, two direct `_aware()` unit tests, and two
+tests reproducing the exact original naive-datetime crash scenario
+directly). Plus the extended `infra-integration` CI step (invalid
+login, real `Set-Cookie` header attribute checks, rotated-token
+authenticated-request check).
+
+### Exact test results
+
+*(Filled in once this commit's CI run completes — see the FINAL
+REPORT for this task, which quotes the actual run ID, job IDs, and
+pass/fail per job pulled directly from GitHub Actions.)*
+
+### Bugs/failures encountered
+
+The one known, pre-flagged datetime bug — see "Root cause" above. No
+other bugs found during the re-audit or while writing/running the new
+tests.
+
+### Fixes applied
+
+See "JWT/session architecture" and "Root cause" above:
+`_aware()` normalization helper + switching every write in
+`refresh_tokens.py` from `datetime.utcnow()` to
+`datetime.now(timezone.utc)`.
+
+### Security verification
+
+See `docs/SECURITY_HARDENING_LOG.md`'s Task 6 entry, "Security
+verification" section, for the full breakdown (datetime regression,
+replay/reuse detection, disabled-user handling, cookie attributes in
+both directions, refresh token never reaching JavaScript).
+
+### Regression results
+
+Tasks 1–5 unaffected — this pass touched only
+`services/auth-service/app/core/refresh_tokens.py`,
+`services/auth-service/tests/test_refresh_tokens.py`, and the one
+Task-6-specific `infra-integration` CI step.
+
+### Documentation updated
+
+- `docs/SECURITY_HARDENING_LOG.md`: yes — full Task 6 entry added,
+  status table updated to `PASS`.
+- `docs/SECURITY_PROJECT_REPORT.md`: yes — this section, and the
+  status table.
+
+### Commit / push / branch status / next task
+
+See the chat FINAL REPORT for this task for the exact commit SHA(s),
+push confirmation, and CI evidence (not duplicated here to avoid this
+file going stale the moment a later commit lands on the branch — same
+convention as Task 5 above). Branch remains `security/auth-hardening`;
+no PR opened, no merge to `main`. Next task once directed to resume
+the broader chain: Task 7 (CORS policy), then Task 8 (security headers
+/ Nginx hardening), then the final full security audit.

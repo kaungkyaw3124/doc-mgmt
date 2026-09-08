@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,23 @@ def _hash(plaintext: str) -> str:
     return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
 
 
+def _aware(dt: datetime) -> datetime:
+    """Normalizes a datetime to timezone-aware UTC before it's ever
+    compared against another datetime in this module. `expires_at`/
+    `revoked_at` are stored in a `DateTime(timezone=True)` column and the
+    DB driver is expected to hand back timezone-aware values for it — but
+    relying on that alone is exactly what caused this task's known CI
+    failure (`TypeError: can't compare offset-naive and offset-aware
+    datetimes`, comparing a driver-returned value against a naive
+    `datetime.utcnow()`). Every comparison now goes through this instead
+    of assuming either naive or aware: a naive value found here IS
+    treated as UTC (matching how this module always wrote it), never
+    silently misinterpreted as local time."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def issue_refresh_token(db: Session, user: models.User) -> str:
     """Creates a new refresh token row and returns the PLAINTEXT value —
     the only time it ever exists outside the cookie; only its hash is
@@ -20,7 +37,7 @@ def issue_refresh_token(db: Session, user: models.User) -> str:
     row = models.RefreshToken(
         user_id=user.id,
         token_hash=_hash(plaintext),
-        expires_at=datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
     )
     db.add(row)
     db.commit()
@@ -49,11 +66,11 @@ def rotate_refresh_token(db: Session, plaintext: str) -> tuple[models.User, str]
     if not row:
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if row.revoked_at is not None:
         revoke_all_user_tokens(db, row.user_id)
         return None
-    if row.expires_at < now:
+    if _aware(row.expires_at) < now:
         return None
 
     user = db.query(models.User).filter_by(id=row.user_id).first()
@@ -75,7 +92,7 @@ def revoke_refresh_token(db: Session, plaintext: str) -> None:
         return
     row = db.query(models.RefreshToken).filter_by(token_hash=_hash(plaintext)).first()
     if row and row.revoked_at is None:
-        row.revoked_at = datetime.utcnow()
+        row.revoked_at = datetime.now(timezone.utc)
         db.commit()
 
 
@@ -85,7 +102,7 @@ def revoke_all_user_tokens(db, user_id) -> None:
     already-issued refresh token can't be used to mint fresh access
     tokens after either event. Accepts a bare user_id (not a User object)
     since the replay-detection path above only has the id at that point."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     db.query(models.RefreshToken).filter(
         models.RefreshToken.user_id == user_id,
         models.RefreshToken.revoked_at.is_(None),

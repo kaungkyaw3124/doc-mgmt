@@ -235,3 +235,136 @@ def test_jwt_does_not_contain_username_or_password():
     payload = pyjwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     assert set(payload.keys()) == {"sub", "exp"}
     assert payload["sub"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_expired_refresh_token_is_rejected(client, make_user, db):
+    """A refresh token past its expires_at must be rejected even though
+    it was never explicitly revoked — the time-based expiry path, as
+    opposed to the revoked_at-based replay/logout paths tested above."""
+    from datetime import datetime, timedelta, timezone
+
+    make_user(username="alice", password="correct horse battery staple")
+    _login(client, "alice", "correct horse battery staple")
+
+    row = db.query(models.RefreshToken).one()
+    row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+
+    resp = client.post("/refresh")
+    assert resp.status_code == 401
+
+
+def test_refresh_cookie_is_secure_in_production(client, make_user, monkeypatch):
+    """Secure requires HTTPS and is deliberately off in dev (plain http://
+    localhost) — but must be on whenever ENVIRONMENT=production, where TLS
+    termination is assumed. HttpOnly/SameSite are unconditional either way
+    (already covered by test_login_returns_access_token_and_sets_refresh_cookie)."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "environment", "production")
+    make_user(username="alice", password="correct horse battery staple")
+    resp = _login(client, "alice", "correct horse battery staple")
+    set_cookie_header = resp.headers.get("set-cookie", "")
+    assert "Secure" in set_cookie_header
+    assert "HttpOnly" in set_cookie_header
+
+
+def test_access_token_lifetime_is_bounded_to_configured_minutes(client, make_user):
+    """The access token's exp claim must actually reflect the configured
+    short lifetime (settings.jwt_expire_minutes), not something an
+    attacker-influenced or accidentally-long value — proves the "keep
+    access tokens short-lived" requirement is real, not just documented."""
+    import jwt as pyjwt
+    from datetime import datetime, timezone
+    from app.core.config import settings
+
+    make_user(username="alice", password="correct horse battery staple")
+    login_resp = _login(client, "alice", "correct horse battery staple")
+    token = login_resp.json()["access_token"]
+
+    payload = pyjwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+    lifetime = expires_at - datetime.now(timezone.utc)
+
+    assert lifetime.total_seconds() > 0
+    # A couple of seconds of slack for test execution time — never allowed
+    # to exceed the configured window, which is the actual security property.
+    assert lifetime.total_seconds() <= settings.jwt_expire_minutes * 60 + 5
+
+
+# --- datetime regression (Task 6 known CI failure) --------------------------
+#
+# The original bug: `TypeError: can't compare offset-naive and offset-aware
+# datetimes` in rotate_refresh_token, comparing a driver-returned (aware)
+# `row.expires_at` against a naive `datetime.utcnow()`. Fixed by routing
+# every comparison through `_aware()` and switching every write in this
+# module to `datetime.now(timezone.utc)`. These tests exercise that fix
+# directly, not just indirectly through the higher-level flows above.
+
+def test_aware_helper_normalizes_naive_datetimes_to_utc():
+    from datetime import datetime, timezone
+    from app.core.refresh_tokens import _aware
+
+    naive = datetime(2026, 1, 1, 12, 0, 0)
+    result = _aware(naive)
+    assert result.tzinfo is not None
+    assert result.tzinfo == timezone.utc
+    assert result == datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_aware_helper_converts_non_utc_aware_datetimes_to_utc():
+    from datetime import datetime, timezone, timedelta
+    from app.core.refresh_tokens import _aware
+
+    plus_five = timezone(timedelta(hours=5))
+    aware = datetime(2026, 1, 1, 17, 0, 0, tzinfo=plus_five)
+    result = _aware(aware)
+    assert result == datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_rotate_refresh_token_does_not_raise_when_expires_at_comes_back_naive(client, make_user, db):
+    """Reproduces the exact originally-reported failure mode directly: a
+    `RefreshToken.expires_at` value that comes back naive (whatever the
+    reason — a raw SQL write, a different driver, a legacy row predating
+    this fix) must NOT raise TypeError when compared against the
+    timezone-aware `now` rotate_refresh_token uses. Before the fix, this
+    exact setup reproduced `TypeError: can't compare offset-naive and
+    offset-aware datetimes`."""
+    from datetime import datetime, timedelta
+    from app.core.refresh_tokens import rotate_refresh_token
+
+    make_user(username="alice", password="correct horse battery staple")
+    _login(client, "alice", "correct horse battery staple")
+    plaintext = client.cookies.get("refresh_token")
+
+    row = db.query(models.RefreshToken).one()
+    # Force a naive value into memory as if the driver had handed one
+    # back — bypasses the DB round trip so this test is deterministic
+    # regardless of what a given driver/dialect actually returns.
+    row.expires_at = datetime.utcnow() + timedelta(days=1)
+
+    result = rotate_refresh_token(db, plaintext)  # must not raise
+    assert result is not None
+
+
+def test_rotate_refresh_token_correctly_rejects_a_naive_expired_timestamp(db, make_user):
+    """Same naive-datetime scenario as above, but expired — proves the
+    normalization doesn't just avoid crashing, it still compares
+    correctly (an expired naive timestamp is still treated as expired,
+    not accidentally treated as valid forever)."""
+    from datetime import datetime, timedelta
+    from app.core.refresh_tokens import issue_refresh_token, rotate_refresh_token, _hash
+
+    user = make_user(username="alice", password="correct horse battery staple")
+    plaintext = issue_refresh_token(db, user)
+    row = db.query(models.RefreshToken).filter_by(token_hash=_hash(plaintext)).one()
+    # Deliberately NOT committed: rotate_refresh_token() re-queries by
+    # token_hash in the same session, which resolves to this exact
+    # in-memory object via SQLAlchemy's identity map rather than a fresh
+    # SELECT — so the naive value set here is what it actually compares
+    # against, regardless of what the DB driver would hand back on a real
+    # round trip (already covered separately above).
+    row.expires_at = datetime.utcnow() - timedelta(days=1)  # naive AND expired
+
+    result = rotate_refresh_token(db, plaintext)  # must not raise, must reject
+    assert result is None

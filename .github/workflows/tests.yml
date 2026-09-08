@@ -390,11 +390,37 @@ jobs:
           jar=/tmp/cookies.txt
           rm -f "$jar"
 
-          # Login sets the HttpOnly refresh cookie in the jar.
-          login_body=$(curl -s -c "$jar" -X POST http://localhost:8080/api/auth/login \
+          # Invalid credentials must be rejected before anything else.
+          bad_login_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"definitely-wrong"}')
+          echo "login with wrong password -> $bad_login_code"
+          [ "$bad_login_code" = "401" ] || { echo "FAIL: expected 401 for invalid credentials, got $bad_login_code"; fail=1; }
+
+          # Login sets the HttpOnly refresh cookie in the jar, and its
+          # Set-Cookie header carries the real cookie attributes (curl's
+          # cookie-jar file format loses flags like HttpOnly/Secure, so
+          # check the raw response header, not just the jar).
+          login_headers=$(curl -s -D - -o /tmp/login_body.json -c "$jar" -X POST http://localhost:8080/api/auth/login \
             -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}')
+          login_body=$(cat /tmp/login_body.json)
           access_token_1=$(echo "$login_body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
           grep -q refresh_token "$jar" || { echo "FAIL: no refresh_token cookie set by login"; fail=1; }
+
+          set_cookie_line=$(echo "$login_headers" | tr -d '\r' | grep -i '^set-cookie:' | grep -i refresh_token)
+          echo "refresh cookie attributes -> $set_cookie_line"
+          echo "$set_cookie_line" | grep -qi 'HttpOnly' || { echo "FAIL: refresh_token cookie is missing HttpOnly"; fail=1; }
+          echo "$set_cookie_line" | grep -qi 'SameSite=Lax' || { echo "FAIL: refresh_token cookie is missing SameSite=Lax"; fail=1; }
+          # This CI stack runs as ENVIRONMENT=development over plain HTTP
+          # (see .env.example) — Secure must be OFF here (an unconditional
+          # Secure flag would make the browser silently refuse to ever
+          # send the cookie back over http://, breaking dev/CI entirely).
+          # Task 6's own auth-service unit tests separately force
+          # ENVIRONMENT=production and assert Secure IS present there.
+          echo "$set_cookie_line" | grep -qi 'Secure' && { echo "FAIL: refresh_token cookie has Secure set in a plain-http dev/CI environment"; fail=1; }
+          # The access token must never itself be set as a cookie — it's
+          # JSON-body-only, kept in JS memory on the frontend, never
+          # persisted or exposed via a cookie a script could also read.
+          echo "$login_headers" | tr -d '\r' | grep -i '^set-cookie:' | grep -qi "$access_token_1" && { echo "FAIL: access token leaked into a Set-Cookie header"; fail=1; }
 
           # A legitimate refresh (silent re-auth) works and rotates the token.
           refresh1_code=$(curl -s -o /tmp/refresh1.json -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/refresh)
@@ -402,6 +428,14 @@ jobs:
           [ "$refresh1_code" = "200" ] || { echo "FAIL: legitimate refresh rejected"; cat /tmp/refresh1.json; fail=1; }
           access_token_2=$(python3 -c 'import json; print(json.load(open("/tmp/refresh1.json"))["access_token"])')
           [ "$access_token_1" != "$access_token_2" ] || { echo "FAIL: refresh did not issue a new access token"; fail=1; }
+
+          # (G) Integration: the newly-ROTATED access token must actually
+          # work for a real authenticated request through Nginx's
+          # auth_request flow, not just be returned by /refresh.
+          authed_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/products \
+            -H "Authorization: Bearer $access_token_2")
+          echo "authenticated request with rotated access token -> $authed_code"
+          [ "$authed_code" = "200" ] || { echo "FAIL: the access token issued by /refresh did not work for a real API call"; fail=1; }
 
           # Replay check: a separate login/cookie-jar so it doesn't interfere
           # with $jar above. Capture the cookie right after login, rotate it

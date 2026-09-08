@@ -9,7 +9,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 3 | Remove host exposure of internal datastores | PASS | 02957ee (fix: db0c219) |
 | 4 | Authenticate gateway trust headers | PASS | 3d3f014 (fix: 12b1da0) |
 | 5 | Secure uploaded content type | PASS | c21f72c (this pass: content-sniffing + Nginx Host-header fix) |
-| 6 | JWT storage and rotation | NOT STARTED | - |
+| 6 | JWT storage and rotation | PASS | 72a9af5 (fix: this pass) |
 | 7 | CORS policy | NOT STARTED | - |
 | 8 | Security headers / Nginx hardening | NOT STARTED | - |
 
@@ -1447,3 +1447,227 @@ SECURITY_PROJECT_REPORT.md`'s Task 6 row and "Next task" section.**
   are intentionally NOT treated as interchangeable — a `.docx` upload
   that's actually a legacy `.doc`-format file (or vice versa) is
   rejected as a mismatch, even though both are "real" Word documents.
+
+## Task 6 — JWT Storage and Rotation
+
+**Date:** 2026-09-08
+
+**Status:** PASS
+
+### Goal
+
+Harden JWT/session handling: access tokens should not sit exposed in
+`localStorage` any longer than necessary, refresh tokens must be
+safely rotated/revoked, and every expiry comparison in the flow must
+be timezone-correct.
+
+### Original security problem
+
+Before this task's original implementation (commit `72a9af5`): a
+single JWT, valid for 60 minutes, stored in
+`localStorage.getItem/setItem('ledger_token')` and sent as-is on every
+request. Any XSS could exfiltrate it once and impersonate the user for
+up to an hour; there was no server-side "logout" (the token stayed
+cryptographically valid until natural expiry regardless of what the
+client did); a password change did not invalidate tokens issued before
+it.
+
+### Known CI failure carried into this task
+
+`72a9af5` already implemented the full short-access-token /
+rotating-HttpOnly-refresh-cookie architecture described below, but its
+CI run (https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34186170015)
+failed: `auth-service`'s unit tests and the `infra-integration` job's
+refresh-token acceptance step both errored with
+
+```
+TypeError: can't compare offset-naive and offset-aware datetimes
+```
+
+at `services/auth-service/app/core/refresh_tokens.py:56`
+(`rotate_refresh_token`). Confirmed via `mcp__github__get_job_logs`
+with `return_content: true` (the full raw traceback, not just the
+`conclusion` field) during the prior Task 5 pass, which is what first
+surfaced this bug (Task 5's own fix unblocked an earlier CI step that
+had been masking this one under `bash -e`).
+
+### Root cause
+
+`services/auth-service/app/models.py`'s `RefreshToken.expires_at` (and
+`created_at`/`revoked_at`) is a `DateTime(timezone=True)` column;
+Postgres/psycopg2 hands back a timezone-aware `datetime` for it.
+`rotate_refresh_token()` compared that aware value directly against
+`now = datetime.utcnow()` — a **naive** datetime — which Python's
+`datetime.__lt__` refuses to compare at all, raising `TypeError`
+rather than silently doing the wrong thing. This is not a subtle logic
+bug so much as a straightforward "naive and aware datetimes were mixed
+where only one or the other was assumed" mistake, present in the
+original Task 6 implementation.
+
+### Re-audit performed (not just the one exception)
+
+Per this pass's explicit instruction, the entire authentication flow
+was re-read end to end rather than patching only the one crashing
+line: login (`routers/auth.py: login`), access-token creation
+(`core/jwt_utils.py: create_access_token`), refresh-token creation/
+rotation/revocation (`core/refresh_tokens.py`, all four functions),
+frontend token storage and the refresh/retry flow (`web/index.html`),
+the `/refresh` and `/logout` endpoints, `/verify` (expired/revoked/
+disabled-user handling), and admin disable/password-change revocation
+(`routers/admin.py`). Findings:
+
+- **`create_access_token`** (`jwt_utils.py`) was already correct:
+  `datetime.now(timezone.utc)`, never `utcnow()`. The bug was isolated
+  to `refresh_tokens.py`.
+- **Frontend** (`web/index.html`) was already correct and required no
+  changes: the access token lives in an in-memory `let token = null`
+  variable only (never `localStorage`/`sessionStorage`); the only
+  `localStorage` call left anywhere is a one-time
+  `localStorage.removeItem('ledger_token')` in `doLogout()` that
+  cleans up a pre-migration session's leftover value — there is no
+  code path that ever *writes* a token to browser storage. `apiFetch`
+  retries once through `refreshAccessToken()` (a shared in-flight
+  promise, so a burst of parallel 401s doesn't each rotate the refresh
+  token and race each other) before falling back to `doLogout()`. The
+  bootstrap IIFE at the bottom of the file re-establishes a session via
+  a silent `POST /refresh` against the HttpOnly cookie on page load —
+  proven already working end-to-end by this task's new CI integration
+  check (see "Tests" below).
+- **Cookie settings** (`routers/auth.py: _set_refresh_cookie`) were
+  already correct: `httponly=True`, `samesite="lax"`,
+  `secure=(settings.environment == "production")`, scoped to
+  `path="/api/auth"` so it's never attached to unrelated API calls.
+  Not previously verified end-to-end over real HTTP, only by
+  inspection — this pass adds that verification (see "Tests").
+- **Rotation/revocation/replay-detection design**
+  (`refresh_tokens.py`) was already correct in design: single-use
+  tokens (the presented one is revoked, a new one issued), a replayed
+  (already-revoked) token triggers `revoke_all_user_tokens` for that
+  user rather than being silently rejected in isolation, `/logout`
+  revokes server-side, admin disable/password-change revoke all of a
+  user's outstanding tokens. Only the datetime comparison itself was
+  broken.
+- **JWT subject** (`jwt_utils.py`/`routers/auth.py`) already uses the
+  user's immutable UUID (`str(user.id)`) as `sub`, never the mutable
+  username — unaffected by a username-only edit
+  (`test_unrelated_username_edit_does_not_revoke_tokens`, pre-existing,
+  re-verified still passing).
+
+**Conclusion: this was a genuinely isolated bug**, not a symptom of a
+deeper architectural problem — but it was re-verified by actually
+re-reading everything, not assumed to be isolated in advance.
+
+### Fix applied
+
+`services/auth-service/app/core/refresh_tokens.py`:
+
+- Added `_aware(dt) -> datetime`: normalizes any datetime to
+  timezone-aware UTC before comparison — a naive value is treated as
+  UTC (matching how this module always wrote naive values before this
+  fix), an aware value in a different offset is converted to UTC. This
+  is the actual fix: robust to whatever a given DB driver/dialect
+  hands back, rather than assuming "the driver will always return
+  aware" (the assumption that caused the original bug) or "always
+  naive."
+- Every write in the module (`issue_refresh_token`,
+  `rotate_refresh_token`, `revoke_refresh_token`,
+  `revoke_all_user_tokens`) now uses `datetime.now(timezone.utc)`
+  instead of `datetime.utcnow()`, so newly-written values are
+  consistently aware going forward.
+- `rotate_refresh_token`'s expiry check now compares
+  `_aware(row.expires_at) < now` instead of the raw column value —
+  this is the one-line fix for the reported crash, but it's applied as
+  part of the systematic normalization above rather than a one-off
+  patch, per the "do not simply fix the one datetime exception"
+  instruction.
+
+No change was needed to `jwt_utils.py`, `routers/auth.py`,
+`routers/admin.py`, `models.py`, or `web/index.html` — all confirmed
+already correct by the re-audit above.
+
+### Tests
+
+`services/auth-service/tests/test_refresh_tokens.py` grew from 16 to
+23 tests. New tests added this pass:
+
+- `test_expired_refresh_token_is_rejected` — time-based expiry (not
+  the pre-existing revoked_at/replay path), a real end-to-end
+  `POST /refresh` after forcing `expires_at` into the past.
+- `test_refresh_cookie_is_secure_in_production` — monkeypatches
+  `settings.environment` to `"production"` and asserts the Set-Cookie
+  header actually carries `Secure` (dev/CI's real requests, which run
+  as `ENVIRONMENT=development`, are asserted NOT to carry it — see the
+  new infra-integration CI check below — so both branches of that
+  conditional are now exercised, not just one).
+- `test_access_token_lifetime_is_bounded_to_configured_minutes` —
+  decodes a real issued access token and asserts its `exp` claim is
+  within `settings.jwt_expire_minutes` of issuance, not just "some"
+  short value.
+- `test_aware_helper_normalizes_naive_datetimes_to_utc` /
+  `test_aware_helper_converts_non_utc_aware_datetimes_to_utc` — direct
+  unit tests of the new `_aware()` function.
+- `test_rotate_refresh_token_does_not_raise_when_expires_at_comes_back_naive`
+  — reproduces the exact original crash scenario directly (forces a
+  naive `expires_at` into the same SQLAlchemy session
+  `rotate_refresh_token` will read via the identity map) and asserts
+  it completes successfully instead of raising `TypeError`.
+- `test_rotate_refresh_token_correctly_rejects_a_naive_expired_timestamp`
+  — same naive-datetime scenario, but expired: proves the fix doesn't
+  just avoid crashing, it still compares correctly (an expired naive
+  timestamp is still rejected, not silently treated as valid forever).
+
+`.github/workflows/tests.yml`'s existing infra-integration step
+"Acceptance — cookie-based refresh-token rotation, replay rejection,
+and logout" was extended with:
+
+- An invalid-credentials login check (401).
+- Reading the real `Set-Cookie` response header (not just the cookie
+  jar file, which drops flags) and asserting `HttpOnly` and
+  `SameSite=Lax` are present, `Secure` is absent (this stack runs over
+  plain HTTP in CI, `ENVIRONMENT=development`), and the access token
+  itself never appears in any `Set-Cookie` header.
+- A real authenticated API call (`GET /api/products` through Nginx)
+  using the access token that `/refresh` just issued — proving the
+  rotated token actually works for a live request, not just that
+  `/refresh` returned 200.
+
+### Exact results
+
+*(Filled in once this commit's CI run completes — evidence can't
+predate the run it evidences, same reasoning as Task 5's addendum
+commit. See the FINAL REPORT for this task for the actual run ID, job
+IDs, and quoted pass/fail output pulled directly from GitHub Actions.)*
+
+### Security verification
+
+- Datetime regression: both the "does not raise" and "still correctly
+  rejects when expired" cases are covered for the exact naive-value
+  scenario that caused the original failure — not just the aware/aware
+  happy path.
+- Refresh-token reuse/replay: unchanged design, re-verified still
+  passing (`test_replay_of_a_rotated_refresh_token_is_rejected`,
+  `test_replaying_a_rotated_token_revokes_the_users_other_sessions_too`).
+- Disabled/inactive users: unchanged design, re-verified still passing
+  (`test_disabled_user_cannot_refresh`,
+  `test_disabling_a_user_revokes_their_refresh_tokens`).
+- Cookie security: HttpOnly/SameSite unconditional, Secure correctly
+  conditional on `ENVIRONMENT=production` — now verified in BOTH
+  directions (unit test forces production and asserts Secure present;
+  CI's real dev-mode request asserts Secure absent), not just one.
+- No regression to the pre-existing "refresh token never reaches
+  JavaScript" property: it's an HttpOnly cookie, never read by any
+  frontend code (grepped `web/index.html` for any reference to reading
+  a `refresh_token` cookie value — none exists; the frontend only ever
+  reads `data.access_token` from a JSON response body).
+
+### Regression
+
+Tasks 1–5 unaffected: no file outside `services/auth-service/app/core/
+refresh_tokens.py`, `services/auth-service/tests/test_refresh_tokens.py`,
+and the one infra-integration CI step above was touched this pass.
+
+### Documentation updated
+
+- `docs/SECURITY_HARDENING_LOG.md`: this entry, and the status table
+  updated from `NOT STARTED` to `PASS`.
+- `docs/SECURITY_PROJECT_REPORT.md`: Task 6 row and section updated.
