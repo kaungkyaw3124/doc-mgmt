@@ -9,7 +9,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 3 | Remove host exposure of internal datastores | PASS | 02957ee (fix: db0c219) |
 | 4 | Authenticate gateway trust headers | PASS | 3d3f014 (fix: 12b1da0) |
 | 5 | Secure uploaded content type | PASS | c21f72c (this pass: content-sniffing + Nginx Host-header fix) |
-| 6 | JWT storage and rotation | PASS | 72a9af5 (fix: this pass) |
+| 6 | JWT storage and rotation | PASS | 72a9af5 (fixes: d727155, e7ed0a1) |
 | 7 | CORS policy | NOT STARTED | - |
 | 8 | Security headers / Nginx hardening | NOT STARTED | - |
 
@@ -1705,10 +1705,51 @@ Both fixes, plus their tests, were pushed in a follow-up commit; see
 
 ### Exact results
 
-*(Filled in once this commit's CI run completes — evidence can't
-predate the run it evidences, same reasoning as Task 5's addendum
-commit. See the FINAL REPORT for this task for the actual run ID, job
-IDs, and quoted pass/fail output pulled directly from GitHub Actions.)*
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34189040051
+(commit `e7ed0a1`). Per-job results, pulled directly via
+`mcp__github__get_job_logs` with `return_content: true` (raw log
+content, not the `conclusion` field alone):
+
+- `auth-service` (job `101943116134`): **PASSED** — raw pytest summary
+  line quoted directly from the log:
+  ```
+  ======================= 48 passed, 5 warnings in 24.87s ========================
+  ```
+  All three tests that failed in the previous run
+  (`test_refresh_rotates_token_and_issues_new_access_token`,
+  `test_replay_of_a_rotated_refresh_token_is_rejected`,
+  `test_replaying_a_rotated_token_revokes_the_users_other_sessions_too`)
+  now show `PASSED` individually in the same log.
+- `catalogue-service`, `document-service`, `search-service`: **PASSED**
+  (unaffected by this task's changes, re-confirmed green).
+- `infra-integration` (job `101943116170`): step 13, "Acceptance —
+  cookie-based refresh-token rotation, replay rejection, and logout" —
+  **PASSED**, all 8 scenarios, real output quoted directly from the
+  raw log:
+  ```
+  login with wrong password -> 401
+  refresh cookie attributes -> set-cookie: refresh_token=rGEv...; HttpOnly; Max-Age=1209600; Path=/; SameSite=lax
+  first refresh -> 200
+  authenticated request with rotated access token -> 200
+  replay of rotated-away refresh token -> 401
+  logout -> 204
+  refresh after logout -> 401
+  refresh with no cookie -> 401
+  fresh login after logout -> 200
+  ```
+  Note the cookie attribute line: `Path=/` (this pass's fix, was
+  `Path=/api/auth`), `Secure` correctly absent (dev/CI is plain HTTP),
+  `HttpOnly`/`SameSite=lax` present — and `first refresh -> 200` +
+  `authenticated request with rotated access token -> 200` together
+  confirm the rotated token is both issued AND actually usable for a
+  real API call (the `jti` fix means `access_token_1 != access_token_2`
+  held, since no "FAIL: refresh did not issue a new access token" line
+  appears in the output above).
+
+**Net result: Task 6 is genuinely PASS, independently verified against
+raw CI evidence for the complete relevant test suite (48/48 auth-service
+tests, all 5 CI jobs) — not assumed from the commit existing or from
+green checkmarks alone.**
 
 ### Security verification
 

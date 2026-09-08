@@ -14,7 +14,7 @@ not replace the log.
 | 3 | Remove host exposure of internal datastores | PASS | `02957ee` (fix: `db0c219`) |
 | 4 | Authenticate gateway trust headers | PASS | `3d3f014` (fix: `12b1da0`) |
 | 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix: `e49d7f1`) |
-| 6 | JWT storage and rotation | PASS | `72a9af5` (fix: this pass — see below) |
+| 6 | JWT storage and rotation | PASS | `72a9af5` (fixes: `d727155`, `e7ed0a1` — see below) |
 | 7 | CORS policy | not started | - |
 | 8 | Security headers / Nginx hardening | not started | - |
 
@@ -372,9 +372,17 @@ rotated-token authenticated-request check).
 
 ### Exact test results
 
-*(Filled in once this commit's CI run completes — see the FINAL
-REPORT for this task, which quotes the actual run ID, job IDs, and
-pass/fail per job pulled directly from GitHub Actions.)*
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34189040051
+(commit `e7ed0a1`), verified via raw log content, not the `conclusion`
+field alone. `auth-service`: `48 passed, 5 warnings in 24.87s` — the
+complete relevant test suite, including all three previously-failing
+tests now individually `PASSED`. `catalogue-service`,
+`document-service`, `search-service`: passed. `infra-integration`'s
+refresh-rotation acceptance step: passed, all 8 real-HTTP scenarios
+(invalid login, cookie attributes, rotation, rotated-token API call,
+replay rejection, logout, post-logout rejection, no-cookie rejection,
+fresh re-login) — full quoted output in
+`docs/SECURITY_HARDENING_LOG.md`'s Task 6 "Exact results".
 
 ### Bugs/failures encountered
 
