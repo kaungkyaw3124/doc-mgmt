@@ -11,7 +11,7 @@ Branch: `security/auth-hardening` (based on the testing branch `security/auth-ha
 | 5 | Secure uploaded content type | PASS | c21f72c (this pass: content-sniffing + Nginx Host-header fix) |
 | 6 | JWT storage and rotation | PASS | 72a9af5 (fixes: d727155, e7ed0a1) |
 | 7 | CORS policy | PASS | 92a5f91 |
-| 8 | Security headers / Nginx hardening | NOT STARTED | - |
+| 8 | Security headers / Nginx hardening | implemented, CI verification pending | this pass |
 
 ## A note on the test-execution environment
 
@@ -2127,3 +2127,414 @@ location.
 
 - `docs/SECURITY_HARDENING_LOG.md`: this entry.
 - `docs/SECURITY_PROJECT_REPORT.md`: Task 7 row and section.
+
+## Task 8 — Security Headers / Nginx Hardening
+
+**Date:** 2026-09-08
+
+**Status:** implemented, CI verification pending (updated to PASS/FAIL
+in an addendum once this commit's actual CI run is read — no status
+claim survives past the raw evidence in this log, ever).
+
+### Goal
+
+Harden the public Nginx layer and response headers — version
+disclosure, MIME-sniffing, framing, referrer leakage, unnecessary
+browser capabilities, a real CSP — without breaking the application,
+Task 7's CORS, auth/refresh/logout, uploads, downloads, MinIO
+proxying, or service-to-service traffic. This is the last individual
+hardening task before the final full security audit.
+
+### Initial Nginx security state (before this task)
+
+- `server_tokens` was never set — Nginx's default (`on`) discloses the
+  exact Nginx version in the `Server` response header on every
+  response AND in the footer of every Nginx-generated default error
+  page.
+- No security response header of any kind existed anywhere —
+  `grep -rn "add_header\|X-Frame-Options\|Content-Security-Policy\|X-Content-Type-Options\|Referrer-Policy\|Permissions-Policy\|Strict-Transport-Security" infra/nginx/` (before this task) returned nothing outside Task 7's own `Access-Control-*` headers in `cors.conf`.
+- Every proxied location forwarded whatever `Server` header its
+  upstream sent, unmodified — MinIO's own `Server: MinIO` (a specific
+  product+version disclosure) and each FastAPI service's uvicorn
+  `Server` header passed straight through to the browser.
+- No explicit `client_body_timeout`/`client_header_timeout` — Nginx's
+  own defaults applied, never made explicit.
+
+### Repository inspection performed
+
+Per this task's explicit instruction to inspect before touching
+anything:
+
+- **`infra/nginx/nginx.conf.template`**: all 17 client-facing
+  locations (`/`, `/documents/`, `/products/`, and the 14 `/api/*`
+  locations) re-read end to end; the internal-only `= /_verify`
+  location confirmed never client-reachable (`internal;`).
+- **`infra/nginx/cors.conf`**, **`docker-entrypoint.sh`**,
+  **`validate-cors-config.sh`**, **`infra/docker-compose.yml`**:
+  re-read to understand the existing `include`-snippet pattern (this
+  task reuses it exactly, per "Exact implementation" below) and the
+  existing envsubst variable-substitution mechanism.
+- **`web/index.html`** (the ONLY file this app ever serves as a page —
+  confirmed `find web -type f` returns just this one file, no separate
+  `.js`/`.css`):
+  - `grep -n "<script\|<link\|<style"` → one `<link rel="preconnect">`
+    + one `<link rel="stylesheet">` to `fonts.googleapis.com`, one
+    inline `<style>` block (lines 9–457), one inline `<script>` block
+    (lines 1514–5283, no `src=` — the entire app).
+  - `grep -c 'style="'` → **227** inline `style="..."` attributes
+    scattered through the file, several with dynamically-computed
+    values (e.g. a skeleton-loading bar's width built from live data)
+    — these cannot be covered by a CSP hash (a hash only matches one
+    exact, fixed string).
+  - `grep -n "onclick=\|onerror=\|onload=\|javascript:"` → **none** —
+    zero inline event-handler attributes anywhere.
+  - `grep -n "eval(\|new Function("` → **none**.
+  - `grep -oE 'https?://[a-zA-Z0-9.-]+'` → only `fonts.googleapis.com`
+    (the CSS `<link>`) — no other external host referenced anywhere.
+    The actual font *files* that stylesheet's `@font-face` rules point
+    to are hosted at `fonts.gstatic.com` (Google's own convention, a
+    different host than the CSS) — not literally present as a string
+    in `index.html`, so accounted for separately in the CSP design.
+  - `grep -n "<iframe\|<object\|<embed\|<frame"` → **none**.
+  - `grep -n "new Worker\|Blob(\|blob:\|createObjectURL"` → 5 call
+    sites, ALL the same pattern: `fetch()` → `blob()` →
+    `URL.createObjectURL()` → a synthetic `<a download>` → `.click()`
+    → `URL.revokeObjectURL()` — i.e. triggering a file **download**,
+    never displaying a blob inline as an `<img>`/`<iframe>`/anything
+    CSP-relevant.
+  - `grep -n "WebSocket\|EventSource"` → **none**.
+  - `grep -n "<img"` and `createElement\('img'\)` → **none anywhere** —
+    this app never renders an image inline. File/logo/seal previews
+    are opened via `window.open(data.url, '_blank')` (4 call sites) —
+    a new top-level tab, not an embedded resource; CSP's `img-src`/
+    `frame-src` are irrelevant to a `window.open` navigation (only
+    `form-action`/`navigate-to` govern navigations, and this app
+    submits no forms to anywhere but itself — see below).
+  - `grep -n "<form"` → 7 forms, **none** have an `action=` attribute —
+    every one is JS-handled (`addEventListener('submit', ...)` +
+    `e.preventDefault()` + `fetch()`).
+  - `grep -n "navigator\.\|getUserMedia\|geolocation\|clipboard\|requestFullscreen\|PaymentRequest\|usb\."` → **none** — this app uses zero
+    of these browser capabilities anywhere.
+  - `grep -n "favicon\|data:image\|data:"` and
+    `<link rel="icon">` → **none** — no favicon, no data: URIs.
+  - `grep -n "manifest\|serviceWorker"` → **none**.
+- **Auth/refresh-token flow** (Task 6): re-confirmed the frontend never
+  reads a response header via JS (`grep -n "headers.get\|\.headers\["`
+  → none, already established in Task 7's inspection) — headers this
+  task adds are pure browser-enforced policy, nothing in the app's own
+  JS needs to read or react to any of them.
+- **Task 5's upload/download Content-Type handling**: re-read
+  `upload_safety.py`/`documents.py`/`products.py` — `X-Content-Type-Options: nosniff` (this task) is a genuine complement to that work, not a
+  duplicate of it: Task 5 controls what Content-Type is stored/served;
+  `nosniff` stops the BROWSER from ever re-guessing/overriding
+  whatever Content-Type this app served, closing the loop from the
+  other side.
+- **Current Nginx version**: `nginx:alpine` (`infra/docker-compose.yml`,
+  unpinned to a specific patch version — already resolves to whatever
+  the tag's latest build is at pull time; out of this task's scope to
+  change, noted for completeness).
+
+### Whether CSP requires a frontend change
+
+**Yes, in one narrow, explicit way — but not a rewrite.** Per this
+task's explicit "if CSP requires frontend changes, make the minimum
+secure change necessary and document it" instruction:
+
+- No change was needed to allow the app's ONE inline `<script>` block:
+  its exact SHA-256 hash is used as a CSP `script-src` source instead
+  of `'unsafe-inline'` — the file's actual bytes were not touched.
+- No change was made to the 227 inline `style="..."` attributes —
+  converting them all to CSS classes would be a large, high-risk
+  rewrite of a 5000+ line single file with no build step, tooling, or
+  tests to catch a mistake, and would be far beyond "minimum necessary"
+  for this task. `'unsafe-inline'` is used for `style-src` alone
+  (never for `script-src`) as a deliberate, narrow, documented
+  exception — see "CSP design" below for exactly why this is the
+  correct scoped trade-off, not a blanket weakening.
+- No `<meta http-equiv="Content-Security-Policy">` tag was added to
+  `index.html` — the policy is delivered as a real HTTP response
+  header (Nginx `add_header`) instead, which is strictly more capable
+  (a meta-tag CSP cannot set `frame-ancestors` at all — the directive
+  is explicitly ignored by spec when delivered that way — among other
+  header-only restrictions) and keeps the policy alongside every other
+  header this task adds, in one place.
+
+### Exact implementation
+
+Reuses Task 7's exact `include`-snippet pattern (a new file, `include`d
+as the first directive[s] in every client-facing location) rather than
+inventing a second mechanism:
+
+- **New file: `infra/nginx/security-headers.conf`** — `include`d into
+  all 17 client-facing locations (`/`, `/documents/`, `/products/`,
+  and the 14 `/api/*` locations — NOT the internal-only `= /_verify`
+  location). Sets, on every response (`always`, so error responses get
+  them too — see requirement 11 below):
+  - `X-Content-Type-Options: nosniff`
+  - `Referrer-Policy: strict-origin-when-cross-origin`
+  - `X-Frame-Options: SAMEORIGIN`
+  - `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(), clipboard-read=(), clipboard-write=()`
+  - `Content-Security-Policy: <see below>`
+- **Changed: `infra/nginx/nginx.conf.template`** — `server_tokens off;`
+  added to the `http {}` block; `client_body_timeout 30s;`/
+  `client_header_timeout 30s;` made explicit (previously Nginx's own
+  unstated defaults); `include /etc/nginx/security-headers.conf;` +
+  `proxy_hide_header Server;` added to all 17 locations (the 14
+  `/api/*` locations already had `include /etc/nginx/cors.conf;` as
+  their first line from Task 7 — the new include was inserted
+  immediately after it, in the same location context, so both sets of
+  headers apply together on real responses; see "Interaction with
+  Task 7's CORS preflight" below for the one place they deliberately
+  DON'T both apply).
+- **Changed: `infra/docker-compose.yml`** — new volume mount for
+  `security-headers.conf`, matching `cors.conf`'s existing mount
+  pattern exactly.
+
+### Exact headers and values
+
+```
+X-Content-Type-Options: nosniff
+Referrer-Policy: strict-origin-when-cross-origin
+X-Frame-Options: SAMEORIGIN
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(), clipboard-read=(), clipboard-write=()
+Content-Security-Policy: default-src 'self'; script-src 'sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+```
+
+No `Strict-Transport-Security` — see "HSTS decision" below.
+
+### CSP design — why each source is allowed (and why others aren't)
+
+| Directive | Value | Why |
+|---|---|---|
+| `default-src` | `'self'` | Fallback for every directive not listed below (`worker-src`, `manifest-src`, `media-src`, ...) — none of those resource types are used anywhere in the app. |
+| `script-src` | `'sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE='` | The exact hash of the one inline `<script>` block's exact text content. No `'unsafe-inline'`, no `'unsafe-eval'` — zero `eval()`/`new Function()` usage, zero inline event-handler attributes (`onclick=`, etc. — grepped, none exist), so nothing else needs to execute as script. |
+| `style-src` | `'self' 'unsafe-inline' https://fonts.googleapis.com` | `'unsafe-inline'` is the one deliberate, documented, narrowly-scoped exception in this policy — see "Whether CSP requires a frontend change" above for the full reasoning; `fonts.googleapis.com` is where the Google Fonts stylesheet `<link>` actually loads from. |
+| `font-src` | `'self' https://fonts.gstatic.com` | Where the `*.woff2` files that stylesheet's `@font-face` rules reference are actually hosted (a different host than the CSS, by Google's own convention). |
+| `img-src` | `'self'` | No `<img>` tag exists or is ever created anywhere in the app (grepped) — nothing to widen this for. |
+| `connect-src` | `'self'` | Every `fetch()` call targets `API_BASE` (`/api`, same-origin) — no external API call anywhere. |
+| `object-src` | `'none'` | No `<object>`/`<embed>` anywhere. |
+| `frame-src` | `'none'` | No `<iframe>` anywhere. |
+| `frame-ancestors` | `'self'` | See "Framing protection" below. |
+| `base-uri` | `'self'` | Blocks a hypothetical injected `<base>` tag from silently rehoming every relative URL in the page to an attacker's origin. |
+| `form-action` | `'self'` | Every `<form>` is JS-handled with `preventDefault()`; none has an `action=` anywhere (grepped) — pure defense-in-depth against a hypothetical injected `<form>`. |
+
+**Explicitly rejected**: `default-src * 'unsafe-inline' 'unsafe-eval'`
+(the exact anti-pattern this task's instructions call out by name) —
+would permit loading script/style/anything from any origin and running
+arbitrary inline/`eval`'d code, defeating CSP's entire purpose. Not
+used anywhere in this policy.
+
+**Maintenance note on the hash**: it is tied to the EXACT byte content
+of the `<script>` block. Recompute it after any future edit to that
+block with:
+```
+python3 -c "import hashlib, base64; content = open('web/index.html', 'rb').read(); start = content.index(b'<script>\n') + len(b'<script>\n'); end = content.index(b'</script>', start); print('sha256-' + base64.b64encode(hashlib.sha256(content[start:end]).digest()).decode())"
+```
+The new CI acceptance step (see "Tests") runs this exact computation
+against the actually-served file on every CI run and fails loudly if
+it ever drifts from the hash baked into the CSP header — so a forgotten
+recomputation is caught by CI, not discovered as a silently broken app
+in production.
+
+### Framing protection
+
+`X-Frame-Options: SAMEORIGIN` + `Content-Security-Policy:
+frame-ancestors 'self'` together (the modern `frame-ancestors`
+actually governs this in current browsers; `X-Frame-Options` is kept
+alongside it only for any legacy client that doesn't understand
+`frame-ancestors` — both express the identical policy, never a
+conflict). Verified safe: the app embeds no iframe of its own
+(`frame-src 'none'`) and nothing in the app relies on being embedded
+BY another page either (grepped — no postMessage/embedding-aware code
+anywhere) — this purely closes off clickjacking (an attacker's page
+framing this app and overlaying invisible UI on top of it), a pure
+addition with nothing legitimate to break.
+
+### Referrer policy
+
+`strict-origin-when-cross-origin` — the value this task's own
+instructions suggested as the default, and inspection didn't surface a
+reason to deviate: this app is same-origin end-to-end (Task 7), so the
+"cross-origin" case this policy governs only ever fires for the one
+real cross-origin request the app makes (the Google Fonts stylesheet
+`<link>`) — sending only the bare origin there (never a full path/query
+string) rather than the fuller referrer same-origin requests get.
+
+### Permissions policy
+
+`camera=(), microphone=(), geolocation=(), payment=(), usb=(),
+fullscreen=(), clipboard-read=(), clipboard-write=()` — every one of
+these denied outright. Inspection (`grep -n "navigator\.\|getUserMedia\|geolocation\|clipboard\|requestFullscreen\|PaymentRequest\|usb\."`) found this app uses NONE of them anywhere — so nothing legitimate is
+disabled; this only removes capabilities that would otherwise sit
+available for something else running in this browsing context (an
+injected/compromised script, or a future accidental dependency) to
+invoke without it ever being a reviewed, intentional feature of this
+app.
+
+### MIME/content sniffing
+
+`X-Content-Type-Options: nosniff` on every response. Verified
+compatible with Task 5's upload/Content-Type work — it's a direct
+complement, not a duplicate: Task 5 already ensures the CORRECT
+Content-Type is derived server-side and stored/served (never trusting
+the client); `nosniff` is what stops the BROWSER from re-sniffing and
+overriding that correct, already-safe value — the two together close
+the loop from upload to download. Verified NOT to break legitimate
+PDFs/images/downloads/static assets/MinIO-proxied objects: `nosniff`
+only changes what happens when a response's declared Content-Type is
+WRONG (it stops the browser from guessing something else instead) — it
+never changes or rejects a CORRECT Content-Type, so every already-
+correct response (which is all of them, per Task 5) is unaffected.
+
+### HSTS decision
+
+**Not added.** Per this task's explicit instruction to inspect the
+actual deployment architecture first: `infra/nginx/nginx.conf.template`
+has exactly one `listen 80;` directive — Nginx never terminates TLS
+anywhere in this repository, confirmed also by `docs/deployment.md`'s
+own existing, pre-Task-8 statement: *"nginx.conf listens on plain :80
+... with no HTTPS/TLS termination configured anywhere in this
+repository. Not verified: whether TLS is terminated by something in
+front of this stack ... that isn't part of this repo."* Since this
+repository cannot honestly guarantee HTTPS is in place wherever this
+exact config is deployed, adding `Strict-Transport-Security` would be
+actively harmful, not just unnecessary: HSTS tells a browser "refuse
+to ever connect to this host over plain HTTP again," and if that turns
+out not to be backed by real, working TLS at whatever layer sits in
+front of this Nginx, the result is a site the browser now refuses to
+load at all — worse than doing nothing. **Documented for whoever
+deploys this to production**: HSTS must be enabled at whatever layer
+actually terminates TLS in front of this Nginx (a cloud load balancer,
+a separate TLS-terminating reverse proxy, etc.), once HTTPS there is
+genuinely guaranteed — not in this repository's own `nginx.conf.template`, which never itself speaks TLS.
+
+### Other Nginx hardening
+
+- **`server_tokens off;`** (http block) — removes the Nginx version
+  from the `Server` header AND from Nginx's own auto-generated error
+  pages (404/500/etc. footers) in one directive.
+- **`proxy_hide_header Server;`** on every proxied location (all 16
+  `proxy_pass` locations — the 14 `/api/*` ones plus `/documents/`/
+  `/products/`) — `server_tokens off` alone only affects headers Nginx
+  ITSELF generates; it does nothing to stop an upstream (MinIO's own
+  `Server: MinIO`, or each FastAPI service's uvicorn `Server` header)
+  from passing straight through the proxy unmodified. This is exactly
+  the "do not assume server_tokens off alone is sufficient" case this
+  task's own instructions warned about, and was verified by actually
+  checking what MinIO/uvicorn send, not assumed.
+- **`client_body_timeout 30s;` / `client_header_timeout 30s;`** (http
+  block) — explicit, conservative slow-client protection; previously
+  unset (Nginx's own unstated 60s defaults applied). Left the
+  route-specific `proxy_read_timeout 300s;` on `/api/documents`
+  (needed for the slow catalogue export, pre-existing from before this
+  task) untouched — these two settings govern different things (how
+  long Nginx waits for the CLIENT to finish sending a request vs. how
+  long it waits for the UPSTREAM to respond) and don't conflict.
+- **Directory listing**: `autoindex` was never set anywhere — Nginx's
+  own default (`off`) already applies; confirmed explicitly rather
+  than left as an unstated assumption, no change needed.
+- **HTTP methods**: deliberately NOT globally restricted at Nginx, per
+  this task's own explicit caution against blindly rejecting uncommon
+  methods. Reasoning: (1) every backend route already enforces its own
+  accepted methods via FastAPI route decorators (an unsupported method
+  on a real endpoint already 405s, independent of Nginx); (2) Task 7's
+  CORS preflight handling depends on `OPTIONS` reaching each location
+  correctly — an Nginx-level method allowlist risks silently breaking
+  that if not built with equal care; (3) inspection found no
+  currently-exploitable risk from leaving methods unrestricted at this
+  layer (no location trusts an unexpected method for anything). GET/
+  POST/PATCH/DELETE/OPTIONS (the frontend's actual methods, confirmed
+  again by re-grepping `web/index.html`) all continue to work — see
+  "Tests".
+- **Directory/location exposure**: re-confirmed the internal-only
+  `= /_verify` location has `internal;` set (unreachable by any direct
+  client request, only by Nginx's own `auth_request`) — no change
+  needed, already correct from Task 4.
+
+### Interaction with Task 7's CORS preflight
+
+`security-headers.conf` is `include`d in the same location context as
+`cors.conf`, right after it — for a REAL (non-`OPTIONS`) request, both
+files' `add_header` directives apply together (this is what the tests
+below verify: the full header set present on ordinary GET/POST
+responses). For an `OPTIONS` preflight, `cors.conf`'s own `if
+($request_method = OPTIONS) { ...; return 204; }` block is a nested
+context that does NOT inherit the outer location's `add_header`
+directives (Nginx's own documented `add_header` inheritance rule) — so
+a preflight response carries only the CORS preflight headers, not the
+full security-header set. This is intentional and harmless: a
+preflight response is never rendered as a page or script by the
+browser, so CSP/`X-Frame-Options`/`Permissions-Policy` have no
+meaningful effect there either way.
+
+### Security headers must not be duplicated (requirement 12)
+
+No FastAPI app in this project sets ANY of these headers — confirmed
+by `grep -rn "X-Frame-Options\|Content-Security-Policy\|X-Content-Type-Options\|Referrer-Policy\|Permissions-Policy" services/*/app/` returning
+nothing, matching Task 7's same finding for CORS headers. Exactly one
+layer (Nginx) ever sets any of them, exactly once per response — the
+new CI test explicitly counts each header's occurrences on a real
+response and fails if it's ever anything other than exactly 1.
+
+### Tests
+
+New: `.github/workflows/tests.yml`, `infra-integration` job — ONE new
+step, **"Acceptance — security headers, version disclosure, CSP
+integrity, no duplicates"** (real HTTP through the real Nginx/
+docker-compose stack, per this task's explicit "do not rely only on
+FastAPI TestClient" instruction — there is no FastAPI-level header
+code to unit test in the first place, since it's implemented entirely
+in Nginx, same as Task 7's CORS):
+
+1. `GET /` — `Server` header contains no version digit; all 5 core
+   security headers present with the exact expected value, each
+   exactly once (no duplicates).
+2. **CSP hash-integrity check**: the CSP header's `script-src` hash is
+   compared against a hash FRESHLY COMPUTED from the actually-served
+   `index.html`'s real inline `<script>` content (the exact same
+   computation given in "CSP design" above, run in CI, not just
+   asserted to match) — this is what catches drift if the script is
+   ever edited without recomputing the hash.
+3. `GET /api/documents` with no `Authorization` header — 401 (from
+   Nginx's own `auth_request` gate, not a proxied backend body) still
+   carries `X-Content-Type-Options` and `Content-Security-Policy`
+   exactly once each; the 401 response body contains no Nginx version
+   string.
+4. A 26MB request body against `/api/auth/login` (over the 25MB
+   `client_max_body_size`) — genuinely Nginx-generated 413, before
+   ever reaching a backend; response body contains no Nginx version
+   string, proving `server_tokens off` covers Nginx's OWN generated
+   error pages, not just normal-response `Server` headers.
+5. `GET /documents/no-such-key` (MinIO passthrough, unauthenticated by
+   design — Task 3) — `X-Content-Type-Options: nosniff` present;
+   `Server` header does NOT contain "minio" — proving
+   `proxy_hide_header Server` actually suppresses the upstream's own
+   disclosure, not just asserted to.
+
+### Regression
+
+No application code was touched — only `infra/nginx/*` and
+`infra/docker-compose.yml`. Every existing infra-integration
+acceptance step (Tasks 3–7's) runs unmodified, immediately before this
+new step, and is expected to keep passing: `include
+/etc/nginx/security-headers.conf;` and `proxy_hide_header Server;`
+only ADD/replace response headers — they never change routing,
+rewrites, `proxy_pass` targets, or `auth_request` behavior on any
+existing location. `auth-service`/`catalogue-service`/
+`document-service`/`search-service` unit-test jobs are entirely
+unaffected (no service code changed).
+
+### Exact results
+
+*(Filled in once this commit's CI run completes — evidence can't
+predate the run it evidences, same reasoning as every prior task's
+addendum commit in this log. See the FINAL REPORT for this task for
+the actual run ID, job IDs, and quoted pass/fail output pulled
+directly from GitHub Actions.)*
+
+### Documentation updated
+
+- `docs/SECURITY_HARDENING_LOG.md`: this entry.
+- `docs/SECURITY_PROJECT_REPORT.md`: Task 8 row and section, and an
+  update to make Tasks 1–8 accurately represented as a whole (per this
+  task's explicit instruction) once CI evidence confirms PASS.

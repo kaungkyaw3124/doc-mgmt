@@ -114,6 +114,7 @@ services:
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./nginx/cors.conf:/etc/nginx/cors.conf:ro
+      - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
       - ./nginx/docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - ./nginx/validate-cors-config.sh:/validate-cors-config.sh:ro
       - ../web:/usr/share/nginx/html:ro

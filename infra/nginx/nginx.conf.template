@@ -13,10 +13,30 @@
 events {}
 
 http {
+    # Task 8 — stop advertising the exact Nginx version. Applies to the
+    # `Server` response header AND Nginx's own auto-generated error
+    # pages (404, 500, etc. — both currently include the version in
+    # their footer; server_tokens off removes it from both at once).
+    # Does NOT, on its own, stop an upstream (auth-service/catalogue-
+    # service/document-service/search-service's uvicorn, or MinIO) from
+    # disclosing ITS OWN Server header through the proxy — see the
+    # `proxy_hide_header Server;` on every proxied location below for
+    # that half of the fix.
+    server_tokens off;
+
     # Default is 1MB, which silently rejects any catalog file/PDF/logo over
     # that size with a plain (non-JSON) error page before it even reaches
     # the app — bump it so real uploads (spec sheets, brochures, etc.) work.
     client_max_body_size 25m;
+
+    # Task 8 — slow-client protection. Conservative, generous timeouts
+    # (this app's own slowest legitimate operation, the catalogue
+    # export, already gets its own explicit 300s proxy_read_timeout
+    # below — these are just the defaults for everything else, previously
+    # left at Nginx's own built-in defaults of 60s, which is already
+    # reasonable but was never explicit).
+    client_body_timeout 30s;
+    client_header_timeout 30s;
 
     # Task 7 — CORS. This app is same-origin end-to-end in its real
     # deployment (Nginx serves both the static frontend and every API
@@ -46,6 +66,7 @@ http {
         index index.html;
 
         location / {
+            include /etc/nginx/security-headers.conf;
             try_files $uri $uri/ /index.html;
         }
 
@@ -69,11 +90,15 @@ http {
         # stripped off. Forwarding $host here silently breaks every
         # presigned-URL signature check (SignatureDoesNotMatch / 403).
         location /documents/ {
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             proxy_pass http://minio:9000;
             proxy_set_header Host $http_host;
         }
 
         location /products/ {
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             proxy_pass http://minio:9000;
             proxy_set_header Host $http_host;
         }
@@ -94,6 +119,8 @@ http {
         # Public: no auth required to log in
         location /api/auth/login {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             rewrite ^/api/auth/login$ /login break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -106,6 +133,8 @@ http {
         # approval until a superuser approves it — see /api/admin/users/pending)
         location /api/auth/register {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             rewrite ^/api/auth/register$ /register break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -115,6 +144,8 @@ http {
         # requesting to join?" without requiring a login first.
         location /api/auth/groups-public {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             rewrite ^/api/auth/groups-public$ /groups-public break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -127,6 +158,8 @@ http {
         # directives needed for either.
         location /api/auth/refresh {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             rewrite ^/api/auth/refresh$ /refresh break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -136,6 +169,8 @@ http {
         # refresh cookie, always succeeds either way.
         location /api/auth/logout {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             rewrite ^/api/auth/logout$ /logout break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -146,6 +181,8 @@ http {
         # just pass through — no auth_request needed at the gateway for them.
         location /api/auth/users {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             rewrite ^/api/auth/users(.*)$ /users$1 break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -154,6 +191,8 @@ http {
 
         location /api/admin/ {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             rewrite ^/api/admin/(.*)$ /admin/$1 break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
@@ -178,6 +217,8 @@ http {
         # because nobody remembered to update Nginx too.
         location /api/documents {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
@@ -207,6 +248,8 @@ http {
 
         location /api/customers {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $access_level $upstream_http_x_access_level;
@@ -222,6 +265,8 @@ http {
 
         location /api/companies {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $access_level $upstream_http_x_access_level;
@@ -237,6 +282,8 @@ http {
 
         location /api/projects {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
@@ -253,6 +300,8 @@ http {
 
         location /api/products {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             set $service_name "products";
             auth_request /_verify;
             auth_request_set $has_category_access $upstream_http_x_has_category_access;
@@ -267,6 +316,8 @@ http {
 
         location /api/categories {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             set $service_name "products";
             auth_request /_verify;
             auth_request_set $has_category_access $upstream_http_x_has_category_access;
@@ -280,6 +331,8 @@ http {
 
         location /api/search {
             include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
             set $service_name "search";
             auth_request /_verify;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;

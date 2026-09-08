@@ -602,6 +602,83 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — security headers, version disclosure, CSP integrity, no duplicates
+        run: |
+          fail=0
+
+          check_header_once() {
+            # $1 = header name, $2 = response headers text, $3 = label,
+            # $4 = substring the value must contain
+            name="$1"; headers="$2"; label="$3"; expected="$4"
+            count=$(echo "$headers" | tr -d '\r' | grep -ci "^${name}:")
+            [ "$count" = "1" ] || { echo "FAIL: expected exactly 1 '$name' header on $label, got $count"; fail=1; return; }
+            line=$(echo "$headers" | tr -d '\r' | grep -i "^${name}:")
+            echo "$label $name -> $line"
+            if [ -n "$expected" ]; then
+              echo "$line" | grep -qF "$expected" || { echo "FAIL: $label $name missing expected value '$expected' -- got: $line"; fail=1; }
+            fi
+          }
+
+          # --- (1) the frontend page: full header set, exactly once each ---
+          index_headers=$(curl -s -D - -o /tmp/index_body.html http://localhost:8080/)
+          server_line=$(echo "$index_headers" | tr -d '\r' | grep -i '^server:')
+          echo "Server header on / -> $server_line"
+          echo "$server_line" | grep -qE '[0-9]' && { echo "FAIL: Server header discloses a version number: $server_line"; fail=1; }
+
+          check_header_once "X-Content-Type-Options" "$index_headers" "/" "nosniff"
+          check_header_once "Referrer-Policy" "$index_headers" "/" "strict-origin-when-cross-origin"
+          check_header_once "X-Frame-Options" "$index_headers" "/" "SAMEORIGIN"
+          check_header_once "Permissions-Policy" "$index_headers" "/" "camera=()"
+          check_header_once "Content-Security-Policy" "$index_headers" "/" "frame-ancestors 'self'"
+
+          # --- (2) CSP script-src hash matches the ACTUALLY-served inline
+          # <script> content -- catches drift if index.html's script is
+          # ever edited without recomputing the hash (see
+          # docs/SECURITY_HARDENING_LOG.md's Task 8 entry for how).
+          csp_line=$(echo "$index_headers" | tr -d '\r' | grep -i '^content-security-policy:')
+          computed_hash=$(python3 -c "import hashlib, base64; content = open('/tmp/index_body.html', 'rb').read(); start = content.index(b'<script>\n') + len(b'<script>\n'); end = content.index(b'</script>', start); digest = hashlib.sha256(content[start:end]).digest(); print('sha256-' + base64.b64encode(digest).decode())")
+          echo "computed inline-script hash -> $computed_hash"
+          echo "$csp_line" | grep -qF "$computed_hash" || { echo "FAIL: CSP script-src hash does not match the actually-served inline script -- web/index.html's script was edited without recomputing the CSP hash"; fail=1; }
+
+          # --- (3) an unauthenticated request to a PROTECTED endpoint
+          # (401, via Nginx's own auth_request gate -- this is Nginx's
+          # OWN error response, not a proxied backend body) still carries
+          # the full header set, and does not disclose Nginx's version.
+          unauth_headers=$(curl -s -D - -o /tmp/401_body.html http://localhost:8080/api/documents)
+          unauth_code=$(echo "$unauth_headers" | head -1 | tr -d '\r')
+          echo "unauthenticated /api/documents -> $unauth_code"
+          echo "$unauth_code" | grep -q ' 401 ' || { echo "FAIL: expected 401 for an unauthenticated protected request, got: $unauth_code"; fail=1; }
+          check_header_once "X-Content-Type-Options" "$unauth_headers" "401 /api/documents" "nosniff"
+          check_header_once "Content-Security-Policy" "$unauth_headers" "401 /api/documents" ""
+          grep -qi 'nginx/[0-9]' /tmp/401_body.html && { echo "FAIL: 401 error body discloses the Nginx version"; fail=1; }
+
+          # --- (4) a genuinely Nginx-generated error page (413, request
+          # body over client_max_body_size -- Nginx rejects this itself,
+          # before ever proxying anywhere) never discloses the version
+          # either, proving server_tokens off covers Nginx's own
+          # generated error pages, not just the Server header on normal
+          # responses.
+          dd if=/dev/zero of=/tmp/toolarge.bin bs=1M count=26 status=none
+          big_headers=$(curl -s -D - -o /tmp/413_body.html -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/octet-stream' --data-binary @/tmp/toolarge.bin)
+          big_code=$(echo "$big_headers" | head -1 | tr -d '\r')
+          echo "oversized request body -> $big_code"
+          echo "$big_code" | grep -q ' 413 ' || { echo "FAIL: expected 413 for a request over client_max_body_size, got: $big_code"; fail=1; }
+          grep -qi 'nginx/[0-9]' /tmp/413_body.html && { echo "FAIL: 413 error body discloses the Nginx version"; fail=1; }
+          rm -f /tmp/toolarge.bin
+
+          # --- (5) MinIO-proxied responses: nosniff present, MinIO's own
+          # Server header hidden (proxy_hide_header) -- Task 3's
+          # connectivity-only check never inspected response headers.
+          minio_headers=$(curl -s -D - -o /dev/null http://localhost:8080/documents/no-such-key)
+          echo "MinIO passthrough headers -> $(echo "$minio_headers" | tr -d '\r' | grep -iE '^(server|x-content-type-options):')"
+          echo "$minio_headers" | tr -d '\r' | grep -qi '^x-content-type-options: nosniff$' \
+            || { echo "FAIL: MinIO-proxied response missing X-Content-Type-Options"; fail=1; }
+          echo "$minio_headers" | tr -d '\r' | grep -i '^server:' | grep -qi 'minio' \
+            && { echo "FAIL: MinIO's own Server header leaked through the proxy"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

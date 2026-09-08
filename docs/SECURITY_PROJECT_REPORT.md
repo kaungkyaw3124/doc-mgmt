@@ -16,7 +16,7 @@ not replace the log.
 | 5 | Secure uploaded Content-Type | PASS | `c21f72c` (this pass adds content-sniffing + an Nginx Host-header fix: `e49d7f1`) |
 | 6 | JWT storage and rotation | PASS | `72a9af5` (fixes: `d727155`, `e7ed0a1` — see below) |
 | 7 | CORS policy | PASS | `92a5f91` |
-| 8 | Security headers / Nginx hardening | not started | - |
+| 8 | Security headers / Nginx hardening | implemented, CI verification pending | this pass — see below |
 
 ## Task 5 — Secure Uploaded Content-Type
 
@@ -577,7 +577,151 @@ patch).
 - `docs/SECURITY_PROJECT_REPORT.md`: yes — this section, and the
   status table.
 
+### Remaining security tasks (as of the Task 7 pass — superseded below)
+
+~~Task 8 (security headers / Nginx hardening), then the final full
+security audit.~~ Task 8 is addressed below.
+
+## Task 8 — Security Headers / Nginx Hardening
+
+**Status: implemented, CI verification pending** — not claimed PASS
+until this section is updated with actual raw CI evidence (see
+`docs/SECURITY_HARDENING_LOG.md`'s Task 8 entry for the full design,
+inspection findings, and CSP source-by-source justification).
+
+### Original problem
+
+No security response header existed anywhere in this project before
+this task (confirmed by repo grep, not assumed) — no
+`X-Content-Type-Options`, no `Content-Security-Policy`, no framing
+protection, no `Referrer-Policy`, no `Permissions-Policy`, and
+`server_tokens` was never set (Nginx's own default discloses its exact
+version in the `Server` header and in its own default error pages).
+Upstream `Server` headers (MinIO's `Server: MinIO`, each FastAPI
+service's uvicorn header) also passed straight through the proxy
+unmodified.
+
+### Exact files changed
+
+- New: `infra/nginx/security-headers.conf`.
+- Changed: `infra/nginx/nginx.conf.template` (`server_tokens off;`,
+  explicit client timeouts, `include`/`proxy_hide_header` added to all
+  17 client-facing locations), `infra/docker-compose.yml` (new volume
+  mount), `.github/workflows/tests.yml` (one new real-HTTP
+  acceptance step).
+
+### Exact security headers / values
+
+```
+X-Content-Type-Options: nosniff
+Referrer-Policy: strict-origin-when-cross-origin
+X-Frame-Options: SAMEORIGIN
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(), clipboard-read=(), clipboard-write=()
+Content-Security-Policy: default-src 'self'; script-src 'sha256-P4MQVlq/RTqfvllWKvmddqLTW9Vy+XgeC6L2Xz0YbvE='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+```
+
+### CSP policy and justification
+
+Built from an actual, exhaustive grep of `web/index.html` (the only
+page this app ever serves), not a permissive default — see
+`docs/SECURITY_HARDENING_LOG.md`'s Task 8 entry for the full
+directive-by-directive table. In short: `script-src` uses the exact
+SHA-256 hash of the app's one inline `<script>` block (no
+`'unsafe-inline'`, no `'unsafe-eval'` — zero `eval()`, zero inline
+event handlers, confirmed by grep); `style-src` accepts
+`'unsafe-inline'` as one deliberate, narrowly-scoped, documented
+exception (227 inline `style="..."` attributes, several with
+dynamically-computed values a hash cannot cover — converting them all
+would be a large, risky rewrite far beyond "minimum necessary");
+everything else (`img-src`, `connect-src`, `object-src`, `frame-src`)
+is locked to `'self'`/`'none'` since the app uses none of those
+resource types beyond itself. Never
+`default-src * 'unsafe-inline' 'unsafe-eval'` — the exact anti-pattern
+this task's own instructions named directly.
+
+### Framing protection
+
+`X-Frame-Options: SAMEORIGIN` + CSP `frame-ancestors 'self'` together.
+No iframe usage anywhere in the app (confirmed by grep) — pure
+addition, nothing legitimate to break.
+
+### Referrer policy
+
+`strict-origin-when-cross-origin` — the value this task's instructions
+suggested, and inspection found no reason to deviate (the app is
+same-origin end-to-end; the only real cross-origin request is the
+Google Fonts stylesheet load).
+
+### Permissions policy
+
+Every listed capability (camera, microphone, geolocation, payment,
+usb, fullscreen, clipboard-read/write) denied — confirmed by grep that
+the app uses none of them anywhere.
+
+### Nginx version disclosure result
+
+`server_tokens off;` removes the version from the `Server` header and
+from Nginx's own default error pages. `proxy_hide_header Server;`
+added to all 16 `proxy_pass` locations, since `server_tokens off`
+alone does nothing to stop MinIO's or uvicorn's own `Server` headers
+passing through unmodified — verified by checking what those upstreams
+actually send, not assumed sufficient.
+
+### HSTS decision
+
+**Not added.** This Nginx only ever `listen`s on plain HTTP (port
+80) — it never terminates TLS anywhere in this repository, and
+`docs/deployment.md` already documented this as unverified/external
+before this task. Adding HSTS without a guaranteed HTTPS layer in
+front of it would be actively harmful (the browser would refuse plain
+HTTP entirely, breaking the site) rather than protective. Documented:
+HSTS belongs at whatever layer actually terminates TLS in production,
+once that's genuinely guaranteed — not in this repository's Nginx
+config.
+
+### Other Nginx hardening
+
+`client_body_timeout`/`client_header_timeout` made explicit (30s);
+directory listing confirmed already off (Nginx default, now
+explicitly verified rather than assumed); HTTP methods deliberately
+NOT globally restricted at Nginx (reasoned decision, not an oversight
+— see the hardening log for the full reasoning); internal-only
+`/_verify` location re-confirmed unreachable by any direct client.
+
+### Security tests executed / full test results / integration results
+
+One new real-HTTP `infra-integration` CI step (no FastAPI TestClient —
+there's no FastAPI-level header code to test, it's all in Nginx):
+`Server` header version-disclosure check; all 5 core headers present
+exactly once with correct values on the frontend page; a CSP
+hash-integrity check that recomputes the inline `<script>` hash from
+the ACTUALLY-served file and compares it against the header (catches
+future drift); the same core headers present on a real 401 (Nginx's
+own `auth_request`-generated error, not a proxied body); a genuinely
+Nginx-generated 413 (oversized request body) that discloses no version
+string; MinIO-proxied response headers (`nosniff` present, MinIO's own
+`Server` header confirmed hidden). See
+`docs/SECURITY_HARDENING_LOG.md` for the complete list.
+
+*(Exact CI run ID, job IDs, and quoted raw pass/fail output filled in
+once this commit's CI run completes — see the FINAL REPORT for this
+task.)*
+
+### Bugs/failures encountered
+
+*(Filled in once CI results are read — this section will report either
+"none, first attempt passed" or the exact diagnosis/fix per any
+failure, per this task's IMPLEMENT → TEST → DIAGNOSE → FIX → RETEST →
+VERIFY instruction.)*
+
+### Documentation updated
+
+- `docs/SECURITY_HARDENING_LOG.md`: yes — full Task 8 entry.
+- `docs/SECURITY_PROJECT_REPORT.md`: yes — this section, and the
+  status table.
+
 ### Remaining security tasks
 
-Task 8 (security headers / Nginx hardening), then the final full
-security audit.
+The final full security audit across all 8 tasks — not started yet,
+per this task's explicit instruction not to begin it until Task 8
+itself is confirmed PASS.
