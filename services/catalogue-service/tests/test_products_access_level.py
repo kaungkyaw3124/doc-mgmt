@@ -40,27 +40,33 @@ def test_require_edit_access_rejects_view():
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.parametrize(
-    "method,path",
-    [
-        ("post", "/products"),
-        ("post", "/products/bulk-import"),
-        ("patch", "/products/00000000-0000-0000-0000-000000000000/trash"),
-        ("patch", "/products/00000000-0000-0000-0000-000000000000/restore"),
-        ("patch", "/products/00000000-0000-0000-0000-000000000000"),
-        ("delete", "/products/00000000-0000-0000-0000-000000000000"),
-        ("post", "/products/00000000-0000-0000-0000-000000000000/sub-items"),
-        ("delete", "/products/00000000-0000-0000-0000-000000000000/sub-items/00000000-0000-0000-0000-000000000000"),
-    ],
-)
-def test_view_access_level_is_rejected_before_reaching_the_db(method, path):
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+# (method, path, kwargs) — each body is a MINIMAL but schema-valid payload,
+# because FastAPI validates the request body/dependencies before the route
+# function (and thus _require_edit_access) ever runs: an invalid body would
+# 422 first and never actually exercise the access check we're testing.
+_WRITE_ENDPOINTS = [
+    ("post", "/products", {"json": {"name": "Access Level Test Product"}}),
+    ("post", "/products/bulk-import", {"files": {"excel_file": ("x.xlsx", b"not a real workbook", "application/octet-stream")}}),
+    ("patch", f"/products/{_NIL_UUID}/trash", {}),
+    ("patch", f"/products/{_NIL_UUID}/restore", {}),
+    ("patch", f"/products/{_NIL_UUID}", {"json": {}}),
+    ("delete", f"/products/{_NIL_UUID}", {}),
+    ("post", f"/products/{_NIL_UUID}/sub-items", {"json": {"product_id": _NIL_UUID}}),
+    ("delete", f"/products/{_NIL_UUID}/sub-items/{_NIL_UUID}", {}),
+]
+
+
+@pytest.mark.parametrize("method,path,kwargs", _WRITE_ENDPOINTS)
+def test_view_access_level_is_rejected_before_reaching_the_db(method, path, kwargs):
     """
     A Viewer's X-Access-Level: view must be rejected by every write
     endpoint — proving there's no remaining bypass. (upload_product_file
     needs multipart form data to pass FastAPI's own validation before our
     handler runs, so it's covered separately below.)
     """
-    resp = getattr(client, method)(path, headers=_HEADERS_VIEW, json={} if method in ("post", "patch") else None)
+    resp = client.request(method.upper(), path, headers=_HEADERS_VIEW, **kwargs)
     assert resp.status_code == 403, f"{method.upper()} {path} did not enforce view-only access: {resp.status_code} {resp.text}"
     assert "view-only" in resp.json()["detail"]
 

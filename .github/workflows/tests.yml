@@ -963,7 +963,7 @@ jobs:
           # working Editor login — exactly the admin-created path's end
           # state, reached via the other door.
           register_code=$(curl -s -o /tmp/register.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/register \
-            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\",\"requested_group_id\":\"$operation_group_id\"}")
           echo "self-register -> $register_code"
           [ "$register_code" = "201" ] || { echo "FAIL: self-registration failed (got $register_code)"; cat /tmp/register.json; fail=1; }
 
@@ -976,6 +976,8 @@ jobs:
           approve_code=$(curl -s -o /tmp/approve.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/users/$pending_user_id/approve" "${admin_auth[@]}")
           echo "approve pending user -> $approve_code"
           [ "$approve_code" = "200" ] || { echo "FAIL: could not approve the pending user (got $approve_code)"; cat /tmp/approve.json; fail=1; }
+          added_to_group=$(python3 -c 'import json; print(json.load(open("/tmp/approve.json"))["added_to_group"])')
+          [ "$added_to_group" = "True" ] || { echo "FAIL: approval did not add the requested-group user to Operation (added_to_group=$added_to_group)"; cat /tmp/approve.json; fail=1; }
 
           assign_code=$(curl -s -o /tmp/assign.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/assign" "${admin_auth[@]}" \
             -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\"}")
