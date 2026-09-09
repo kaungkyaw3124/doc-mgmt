@@ -2581,3 +2581,287 @@ from the commit existing or from a green checkmark alone.**
 - `docs/SECURITY_PROJECT_REPORT.md`: Task 8 row and section, and an
   update to make Tasks 1–8 accurately represented as a whole (per this
   task's explicit instruction) once CI evidence confirms PASS.
+
+---
+
+## Task 9 — Company/Managing Director Restructuring (and its correction)
+
+**Date:** 2026-09-09
+
+**Status:** PASS — verified against raw CI evidence, see "Exact
+results" below (final commit `f151afa`, run `34311652657`, all 5 jobs
+green).
+
+**Not a security-hardening task.** This is a data-model/UI
+restructuring requested directly by the repo owner, working on the same
+`security/auth-hardening` branch. Recorded here per that explicit
+instruction, and because the correction pass (below) touched the same
+CSP hash mechanism Task 8 introduced.
+
+### Goal
+
+Move company signer/contact display off a single flat `Company` record
+onto individual, per-company **Managing Directors** (`CompanyDirector`,
+which already existed in the schema with `name`/`seal_object_key`), and
+remove `Company.support_phone` (confirmed unused anywhere in the app).
+Two rounds of instructions were given for this, and the second
+corrected a real mistake in the first — both are recorded below rather
+than only the final state, per this project's established "never hide
+a failure" practice.
+
+### Round 1 — initial (incorrect) implementation
+
+The first instruction ("Move signer details to managing directors")
+asked to remove `position`/`address`/`contact_no`/`support_email`/
+`support_phone` from `Company` entirely and source the quotation's
+Supplier block from the selected `CompanyDirector` instead. Implemented
+as commit `835f6a7`: all five fields dropped from `Company`,
+`CompanyDirector` gained `address`/`contact_no`/`email`, cross-company
+director validation added to `documents.py` (previously **missing
+entirely** — a document could be saved with a `director_id` belonging
+to a different `company_id` than its own `company_id`; not previously
+flagged by any test), and the quotation Supplier block was switched to
+read `director.address`/`director.contact_no`/`director.email`.
+
+CI run `34308257357` (commit `835f6a7`) **FAILED** — `infra-integration`
+job, step "Acceptance — company/director restructuring". This surfaced
+before the follow-up instruction arrived, and is folded into this same
+entry rather than written up separately, since the follow-up
+instruction directly superseded the design this CI failure was testing.
+
+### Round 2 — correction (per explicit follow-up instruction)
+
+A second, explicit instruction ("Check current migration... Do NOT
+blindly accept that migration... Company must continue to have
+name/short_name/position/address/contact_no/support_email/logo/seal.
+Only company-level `support_phone` should be removed.") identified that
+Round 1 had gone further than intended: `position`/`address`/
+`contact_no`/`support_email` belong on `Company` (used for the
+quotation **Supplier** block: Name/Address/Contact No/Email — sourced
+from `company.name`/`company.address`/`company.contact_no`/
+`company.support_email`; `position` is kept on the model for
+signer/signature use but deliberately **not** rendered in the Supplier
+block), and only `support_phone` should actually be removed (it was
+never read anywhere in the app — `grep` for `settings.support_phone`/
+`company.support_phone`/`support_phone` outside `models.py`/
+`schemas.py` found no usage prior to this task).
+
+**Files changed for the correction** (commit `bad123d`):
+- `services/document-service/app/models.py` — restored
+  `position`/`address`/`contact_no`/`support_email` to `Company`;
+  `CompanyDirector` unchanged (already correct in Round 1).
+- `services/document-service/app/schemas.py` — restored those four
+  fields to `CompanyCreate`/`CompanyUpdate`/`CompanyOut`.
+- `services/document-service/app/routers/documents.py` —
+  `_gather_export_data`'s `company` dict rebuilt with
+  `position`/`address`/`contact_no`/`support_email`; cross-company
+  director validation (added in Round 1) left untouched.
+- `services/document-service/app/core/export_quotation.py` (XLSX) and
+  `app/templates/quotation.html` (PDF) — Supplier block's
+  Address/Contact No rows switched back to `company.*`, with a new
+  Email row added (`company.support_email`); `company.position` is
+  available in the `company` dict but deliberately never rendered in
+  the Supplier block (comment added explaining why, so a future editor
+  doesn't "fix" the apparent gap). The "Customer Service" footer
+  (Email/Phone) also switched back to `company.support_email`/
+  `company.contact_no` (not `support_phone`, which no longer exists).
+  The MD signature block (director's own name + seal) is unaffected —
+  it was already sourced from `director`, not `company`, in both
+  rounds.
+- `services/document-service/alembic/versions/0002_*.py` — **renamed**
+  from `0002_move_signer_details_to_directors.py` to
+  `0002_director_contact_fields_drop_company_support_phone.py`
+  (accurately describing its corrected scope) and rewritten: `upgrade()`
+  now only drops `companies.support_phone` (previously dropped all
+  five); `downgrade()` only re-adds `support_phone`. The idempotent
+  catch-up of `company_directors`/`documents.director_id` (a
+  pre-existing gap — see known-issues.md #10 — `0001_initial` never
+  created either, they've only existed via `Base.metadata.create_all()`)
+  is unchanged from Round 1. This migration was corrected in place
+  rather than superseded by a new migration file, since it had not yet
+  been applied anywhere (pushed minutes earlier, in the same task
+  line) — not a case of editing an already-applied migration.
+- `web/index.html` — restored the Signer position/Address/Contact
+  No/Support email fields to the Company form, table columns, and
+  recycle-bin table (all removed in Round 1); the `support_phone` field
+  stays removed. Director rows (Name/Address/Contact No/Email/Seal/
+  Remove, unlimited, added in Round 1) are unaffected.
+- `services/document-service/tests/test_companies.py` — rewritten:
+  asserts `Company` schemas **keep**
+  `position`/`address`/`contact_no`/`support_email` and **only**
+  `support_phone` is gone; `CompanyDirector` schema tests unchanged
+  from Round 1; added a test that Company's and CompanyDirector's
+  contact fields never collapse into the same field names
+  (`support_email` vs `email`).
+- `.github/workflows/tests.yml` — the infra-integration acceptance step
+  rewritten to match: company create/update round-trips
+  `position`/`address`/`contact_no`/`support_email` but never
+  `support_phone`; the exported quotation is asserted to contain the
+  **company's** own address/contact_no/support_email (and explicitly
+  asserted to **not** contain the director's differing address/contact
+  number, and to **not** leak `company.position` as its own cell), while
+  the MD signature block is asserted to still show the selected
+  director's own name; cross-company rejection (create **and** update)
+  re-verified.
+- `infra/nginx/security-headers.conf` — the CSP `script-src` hash
+  recomputed and updated **twice** in this task (once after Round 1's
+  frontend edits, once after Round 2's), each time following Task 8's
+  documented recomputation method — editing `web/index.html`'s inline
+  `<script>` block changes its exact byte content, which changes its
+  SHA-256 hash; forgetting this step reintroduces the exact
+  browser-side CSP breakage diagnosed earlier in this session (see the
+  "gpu-server login" investigation elsewhere in this conversation).
+  Final hash: `sha256-ICbqTVvj8bvpm//tPN24i51A+h6i4GUbHMu2XjpI8lE=`
+  (line 1511 at time of computation).
+
+### Bug found and fixed during verification: CI step itself, not app code
+
+CI run `34311472024` (commit `bad123d`, the correction above) **also
+FAILED** — same step. Raw job logs (`mcp__github__get_job_logs`,
+`return_content: true`, job `102329364892` and the `bad123d` run's
+equivalent job) showed the actual API traffic succeeded end to end
+(company/director creation, both cross-company 400 rejections, `GET
+.../export/quotation -> 200`), immediately followed by:
+
+```
+quotation export -> 200
+##[error]Process completed with exit code 11.
+```
+
+Exit code 11 is `unzip`'s own documented code for "no matching files
+were found." The step's export-content check ran
+`unzip -p /tmp/quotation.xlsx xl/sharedStrings.xml > /tmp/shared_strings.xml
+2>/dev/null` with no `||` fallback, under GitHub Actions' default
+`bash -e`; when that exact path didn't resolve inside the archive, the
+whole step aborted immediately — before any of the step's own explicit
+`FAIL:` assertions ever ran. This was a bug in the **CI verification
+script**, not in the application: `generate_quotation_xlsx` itself was
+never at fault.
+
+**Fix** (commit `f151afa`): replaced the single-path `unzip -p` with a
+Python (stdlib `zipfile`) one-liner that concatenates the text of every
+`.xml` member in the archive, so the check no longer depends on
+assuming one exact internal path:
+
+```
+python3 -c 'import zipfile; z = zipfile.ZipFile("/tmp/quotation.xlsx"); text = "".join(z.read(n).decode("utf-8", "replace") for n in z.namelist() if n.endswith(".xml")); open("/tmp/xlsx_text.txt", "w").write(text)'
+```
+
+(Written as a single physical line inside the YAML `run: |` block —
+the same multi-line-inside-a-block-scalar indentation break documented
+in Task 8's own hardening log entry recurred while drafting this fix,
+and was caught the same way: `python3 -c "import yaml; yaml.safe_load(...)"`
+before pushing.)
+
+### Tests executed
+
+- `services/document-service` unit-test job (`pytest -v`, no live DB —
+  same pattern as `test_gateway_auth.py`): `test_companies.py`'s 15
+  schema-level tests, alongside the service's other unit tests.
+- `infra-integration` job step "Acceptance — company/director
+  restructuring (director gets own contact info, company keeps its
+  Supplier fields, support_phone removed)": real HTTP through Nginx
+  against the full `docker compose` stack — company create/update
+  round-trip, two directors on one company (create + partial update),
+  cross-company director rejection on both document create and update,
+  quotation XLSX export content, company update still works.
+- Full regression: all other existing `infra-integration` acceptance
+  steps (Tasks 3–8) and all four services' unit-test jobs, in the same
+  run.
+
+### Exact results
+
+Run: https://github.com/kaungkyaw3124/doc-mgmt/actions/runs/34311652657
+(commit `f151afa`) — all 5 jobs **PASSED**. Verified via
+`mcp__github__get_job_logs` with `return_content: true` (raw content,
+not the `conclusion` field alone).
+
+`document-service` job (id `102339379386`), final pytest summary line:
+
+```
+======================== 68 passed, 4 warnings in 1.98s ========================
+```
+
+`infra-integration` job (id `102339379438`), step 17's actual runtime
+output (not the echoed script source GitHub Actions prints before
+executing it — the two are distinguishable by timestamp; quoted here is
+the post-`shell:`-line execution only), verbatim:
+
+```
+created company: {"id":"3a0befc9-d111-4817-9313-2362838ee930","name":"Restructure Test Co.","short_name":"RTC","position":"Director","address":"Company HQ, Yangon","contact_no":"+95911111111","support_email":"supplier@restructuretest.example.com","logo_object_key":null,"seal_object_key":null,"is_primary":true,"is_deleted":false,"created_at":"2026-09-09T04:38:20.837777Z"}
+created director A: {"id":"144cc404-6825-497c-9b24-404f363ae942","company_id":"3a0befc9-d111-4817-9313-2362838ee930","name":"Aung Aung","address":"Mayangon, Yangon","contact_no":"+95999999999","email":"aungaung@gmail.com","seal_object_key":null,"sort_order":1,"created_at":"2026-09-09T04:38:20.932323Z"}
+created document: {"id":"c5ce4709-a97b-4ee5-8386-682e3eab7a39", ... "company_id":"3a0befc9-...","director_id":"144cc404-...", ...}
+cross-company create -> 400: {"detail":"director does not belong to the selected company"}
+cross-company update -> 400: {"detail":"director does not belong to the selected company"}
+quotation export -> 200
+```
+
+No `FAIL:` line appears anywhere in this actual runtime output (every
+occurrence of the literal text `FAIL:` in the full log is from GitHub
+Actions echoing the step's own source code before execution, not from
+that code actually running — confirmed by timestamp: all source-echo
+lines carry one identical timestamp, `04:38:20.61xx`, while the
+executed output above starts at `04:38:20.8777029` and runs through
+`04:38:21.3767941`). The script proceeded straight to
+`docker compose down -v` (teardown) after the export check, meaning
+`exit $fail` returned `0` — every assertion passed, including: the
+company's own `position`/`address`/`contact_no`/`support_email`
+round-tripped and `support_phone` is absent from `CompanyOut`; the
+director's own `address`/`contact_no`/`email` round-tripped separately
+and the partial update (`contact_no` only) didn't clobber `name`/
+`address`; both cross-company rejections fired with `400`; the exported
+quotation's Supplier block contained the **company's** name, address,
+contact number, and support email, did **not** contain
+`company.position` ("Director") as its own cell, and did **not**
+contain the director's differing address/contact number — while the MD
+signature block still showed "Aung Aung" (the selected director's own
+name).
+
+All other infra-integration acceptance steps (Tasks 3–8) and all four
+services' unit-test jobs: **PASSED**, unmodified, confirming zero
+regression from this task.
+
+### Security impact
+
+None expected, and none found. This task changes which model field a
+display value is read from (`Company` vs `CompanyDirector`) and removes
+one genuinely-unused column; it does not touch authentication,
+authorization, gateway trust, datastore isolation, upload validation,
+CORS, or security headers. The one item worth flagging as a **security
+improvement** (not a regression risk): the cross-company director
+validation added in Round 1 — `director.company_id != payload.company_id`
+→ `400` — did not exist before this task at all despite `Document`
+already storing both `company_id` and `director_id`; it was preserved
+unmodified through the Round 2 correction and is now verified via the
+two `400` responses quoted above (create **and** update).
+
+### Bugs found/fixed
+
+1. Round 1 incorrectly moved `position`/`address`/`contact_no`/
+   `support_email` off `Company` (should have stayed) — corrected in
+   Round 2.
+2. Missing cross-company director validation (pre-existing gap, not
+   introduced by this task) — added in Round 1, preserved in Round 2.
+3. CI verification step used an unguarded `unzip -p <exact-path>` under
+   `bash -e`, which aborted the step via exit code 11 instead of
+   running its own assertions — fixed with a path-independent Python
+   `zipfile` check.
+
+### Commits
+
+- `835f6a7` — Round 1 (superseded by Round 2 below; CI failed on this
+  commit, see above).
+- `bad123d` — Round 2 correction (CI still failed, on the CI script
+  bug above, not the application).
+- `f151afa` — CI script fix. **This is the commit CI is green on.**
+
+### Verification
+
+Real GitHub Actions CI (`mcp__github__actions_list` /
+`mcp__github__get_job_logs` with `return_content: true`), raw log
+content quoted above — not the `conclusion` field alone, not assumed
+from a green checkmark.
+
+**Net result: Task 9 is genuinely PASS as of commit `f151afa`,
+independently verified against raw CI evidence for the complete
+relevant test suite.**
