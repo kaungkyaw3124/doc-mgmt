@@ -815,6 +815,188 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — User Control (Operation group, Editor/Viewer roles, admin-created users, no deletion, pending registration, Products access-level enforcement)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+
+          # --- Task 1: the Operation group exists (seeded idempotently on
+          # auth-service startup), and the superuser is NOT a member of it.
+          groups_json=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}")
+          operation_group_id=$(echo "$groups_json" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"] if g else "")')
+          [ -n "$operation_group_id" ] || { echo "FAIL: Operation group does not exist"; fail=1; }
+          echo "Operation group id -> $operation_group_id"
+
+          # --- Task 2: exactly two roles in Operation — Editor and Viewer.
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          role_names=$(echo "$roles_json" | python3 -c 'import sys,json; print(",".join(sorted(r["name"] for r in json.load(sys.stdin))))')
+          echo "Operation roles -> $role_names"
+          [ "$role_names" = "Editor,Viewer" ] || { echo "FAIL: expected exactly Editor,Viewer roles in Operation, got: $role_names"; fail=1; }
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          # --- Task 3: admin creates an Editor and a Viewer, both approved
+          # + active immediately, no is_superuser field reachable through
+          # this endpoint.
+          suffix=$RANDOM
+          editor_json=$(curl -s -o /tmp/create_editor.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"editor_uc_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}")
+          echo "create editor -> $editor_json"
+          [ "$editor_json" = "201" ] || { echo "FAIL: expected 201 creating an Editor, got $editor_json"; cat /tmp/create_editor.json; fail=1; }
+
+          viewer_json=$(curl -s -o /tmp/create_viewer.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"viewer_uc_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}")
+          echo "create viewer -> $viewer_json"
+          [ "$viewer_json" = "201" ] || { echo "FAIL: expected 201 creating a Viewer, got $viewer_json"; cat /tmp/create_viewer.json; fail=1; }
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_uc_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"viewer_uc_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          [ -n "$editor_token" ] || { echo "FAIL: created Editor could not log in immediately"; fail=1; }
+          [ -n "$viewer_token" ] || { echo "FAIL: created Viewer could not log in immediately"; fail=1; }
+          editor_auth=(-H "Authorization: Bearer $editor_token")
+          viewer_auth=(-H "Authorization: Bearer $viewer_token")
+
+          # --- Task 4: the users listing shows group/role/status for both.
+          users_json=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}")
+          echo "$users_json" | python3 -c "import sys, json; users = {u['username']: u for u in json.load(sys.stdin)}; e = users['editor_uc_$suffix']; v = users['viewer_uc_$suffix']; assert e['groups'] == ['Operation'] and e['roles'] == ['Editor'] and e['is_active'] and e['is_approved'], e; assert v['groups'] == ['Operation'] and v['roles'] == ['Viewer'] and v['is_active'] and v['is_approved'], v" \
+            || { echo "FAIL: /admin/users listing missing correct group/role/status for the created users"; fail=1; }
+
+          # --- Task 2/7: Editor can view+create on all 5 operational
+          # resources; Viewer can view but is rejected (403) creating on
+          # every one of them — enforced server-side, not just hidden in
+          # the UI. (documents/customers/projects/companies all share the
+          # "documents" service_name in nginx.conf.template; products has
+          # its own.)
+          check_resource_rw() {
+            resource="$1"; body="$2"
+            edit_code=$(curl -s -o /tmp/edit_create.json -w '%{http_code}' -X POST "http://localhost:8080/api/$resource" "${editor_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$body")
+            echo "Editor POST /api/$resource -> $edit_code"
+            case "$edit_code" in
+              200|201) ;;
+              *) echo "FAIL: Editor could not create a $resource (got $edit_code)"; cat /tmp/edit_create.json; fail=1 ;;
+            esac
+
+            view_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource" "${viewer_auth[@]}")
+            echo "Viewer GET /api/$resource -> $view_get_code"
+            [ "$view_get_code" = "200" ] || { echo "FAIL: Viewer could not view $resource (got $view_get_code)"; fail=1; }
+
+            view_create_code=$(curl -s -o /tmp/view_create.json -w '%{http_code}' -X POST "http://localhost:8080/api/$resource" "${viewer_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$body")
+            echo "Viewer POST /api/$resource -> $view_create_code"
+            [ "$view_create_code" = "403" ] || { echo "FAIL: Viewer was able to create a $resource (got $view_create_code, expected 403)"; cat /tmp/view_create.json; fail=1; }
+
+            # Direct-API bypass attempt: Viewer forges X-Access-Level: edit
+            # themselves. Nginx must overwrite it with the real value from
+            # /verify, so this must still 403, exactly the same as above.
+            forged_code=$(curl -s -o /tmp/forged.json -w '%{http_code}' -X POST "http://localhost:8080/api/$resource" "${viewer_auth[@]}" \
+              -H 'Content-Type: application/json' -H 'X-Access-Level: edit' -d "$body")
+            echo "Viewer POST /api/$resource with forged X-Access-Level: edit -> $forged_code"
+            [ "$forged_code" = "403" ] || { echo "FAIL: Viewer bypassed write restriction on $resource via a forged X-Access-Level header (got $forged_code)"; cat /tmp/forged.json; fail=1; }
+          }
+
+          check_resource_rw "companies" "{\"name\":\"UC Test Co $suffix\"}"
+          check_resource_rw "customers" "{\"name\":\"UC Test Customer $suffix\"}"
+          check_resource_rw "projects" "{\"name\":\"UC Test Project $suffix\"}"
+          check_resource_rw "products" "{\"name\":\"UC Test Product $suffix\"}"
+
+          # documents needs a company_id, created separately since its
+          # create body shape differs from the other four.
+          uc_company_id=$(curl -s -X POST http://localhost:8080/api/companies "${editor_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"UC Doc Co $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          doc_edit_code=$(curl -s -o /tmp/doc_create.json -w '%{http_code}' -X POST http://localhost:8080/api/documents "${editor_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"doc_type\":\"quotation\",\"company_id\":\"$uc_company_id\",\"items\":[]}")
+          echo "Editor POST /api/documents -> $doc_edit_code"
+          [ "$doc_edit_code" = "201" ] || { echo "FAIL: Editor could not create a document (got $doc_edit_code)"; cat /tmp/doc_create.json; fail=1; }
+          doc_view_code=$(curl -s -o /tmp/doc_view_create.json -w '%{http_code}' -X POST http://localhost:8080/api/documents "${viewer_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"doc_type\":\"quotation\",\"company_id\":\"$uc_company_id\",\"items\":[]}")
+          echo "Viewer POST /api/documents -> $doc_view_code"
+          [ "$doc_view_code" = "403" ] || { echo "FAIL: Viewer was able to create a document (got $doc_view_code)"; cat /tmp/doc_view_create.json; fail=1; }
+
+          # --- Task 5: no user deletion — DELETE returns 404/405, and the
+          # account still exists afterward.
+          editor_user_id=$(echo "$users_json" | python3 -c "import sys,json; print([u['id'] for u in json.load(sys.stdin) if u['username']=='editor_uc_$suffix'][0])")
+          delete_code=$(curl -s -o /tmp/delete_resp.json -w '%{http_code}' -X DELETE "http://localhost:8080/api/admin/users/$editor_user_id" "${admin_auth[@]}")
+          echo "DELETE /api/admin/users/{id} -> $delete_code"
+          case "$delete_code" in
+            404|405) ;;
+            *) echo "FAIL: expected 404/405 for user deletion, got $delete_code"; cat /tmp/delete_resp.json; fail=1 ;;
+          esac
+          still_there_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/admin/users/$editor_user_id "${admin_auth[@]}")
+          # (there's no GET /admin/users/{id} single-user endpoint — confirm
+          # via the list instead, which is the real UI-facing source of truth)
+          still_there=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}" | python3 -c "import sys,json; print('editor_uc_$suffix' in [u['username'] for u in json.load(sys.stdin)])")
+          [ "$still_there" = "True" ] || { echo "FAIL: the account disappeared after the DELETE attempt"; fail=1; }
+
+          # Task 5: deactivation blocks login, revokes refresh, blocks the
+          # already-issued access token on its very next protected call.
+          deactivate_code=$(curl -s -o /tmp/deactivate.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/admin/users/$editor_user_id/active" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"is_active": false}')
+          echo "deactivate editor -> $deactivate_code"
+          [ "$deactivate_code" = "200" ] || { echo "FAIL: could not deactivate the editor (got $deactivate_code)"; cat /tmp/deactivate.json; fail=1; }
+
+          relogin_code=$(curl -s -o /tmp/relogin.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+          echo "login after deactivation -> $relogin_code"
+          [ "$relogin_code" = "403" ] || { echo "FAIL: a deactivated user could still log in (got $relogin_code)"; fail=1; }
+
+          still_authed_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${editor_auth[@]}")
+          echo "deactivated user's still-live access token on a protected API -> $still_authed_code"
+          [ "$still_authed_code" = "403" ] || { echo "FAIL: a deactivated user's existing access token still worked (got $still_authed_code)"; fail=1; }
+
+          # Reactivate so it doesn't pollute anything else — not required by
+          # any acceptance criterion, just tidy.
+          curl -s -o /dev/null -X PATCH "http://localhost:8080/api/admin/users/$editor_user_id/active" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"is_active": true}'
+
+          # --- Task 6: self-registration still works, stays pending until
+          # approved, then group/role assignment brings it to a normal
+          # working Editor login — exactly the admin-created path's end
+          # state, reached via the other door.
+          register_code=$(curl -s -o /tmp/register.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/register \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+          echo "self-register -> $register_code"
+          [ "$register_code" = "201" ] || { echo "FAIL: self-registration failed (got $register_code)"; cat /tmp/register.json; fail=1; }
+
+          pending_login_code=$(curl -s -o /tmp/pending_login.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+          echo "login while pending -> $pending_login_code"
+          [ "$pending_login_code" = "403" ] || { echo "FAIL: a pending self-registered user could log in before approval (got $pending_login_code)"; fail=1; }
+
+          pending_user_id=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}" | python3 -c "import sys,json; print([u['id'] for u in json.load(sys.stdin) if u['username']=='pending_uc_$suffix'][0])")
+          approve_code=$(curl -s -o /tmp/approve.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/users/$pending_user_id/approve" "${admin_auth[@]}")
+          echo "approve pending user -> $approve_code"
+          [ "$approve_code" = "200" ] || { echo "FAIL: could not approve the pending user (got $approve_code)"; cat /tmp/approve.json; fail=1; }
+
+          assign_code=$(curl -s -o /tmp/assign.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/assign" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\"}")
+          echo "assign Editor role to approved user -> $assign_code"
+          [ "$assign_code" = "201" ] || { echo "FAIL: could not assign a role to the newly-approved user (got $assign_code)"; cat /tmp/assign.json; fail=1; }
+
+          approved_login_code=$(curl -s -o /tmp/approved_login.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+          echo "login after approval + role assignment -> $approved_login_code"
+          [ "$approved_login_code" = "200" ] || { echo "FAIL: the approved+role-assigned user still could not log in (got $approved_login_code)"; cat /tmp/approved_login.json; fail=1; }
+
+          # --- Task 7: superuser remains completely unrestricted (baseline
+          # sanity — already exercised throughout this whole workflow file,
+          # re-asserted here in the User Control context).
+          su_create_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/products "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"UC Superuser Product $suffix\"}")
+          echo "superuser POST /api/products -> $su_create_code"
+          [ "$su_create_code" = "201" ] || { echo "FAIL: the superuser was blocked creating a product (got $su_create_code)"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra
