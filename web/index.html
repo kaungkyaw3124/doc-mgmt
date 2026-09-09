@@ -777,13 +777,13 @@
         <thead>
           <tr>
             <th>Name <button class="sort-btn" data-sort-table="company" data-sort-col="name">⇅</button></th>
-            <th>Logo</th><th>Seal</th><th>Edit</th><th>Delete</th>
+            <th>Position</th><th>Contact No</th><th>Logo</th><th>Seal</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="companies-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="5"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="5"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="5"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -1110,6 +1110,30 @@
           <input type="text" id="company-short-name" placeholder="SS" maxlength="20">
         </div>
       </div>
+      <div class="form-row">
+        <div>
+          <label for="company-position">Signer position</label>
+          <input type="text" id="company-position" placeholder="Director">
+        </div>
+        <div></div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="company-address">Address</label>
+          <input type="text" id="company-address" placeholder="Yangon, Myanmar">
+        </div>
+        <div>
+          <label for="company-contact">Contact No</label>
+          <input type="text" id="company-contact" placeholder="+95 9 xxx xxx xxx">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="company-email">Support email</label>
+          <input type="text" id="company-email" placeholder="support@trustwell.com">
+        </div>
+        <div></div>
+      </div>
       <label for="company-logo">Logo (optional, .png, .jpg, or .svg)</label>
       <input type="file" id="company-logo" accept="image/png,image/jpeg,image/svg+xml">
       <div id="company-current-logo-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
@@ -1380,11 +1404,11 @@ Warranty: 2 years from the date of delivery</textarea>
     <h3>Companies — recycle bin</h3>
     <div id="company-trash-banner"></div>
     <table>
-      <thead><tr><th>Name</th><th>Restore</th></tr></thead>
+      <thead><tr><th>Name</th><th>Position</th><th>Restore</th></tr></thead>
       <tbody id="company-trash-tbody">
-        <tr class="empty-row skeleton-row"><td colspan="2"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-        <tr class="empty-row skeleton-row"><td colspan="2"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-        <tr class="empty-row skeleton-row"><td colspan="2"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+        <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:70%"></span></td></tr>
       </tbody>
     </table>
   </div>
@@ -2727,7 +2751,11 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
   const sealInput = document.getElementById('company-seal');
   const payload = {
     name: document.getElementById('company-name').value,
-    short_name: document.getElementById('company-short-name').value || null
+    short_name: document.getElementById('company-short-name').value || null,
+    position: document.getElementById('company-position').value || null,
+    address: document.getElementById('company-address').value || null,
+    contact_no: document.getElementById('company-contact').value || null,
+    support_email: document.getElementById('company-email').value || null
   };
   try {
     document.getElementById('company-form-submit-btn').disabled = true;
@@ -2849,6 +2877,10 @@ function startEditCompany(company) {
   document.getElementById('company-form-submit-btn').textContent = 'Save changes';
   document.getElementById('company-name').value = company.name;
   document.getElementById('company-short-name').value = company.short_name || '';
+  document.getElementById('company-position').value = company.position || '';
+  document.getElementById('company-address').value = company.address || '';
+  document.getElementById('company-contact').value = company.contact_no || '';
+  document.getElementById('company-email').value = company.support_email || '';
 
   document.getElementById('company-logo').value = '';
   document.getElementById('company-seal').value = '';
@@ -2899,19 +2931,21 @@ async function loadCompanies() {
     refreshDocCompanyPicker();
   } catch (err) {
     if (isStaleLoad('companies', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderCompaniesTable(companies) {
   const tbody = document.getElementById('companies-tbody');
   if (!companies.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No company matches.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No company matches.</td></tr>';
     return;
   }
   tbody.innerHTML = companies.map(c => `
     <tr>
       <td>${escapeHtml(c.name)}</td>
+      <td>${escapeHtml(c.position || '—')}</td>
+      <td>${escapeHtml(c.contact_no || '—')}</td>
       <td>${c.logo_object_key ? `<button class="link-btn-inline" data-logo-id="${c.id}">View logo</button>` : '—'}</td>
       <td>${c.seal_object_key ? `<button class="link-btn-inline" data-seal-id="${c.id}">View seal</button>` : '—'}</td>
       <td><button class="link-btn-inline" data-edit-company-id="${c.id}">Edit</button></td>
@@ -4260,12 +4294,13 @@ async function loadCompanyTrash() {
   try {
     const companies = await apiFetch('/companies/trash');
     if (!companies.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Recycle bin is empty.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Recycle bin is empty.</td></tr>';
       return;
     }
     tbody.innerHTML = companies.map(c => `
       <tr>
         <td>${escapeHtml(c.name)}</td>
+        <td>${escapeHtml(c.position || '—')}</td>
         <td><button class="link-btn-inline" data-restore-company-id="${c.id}">Restore</button></td>
       </tr>
     `).join('');

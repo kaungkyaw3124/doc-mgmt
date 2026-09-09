@@ -68,10 +68,13 @@ DEFAULT_TERMS = (
 def generate_quotation_xlsx(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png", director=None, director_seal_bytes=None, director_seal_mime="image/png") -> BytesIO:
     """
     items_with_product: list of (LineItem, product_dict_or_None, sub_items_list) tuples.
-    company: dict with key name, or None if no company profile has been set up yet.
+    company: dict with keys name/position/address/contact_no/support_email,
+              or None if no company profile has been set up yet. position
+              is NOT shown in the Supplier block (kept for signer/signature
+              use elsewhere) — Supplier shows name/address/contact_no/email.
     director: dict with keys name/address/contact_no/email — the selected
-              Managing Director, whose contact info now stands in for what
-              used to be the company's own address/contact_no/support_*.
+              Managing Director, shown separately (their own signature
+              block), not mixed into the company's own Supplier info.
               None if no director was chosen on this document.
     logo_bytes / seal_bytes: raw image bytes to embed, or None. SVGs are
     skipped here (not embedded) — openpyxl's image support goes through
@@ -125,8 +128,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     row += 1
 
     supplier_rows = [
-        ("Address", _safe_str(director.get("address")) if director else ""),
-        ("Contact No", _safe_str(director.get("contact_no")) if director else ""),
+        ("Address", _safe_str(company.get("address")) if company else ""),
+        ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
+        ("Email", _safe_str(company.get("support_email")) if company else ""),
     ]
     customer_name = _safe_str(customer["name"]) if customer else "—"
     customer_address = ""
@@ -266,10 +270,13 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     row += 1
     ws[f"A{row}"] = "Email:"
-    ws[f"B{row}"] = _safe_str(director.get("email", "")) if director else ""
+    ws[f"B{row}"] = _safe_str(company.get("support_email", "")) if company else ""
     row += 1
     ws[f"A{row}"] = "Phone:"
-    ws[f"B{row}"] = _safe_str(director.get("contact_no", "")) if director else ""
+    # support_phone was removed from Company — contact_no is the closest
+    # remaining company-level phone number for this generic footer block
+    # (the Supplier block above also shows it; this isn't the director's).
+    ws[f"B{row}"] = _safe_str(company.get("contact_no", "")) if company else ""
 
     buffer = BytesIO()
     wb.save(buffer)

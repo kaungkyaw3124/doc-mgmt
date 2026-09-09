@@ -704,6 +704,10 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
     if company_row:
         company = {
             "name": company_row.name,
+            "position": company_row.position,  # signer/signature title — not shown in the Supplier block, kept for signature generation
+            "address": company_row.address,
+            "contact_no": company_row.contact_no,
+            "support_email": company_row.support_email,
         }
         if company_row.logo_object_key:
             try:

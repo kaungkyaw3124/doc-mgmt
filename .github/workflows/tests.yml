@@ -679,7 +679,7 @@ jobs:
 
           exit $fail
 
-      - name: Acceptance — company/director restructuring (signer info moved to Managing Directors)
+      - name: Acceptance — company/director restructuring (director gets own contact info, company keeps its Supplier fields, support_phone removed)
         run: |
           fail=0
           token=$(curl -s -X POST http://localhost:8080/api/auth/login \
@@ -687,19 +687,19 @@ jobs:
             -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
           auth=(-H "Authorization: Bearer $token")
 
-          # --- (1)/(2) company create accepts name/short_name, never
-          # returns/persists the removed signer/contact fields.
+          # --- (1)-(6) company create still accepts/returns
+          # position/address/contact_no/support_email (position is kept for
+          # signer/signature use, not shown in the Supplier block — verified
+          # via the export below), but never support_phone (removed, unused).
           company_json=$(curl -s -X POST http://localhost:8080/api/companies "${auth[@]}" \
             -H 'Content-Type: application/json' \
-            -d '{"name":"Restructure Test Co.","short_name":"RTC"}')
+            -d '{"name":"Restructure Test Co.","short_name":"RTC","position":"Director","address":"Company HQ, Yangon","contact_no":"+95911111111","support_email":"supplier@restructuretest.example.com"}')
           echo "created company: $company_json"
           company_id=$(echo "$company_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
-          for removed in position address contact_no support_email support_phone; do
-            echo "$company_json" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(1 if '$removed' in d else 0)" \
-              || { echo "FAIL: CompanyOut still exposes removed field '$removed'"; fail=1; }
-          done
-          echo "$company_json" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["name"]=="Restructure Test Co." and d["short_name"]=="RTC"' \
-            || { echo "FAIL: company name/short_name not round-tripped"; fail=1; }
+          echo "$company_json" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(1 if 'support_phone' in d else 0)" \
+            || { echo "FAIL: CompanyOut still exposes removed field 'support_phone'"; fail=1; }
+          echo "$company_json" | python3 -c 'import sys, json; d = json.load(sys.stdin); assert d["name"] == "Restructure Test Co." and d["short_name"] == "RTC" and d["position"] == "Director" and d["address"] == "Company HQ, Yangon" and d["contact_no"] == "+95911111111" and d["support_email"] == "supplier@restructuretest.example.com"' \
+            || { echo "FAIL: company position/address/contact_no/support_email not round-tripped"; fail=1; }
 
           # --- (3)/(4)/(5) multiple directors on one company, full contact
           # fields on create, update works.
@@ -762,17 +762,25 @@ jobs:
           echo "cross-company update -> $cross_update_code: $(cat /tmp/cross_update.json)"
           [ "$cross_update_code" = "400" ] || { echo "FAIL: expected 400 rejecting a cross-company director on update, got $cross_update_code"; fail=1; }
 
-          # --- (12)/(13) the generated export uses the COMPANY's name but
-          # the DIRECTOR's address/contact/email — never a company-level
-          # signer field (which no longer exists at all).
+          # --- (1)-(5) the generated Supplier block uses the COMPANY's own
+          # name/address/contact_no/support_email — never the director's
+          # (director_a's address/contact_no deliberately differ from the
+          # company's own, so this also proves they aren't leaking in) —
+          # and never company.position (kept out of the Supplier block).
+          # --- (8) the MD signature block still shows the SELECTED
+          # director's own name.
           xlsx_code=$(curl -s -o /tmp/quotation.xlsx -w '%{http_code}' "http://localhost:8080/api/documents/$doc_id/export/quotation" "${auth[@]}")
           echo "quotation export -> $xlsx_code"
           [ "$xlsx_code" = "200" ] || { echo "FAIL: quotation export failed"; fail=1; }
           unzip -p /tmp/quotation.xlsx xl/sharedStrings.xml > /tmp/shared_strings.xml 2>/dev/null
           grep -q "Restructure Test Co\." /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the company name"; fail=1; }
-          grep -q "Mayangon, Yangon" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's address"; fail=1; }
-          grep -q "+95900000001" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's (updated) contact number"; fail=1; }
-          grep -q "aungaung@gmail.com" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's email"; fail=1; }
+          grep -q "Company HQ, Yangon" /tmp/shared_strings.xml || { echo "FAIL: exported quotation Supplier block missing the company's own address"; fail=1; }
+          grep -q "+95911111111" /tmp/shared_strings.xml || { echo "FAIL: exported quotation Supplier block missing the company's own contact number"; fail=1; }
+          grep -q "supplier@restructuretest.example.com" /tmp/shared_strings.xml || { echo "FAIL: exported quotation Supplier block missing the company's own support_email"; fail=1; }
+          grep -q "Aung Aung" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's name in the MD signature block"; fail=1; }
+          grep -q ">Director<" /tmp/shared_strings.xml && { echo "FAIL: exported quotation leaks company.position ('Director') as its own shared string — must not appear in the Supplier block"; fail=1; }
+          grep -q "Mayangon, Yangon" /tmp/shared_strings.xml && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's address instead of the company's"; fail=1; }
+          grep -q "+95900000001" /tmp/shared_strings.xml && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's contact number instead of the company's"; fail=1; }
 
           # --- (14)/(15) existing document/company create+edit flows still
           # work end to end (already exercised above — a 400 here would

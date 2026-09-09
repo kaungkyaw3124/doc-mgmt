@@ -1,13 +1,19 @@
-"""move signer/contact details from companies to company_directors
+"""add director contact fields, drop unused company.support_phone
 
-Revision ID: 0002_move_signer_details_to_directors
+Revision ID: 0002_director_contact_fields_drop_company_support_phone
 Revises: 0001_initial
 Create Date: 2026-09-09
 
-Company no longer carries position/address/contact_no/support_email/
-support_phone — that signer/contact information now belongs to the
-individual Managing Director selected on a document (company_directors
-gains address/contact_no/email).
+Company keeps position/address/contact_no/support_email — the quotation
+Supplier block, and any future signer/signature use, still reads those
+directly off the selected Company. Only support_phone is removed (it was
+never used anywhere in the app; contact_no already covers the company's
+phone number — see docs/SECURITY_HARDENING_LOG.md for this task).
+
+company_directors separately gains address/contact_no/email — a company
+can have several Managing Directors, each shown with their own contact
+info and seal when selected on a document (kept separate from the
+company's own Supplier info; see documents.director_id below).
 
 NOTE on company_directors / documents.director_id: 0001_initial never
 created these — they were added to models.py after that migration was
@@ -16,18 +22,6 @@ docs/known-issues.md #10 and docs/decisions.md #4 — Alembic is present
 but not run at app startup in this project). This migration creates them
 here too, guarded to be a no-op wherever create_all() already has, so
 `alembic upgrade head` produces a consistent schema either way.
-
-IMPORTANT — data loss on the dropped company columns: this only removes
-the columns (any existing values in company.position/address/contact_no/
-support_email/support_phone are discarded, they are NOT copied onto any
-director). That copy is deliberately NOT automated: those columns never
-recorded a person's *name* (only a job title), so there is no reliable,
-non-invented "MD name" to attach the address/phone/email to. Before
-running this migration against a database that has real values in those
-columns, read them first (e.g. `SELECT id, name, position, address,
-contact_no, support_email, support_phone FROM companies;`) and manually
-create the corresponding director(s) via POST /companies/{id}/directors
-with the correct real name.
 """
 from typing import Sequence, Union
 
@@ -35,7 +29,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0002_move_signer_details_to_directors"
+revision: str = "0002_director_contact_fields_drop_company_support_phone"
 down_revision: Union[str, None] = "0001_initial"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -93,23 +87,16 @@ def upgrade() -> None:
         )
         op.create_index("idx_documents_director", "documents", ["director_id"])
 
-    # The actual field move for this task.
+    # The actual field change for this task: only support_phone is removed
+    # from Company. position/address/contact_no/support_email stay — the
+    # quotation Supplier block reads them directly off the company.
     company_columns = _existing_columns("companies")
-    for col in ("position", "address", "contact_no", "support_email", "support_phone"):
-        if col in company_columns:
-            op.drop_column("companies", col)
+    if "support_phone" in company_columns:
+        op.drop_column("companies", "support_phone")
 
 
 def downgrade() -> None:
     company_columns = _existing_columns("companies")
-    if "position" not in company_columns:
-        op.add_column("companies", sa.Column("position", sa.String(length=100)))
-    if "address" not in company_columns:
-        op.add_column("companies", sa.Column("address", sa.Text()))
-    if "contact_no" not in company_columns:
-        op.add_column("companies", sa.Column("contact_no", sa.String(length=50)))
-    if "support_email" not in company_columns:
-        op.add_column("companies", sa.Column("support_email", sa.String(length=255)))
     if "support_phone" not in company_columns:
         op.add_column("companies", sa.Column("support_phone", sa.String(length=50)))
 

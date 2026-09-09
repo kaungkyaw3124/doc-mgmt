@@ -29,6 +29,10 @@ class Company(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     short_name = Column(String(20))  # e.g. "SS" for Swift Solution — used in doc numbers (SS-20260723/001)
+    position = Column(String(100))  # e.g. "Director" — title of the authorized signer; used by signer/signature generation, not shown in the Supplier block
+    address = Column(Text)
+    contact_no = Column(String(50))
+    support_email = Column(String(255))
     logo_object_key = Column(String(500))
     seal_object_key = Column(String(500))  # official company seal/stamp, shown on quotation exports
     is_primary = Column(Boolean, default=False, nullable=False)
@@ -38,10 +42,11 @@ class Company(Base):
 
 class CompanyDirector(Base):
     """
-    A Managing Director (MD) for a company — a company can have several.
-    Signer/contact information (address, contact_no, email) lives here,
-    per-director, rather than on Company — each MD has their own personal
-    seal too (distinct from the company's own general seal_object_key).
+    A Managing Director (MD) for a company — a company can have several,
+    each with their own name/address/contact_no/email and their own
+    personal seal (distinct from the company's own general
+    seal_object_key). Selected per-document to show alongside the
+    company's own Supplier info (see Document.director_id).
     """
     __tablename__ = "company_directors"
 

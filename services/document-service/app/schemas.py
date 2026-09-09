@@ -31,12 +31,20 @@ class ProjectOut(BaseModel):
 class CompanyCreate(BaseModel):
     name: str
     short_name: Optional[str] = None  # e.g. "SS" for Swift Solution — used in doc numbers
+    position: Optional[str] = None  # signer/signature title — not shown in the quotation Supplier block
+    address: Optional[str] = None
+    contact_no: Optional[str] = None
+    support_email: Optional[str] = None
     is_primary: bool = False
 
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
     short_name: Optional[str] = None
+    position: Optional[str] = None
+    address: Optional[str] = None
+    contact_no: Optional[str] = None
+    support_email: Optional[str] = None
     is_primary: Optional[bool] = None
 
 
@@ -45,6 +53,10 @@ class CompanyOut(BaseModel):
     id: uuid.UUID
     name: str
     short_name: Optional[str]
+    position: Optional[str]
+    address: Optional[str]
+    contact_no: Optional[str]
+    support_email: Optional[str]
     logo_object_key: Optional[str]
     seal_object_key: Optional[str]
     is_primary: bool
