@@ -6,6 +6,7 @@ from app.core.db import Base, engine, SessionLocal
 from app.core.config import settings
 from app.core.security import hash_password
 from app.core.secrets_check import db_password_from_url, enforce_production_secrets, is_insecure
+from app.core.seed import ensure_default_groups_and_roles
 from app import models
 from app.routers import auth, admin
 
@@ -53,6 +54,12 @@ def on_startup():
             )
             db.add(seed_user)
             db.commit()
+
+        # User Control: the "Operation" group and its Editor/Viewer roles
+        # (see app/core/seed.py) — always ensured, not just on an empty
+        # database, and idempotent so re-running it never duplicates or
+        # resets an admin's own later edits.
+        ensure_default_groups_and_roles(db)
     finally:
         db.close()
 
