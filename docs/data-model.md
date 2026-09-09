@@ -122,6 +122,8 @@ erDiagram
     CUSTOMERS ||--o{ DOCUMENTS : "customer_id"
     PROJECTS ||--o{ DOCUMENTS : "project_id"
     COMPANIES ||--o{ DOCUMENTS : "company_id"
+    COMPANIES ||--o{ COMPANY_DIRECTORS : "company_id (CASCADE)"
+    COMPANY_DIRECTORS ||--o{ DOCUMENTS : "director_id"
     DOCUMENTS ||--o{ LINE_ITEMS : "document_id (CASCADE)"
     DOCUMENTS ||--o{ AUDIT_LOG_ENTRIES : "document_id (CASCADE)"
 
@@ -146,15 +148,21 @@ erDiagram
         uuid id PK
         string name
         string short_name "doc number prefix"
-        string position "signer title"
-        text address
-        string contact_no
-        string support_email
-        string support_phone
         string logo_object_key
         string seal_object_key
         bool is_primary
         bool is_deleted
+        datetime created_at
+    }
+    COMPANY_DIRECTORS {
+        uuid id PK
+        uuid company_id FK "ON DELETE CASCADE"
+        string name
+        text address
+        string contact_no
+        string email
+        string seal_object_key "distinct from the company's own seal"
+        int sort_order
         datetime created_at
     }
     DOCUMENTS {
@@ -165,6 +173,7 @@ erDiagram
         uuid customer_id FK "nullable, no ON DELETE action"
         uuid project_id FK "nullable, no ON DELETE action"
         uuid company_id FK "nullable, no ON DELETE action"
+        uuid director_id FK "which MD's name/address/contact/email/seal to show — must belong to company_id"
         string status "draft|sent|paid|void|expired"
         string currency "USD|MMK"
         numeric subtotal

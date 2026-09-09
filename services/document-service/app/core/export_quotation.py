@@ -68,8 +68,11 @@ DEFAULT_TERMS = (
 def generate_quotation_xlsx(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png", director=None, director_seal_bytes=None, director_seal_mime="image/png") -> BytesIO:
     """
     items_with_product: list of (LineItem, product_dict_or_None, sub_items_list) tuples.
-    company: dict with keys name/position/address/contact_no/support_email/support_phone,
-             or None if no company profile has been set up yet.
+    company: dict with key name, or None if no company profile has been set up yet.
+    director: dict with keys name/address/contact_no/email — the selected
+              Managing Director, whose contact info now stands in for what
+              used to be the company's own address/contact_no/support_*.
+              None if no director was chosen on this document.
     logo_bytes / seal_bytes: raw image bytes to embed, or None. SVGs are
     skipped here (not embedded) — openpyxl's image support goes through
     PIL, which can't rasterize SVG; the PDF export handles SVG logos fine
@@ -122,9 +125,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     row += 1
 
     supplier_rows = [
-        ("Position", _safe_str(company.get("position")) if company else ""),
-        ("Address", _safe_str(company.get("address")) if company else ""),
-        ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
+        ("Address", _safe_str(director.get("address")) if director else ""),
+        ("Contact No", _safe_str(director.get("contact_no")) if director else ""),
     ]
     customer_name = _safe_str(customer["name"]) if customer else "—"
     customer_address = ""
@@ -264,10 +266,10 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     row += 1
     ws[f"A{row}"] = "Email:"
-    ws[f"B{row}"] = _safe_str(company.get("support_email", "")) if company else ""
+    ws[f"B{row}"] = _safe_str(director.get("email", "")) if director else ""
     row += 1
     ws[f"A{row}"] = "Phone:"
-    ws[f"B{row}"] = _safe_str(company.get("support_phone", "")) if company else ""
+    ws[f"B{row}"] = _safe_str(director.get("contact_no", "")) if director else ""
 
     buffer = BytesIO()
     wb.save(buffer)

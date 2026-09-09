@@ -316,7 +316,14 @@ def add_company_director(
         .scalar() or 0
     ) + 1
 
-    director = models.CompanyDirector(company_id=company_id, name=payload.name, sort_order=next_order)
+    director = models.CompanyDirector(
+        company_id=company_id,
+        name=payload.name,
+        address=payload.address,
+        contact_no=payload.contact_no,
+        email=payload.email,
+        sort_order=next_order,
+    )
     db.add(director)
     db.commit()
     db.refresh(director)
@@ -327,7 +334,7 @@ def add_company_director(
 def update_company_director(
     company_id: uuid.UUID,
     director_id: uuid.UUID,
-    payload: schemas.CompanyDirectorCreate,
+    payload: schemas.CompanyDirectorUpdate,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
@@ -339,7 +346,8 @@ def update_company_director(
     )
     if not director:
         raise HTTPException(status_code=404, detail="director not found")
-    director.name = payload.name
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(director, field, value)
     db.commit()
     db.refresh(director)
     return director

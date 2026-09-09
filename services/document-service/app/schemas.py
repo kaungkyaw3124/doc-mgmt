@@ -31,22 +31,12 @@ class ProjectOut(BaseModel):
 class CompanyCreate(BaseModel):
     name: str
     short_name: Optional[str] = None  # e.g. "SS" for Swift Solution — used in doc numbers
-    position: Optional[str] = None
-    address: Optional[str] = None
-    contact_no: Optional[str] = None
-    support_email: Optional[str] = None
-    support_phone: Optional[str] = None
     is_primary: bool = False
 
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
     short_name: Optional[str] = None
-    position: Optional[str] = None
-    address: Optional[str] = None
-    contact_no: Optional[str] = None
-    support_email: Optional[str] = None
-    support_phone: Optional[str] = None
     is_primary: Optional[bool] = None
 
 
@@ -55,11 +45,6 @@ class CompanyOut(BaseModel):
     id: uuid.UUID
     name: str
     short_name: Optional[str]
-    position: Optional[str]
-    address: Optional[str]
-    contact_no: Optional[str]
-    support_email: Optional[str]
-    support_phone: Optional[str]
     logo_object_key: Optional[str]
     seal_object_key: Optional[str]
     is_primary: bool
@@ -69,6 +54,16 @@ class CompanyOut(BaseModel):
 
 class CompanyDirectorCreate(BaseModel):
     name: str
+    address: Optional[str] = None
+    contact_no: Optional[str] = None
+    email: Optional[str] = None
+
+
+class CompanyDirectorUpdate(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    contact_no: Optional[str] = None
+    email: Optional[str] = None
 
 
 class CompanyDirectorOut(BaseModel):
@@ -76,6 +71,9 @@ class CompanyDirectorOut(BaseModel):
     id: uuid.UUID
     company_id: uuid.UUID
     name: str
+    address: Optional[str]
+    contact_no: Optional[str]
+    email: Optional[str]
     seal_object_key: Optional[str]
     sort_order: int
     created_at: datetime

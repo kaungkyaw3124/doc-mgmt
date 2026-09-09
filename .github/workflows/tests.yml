@@ -679,6 +679,110 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — company/director restructuring (signer info moved to Managing Directors)
+        run: |
+          fail=0
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          auth=(-H "Authorization: Bearer $token")
+
+          # --- (1)/(2) company create accepts name/short_name, never
+          # returns/persists the removed signer/contact fields.
+          company_json=$(curl -s -X POST http://localhost:8080/api/companies "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Restructure Test Co.","short_name":"RTC"}')
+          echo "created company: $company_json"
+          company_id=$(echo "$company_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          for removed in position address contact_no support_email support_phone; do
+            echo "$company_json" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(1 if '$removed' in d else 0)" \
+              || { echo "FAIL: CompanyOut still exposes removed field '$removed'"; fail=1; }
+          done
+          echo "$company_json" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["name"]=="Restructure Test Co." and d["short_name"]=="RTC"' \
+            || { echo "FAIL: company name/short_name not round-tripped"; fail=1; }
+
+          # --- (3)/(4)/(5) multiple directors on one company, full contact
+          # fields on create, update works.
+          director_a_json=$(curl -s -X POST "http://localhost:8080/api/companies/$company_id/directors" "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Aung Aung","address":"Mayangon, Yangon","contact_no":"+95999999999","email":"aungaung@gmail.com"}')
+          echo "created director A: $director_a_json"
+          director_a_id=$(echo "$director_a_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          echo "$director_a_json" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["address"]=="Mayangon, Yangon" and d["contact_no"]=="+95999999999" and d["email"]=="aungaung@gmail.com"' \
+            || { echo "FAIL: director A contact fields not round-tripped on create"; fail=1; }
+
+          director_b_json=$(curl -s -X POST "http://localhost:8080/api/companies/$company_id/directors" "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Kyaw Kyaw","address":"Insein, Yangon","contact_no":"+95988888888","email":"kyawkyaw@gmail.com"}')
+          director_b_id=$(echo "$director_b_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          directors_list=$(curl -s "http://localhost:8080/api/companies/$company_id/directors" "${auth[@]}")
+          count=$(echo "$directors_list" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')
+          [ "$count" = "2" ] || { echo "FAIL: expected 2 directors on the company, got $count"; fail=1; }
+
+          updated_json=$(curl -s -X PATCH "http://localhost:8080/api/companies/$company_id/directors/$director_a_id" "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"contact_no":"+95900000001"}')
+          echo "$updated_json" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["contact_no"]=="+95900000001" and d["name"]=="Aung Aung" and d["address"]=="Mayangon, Yangon"' \
+            || { echo "FAIL: partial director update did not persist / clobbered other fields"; fail=1; }
+
+          # --- a second, unrelated company + director, for the
+          # cross-company rejection check below.
+          company2_json=$(curl -s -X POST http://localhost:8080/api/companies "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"name":"Other Restructure Co.","short_name":"ORC"}')
+          company2_id=$(echo "$company2_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          director_c_json=$(curl -s -X POST "http://localhost:8080/api/companies/$company2_id/directors" "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"name":"Cross Company Director"}')
+          director_c_id=$(echo "$director_c_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          # --- (10) a document can select a director belonging to the
+          # selected company.
+          doc_json=$(curl -s -X POST http://localhost:8080/api/documents "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$company_id\",\"director_id\":\"$director_a_id\",\"items\":[]}")
+          echo "created document: $doc_json"
+          doc_id=$(echo "$doc_json" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id",""))')
+          [ -n "$doc_id" ] || { echo "FAIL: could not create a document with a same-company director"; fail=1; echo "$doc_json"; }
+
+          # --- (11) cross-company director selection is rejected.
+          cross_code=$(curl -s -o /tmp/cross_company.json -w '%{http_code}' -X POST http://localhost:8080/api/documents "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$company_id\",\"director_id\":\"$director_c_id\",\"items\":[]}")
+          echo "cross-company create -> $cross_code: $(cat /tmp/cross_company.json)"
+          [ "$cross_code" = "400" ] || { echo "FAIL: expected 400 rejecting a director from a different company, got $cross_code"; fail=1; }
+
+          # same check on update: create a clean document with no
+          # director, then try to attach director_c (still cross-company).
+          doc2_json=$(curl -s -X POST http://localhost:8080/api/documents "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$company_id\",\"items\":[]}")
+          doc2_id=$(echo "$doc2_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          cross_update_code=$(curl -s -o /tmp/cross_update.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc2_id" "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"company_id\":\"$company_id\",\"director_id\":\"$director_c_id\",\"items\":[]}")
+          echo "cross-company update -> $cross_update_code: $(cat /tmp/cross_update.json)"
+          [ "$cross_update_code" = "400" ] || { echo "FAIL: expected 400 rejecting a cross-company director on update, got $cross_update_code"; fail=1; }
+
+          # --- (12)/(13) the generated export uses the COMPANY's name but
+          # the DIRECTOR's address/contact/email — never a company-level
+          # signer field (which no longer exists at all).
+          xlsx_code=$(curl -s -o /tmp/quotation.xlsx -w '%{http_code}' "http://localhost:8080/api/documents/$doc_id/export/quotation" "${auth[@]}")
+          echo "quotation export -> $xlsx_code"
+          [ "$xlsx_code" = "200" ] || { echo "FAIL: quotation export failed"; fail=1; }
+          unzip -p /tmp/quotation.xlsx xl/sharedStrings.xml > /tmp/shared_strings.xml 2>/dev/null
+          grep -q "Restructure Test Co\." /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the company name"; fail=1; }
+          grep -q "Mayangon, Yangon" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's address"; fail=1; }
+          grep -q "+95900000001" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's (updated) contact number"; fail=1; }
+          grep -q "aungaung@gmail.com" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's email"; fail=1; }
+
+          # --- (14)/(15) existing document/company create+edit flows still
+          # work end to end (already exercised above — a 400 here would
+          # mean this whole step failed earlier).
+          patch_code=$(curl -s -o /tmp/company_patch.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/companies/$company_id" "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"short_name":"RTC2"}')
+          [ "$patch_code" = "200" ] || { echo "FAIL: company update no longer works ($patch_code)"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

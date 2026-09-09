@@ -170,6 +170,8 @@ def create_document(
         director = db.query(models.CompanyDirector).filter_by(id=payload.director_id).first()
         if not director:
             raise HTTPException(status_code=400, detail=f"director {payload.director_id} not found")
+        if director.company_id != payload.company_id:
+            raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
     doc = models.Document(
         doc_type=payload.doc_type,
@@ -494,6 +496,8 @@ def update_document(
         director = db.query(models.CompanyDirector).filter_by(id=payload.director_id).first()
         if not director:
             raise HTTPException(status_code=400, detail=f"director {payload.director_id} not found")
+        if director.company_id != payload.company_id:
+            raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
     line_items, subtotal, tax_total = _process_items(payload.items, db)
 
@@ -700,11 +704,6 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
     if company_row:
         company = {
             "name": company_row.name,
-            "position": company_row.position,
-            "address": company_row.address,
-            "contact_no": company_row.contact_no,
-            "support_email": company_row.support_email,
-            "support_phone": company_row.support_phone,
         }
         if company_row.logo_object_key:
             try:
@@ -725,7 +724,12 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
     if doc.director_id:
         director_row = db.query(models.CompanyDirector).filter_by(id=doc.director_id).first()
         if director_row:
-            director = {"name": director_row.name}
+            director = {
+                "name": director_row.name,
+                "address": director_row.address,
+                "contact_no": director_row.contact_no,
+                "email": director_row.email,
+            }
             if director_row.seal_object_key:
                 try:
                     director_seal_bytes = get_file_bytes(director_row.seal_object_key)

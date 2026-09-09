@@ -29,11 +29,6 @@ class Company(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     short_name = Column(String(20))  # e.g. "SS" for Swift Solution — used in doc numbers (SS-20260723/001)
-    position = Column(String(100))  # e.g. "Director" — title of the authorized signer
-    address = Column(Text)
-    contact_no = Column(String(50))
-    support_email = Column(String(255))
-    support_phone = Column(String(50))
     logo_object_key = Column(String(500))
     seal_object_key = Column(String(500))  # official company seal/stamp, shown on quotation exports
     is_primary = Column(Boolean, default=False, nullable=False)
@@ -43,15 +38,19 @@ class Company(Base):
 
 class CompanyDirector(Base):
     """
-    A Managing Director (MD) for a company — a company can have several,
-    each with their own name and their own personal seal (distinct from
-    the company's own general seal_object_key above).
+    A Managing Director (MD) for a company — a company can have several.
+    Signer/contact information (address, contact_no, email) lives here,
+    per-director, rather than on Company — each MD has their own personal
+    seal too (distinct from the company's own general seal_object_key).
     """
     __tablename__ = "company_directors"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
+    address = Column(Text)
+    contact_no = Column(String(50))
+    email = Column(String(255))
     seal_object_key = Column(String(500))
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
