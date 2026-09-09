@@ -631,14 +631,35 @@ jobs:
           check_header_once "Permissions-Policy" "$index_headers" "/" "camera=()"
           check_header_once "Content-Security-Policy" "$index_headers" "/" "frame-ancestors 'self'"
 
-          # --- (2) CSP script-src hash matches the ACTUALLY-served inline
-          # <script> content -- catches drift if index.html's script is
-          # ever edited without recomputing the hash (see
-          # docs/SECURITY_HARDENING_LOG.md's Task 8 entry for how).
+          # --- (2) Task 9/10: script-src is the long-term 'self' (no
+          # per-edit hash to maintain, no unsafe-inline) -- app.js is an
+          # external same-origin file, not an inline <script> block.
           csp_line=$(echo "$index_headers" | tr -d '\r' | grep -i '^content-security-policy:')
-          computed_hash=$(python3 -c "import hashlib, base64; content = open('/tmp/index_body.html', 'rb').read(); start = content.index(b'<script>\n') + len(b'<script>\n'); end = content.index(b'</script>', start); digest = hashlib.sha256(content[start:end]).digest(); print('sha256-' + base64.b64encode(digest).decode())")
-          echo "computed inline-script hash -> $computed_hash"
-          echo "$csp_line" | grep -qF "$computed_hash" || { echo "FAIL: CSP script-src hash does not match the actually-served inline script -- web/index.html's script was edited without recomputing the CSP hash"; fail=1; }
+          echo "$csp_line" | grep -oE "script-src[^;]*" | grep -qx "script-src 'self'" \
+            || { echo "FAIL: expected script-src 'self' exactly, got: $(echo "$csp_line" | grep -oE "script-src[^;]*")"; fail=1; }
+          echo "$csp_line" | grep -qi "script-src[^;]*unsafe-inline" && { echo "FAIL: script-src still allows 'unsafe-inline'"; fail=1; }
+          echo "$csp_line" | grep -qi "script-src[^;]*sha256-" && { echo "FAIL: script-src still depends on a hardcoded SHA-256 hash"; fail=1; }
+          grep -qi '<script>' /tmp/index_body.html && { echo "FAIL: index.html still contains an inline <script> block"; fail=1; }
+          grep -qF '<script src="/js/app.js"></script>' /tmp/index_body.html \
+            || { echo "FAIL: index.html does not reference the external /js/app.js"; fail=1; }
+
+          # --- app.js is reachable, correctly typed (X-Content-Type-Options:
+          # nosniff makes an incorrect Content-Type here a silent script
+          # failure in the browser, not a loud error -- see nginx.conf.template's
+          # comment on why include mime.types was added), and its content
+          # actually IS this app's JS (not an empty file / a 404 fallback
+          # to index.html via try_files).
+          appjs_headers=$(curl -s -D - -o /tmp/app.js -w '%{http_code}' http://localhost:8080/js/app.js)
+          appjs_code=$(echo "$appjs_headers" | head -1 | tr -d '\r')
+          echo "GET /js/app.js -> $appjs_code"
+          echo "$appjs_code" | grep -q ' 200 ' || { echo "FAIL: expected 200 for /js/app.js, got: $appjs_code"; fail=1; }
+          appjs_content_type=$(echo "$appjs_headers" | tr -d '\r' | grep -i '^content-type:')
+          echo "/js/app.js Content-Type -> $appjs_content_type"
+          echo "$appjs_content_type" | grep -qiE 'javascript|ecmascript' \
+            || { echo "FAIL: /js/app.js served with a non-JavaScript Content-Type: $appjs_content_type"; fail=1; }
+          grep -q "const API_BASE = '/api'" /tmp/app.js \
+            || { echo "FAIL: /js/app.js does not look like this app's actual script (marker string missing)"; fail=1; }
+          check_header_once "Content-Security-Policy" "$appjs_headers" "/js/app.js" "script-src 'self'"
 
           # --- (3) an unauthenticated request to a PROTECTED endpoint
           # (401, via Nginx's own auth_request gate -- this is Nginx's

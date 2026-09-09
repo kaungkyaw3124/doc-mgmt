@@ -13,6 +13,22 @@
 events {}
 
 http {
+    # This custom nginx.conf.template replaces the stock nginx.conf
+    # entirely (see the file header above) rather than extending it, so
+    # nothing here was ever pulling in the image's own
+    # /etc/nginx/mime.types — every static response fell back to
+    # nginx's compiled-in default_type (text/plain). That went unnoticed
+    # for index.html because top-level navigations aren't strictly
+    # nosniff-gated the way subresources are (browsers still apply their
+    # own HTML-detection heuristic when a document is what's being
+    # navigated to). It is NOT unnoticeable for web/js/app.js: a
+    # <script src> is a "script"-destination subresource, which Task 8's
+    # X-Content-Type-Options: nosniff (below) DOES strictly gate — served
+    # as text/plain, the browser would silently refuse to execute it
+    # rather than erroring loudly. Explicit and correct now for both.
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
     # Task 8 — stop advertising the exact Nginx version. Applies to the
     # `Server` response header AND Nginx's own auto-generated error
     # pages (404, 500, etc. — both currently include the version in
