@@ -27,6 +27,19 @@ router = APIRouter(prefix="/products", tags=["products"])
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
+def _require_edit_access(x_access_level: str | None):
+    """Mirrors document-service/app/routers/companies.py's helper of the
+    same name — missing header defaults to "edit" (backward-compat,
+    restrictions are opt-in). A Viewer role's RoleAccess grant on
+    "products" sets X-Access-Level: view via Nginx's auth_request (see
+    infra/nginx/nginx.conf.template's /api/products location); this was
+    previously never checked anywhere in this router, so a Viewer could
+    write products despite the role model saying they shouldn't be able
+    to — see docs/SECURITY_HARDENING_LOG.md's User Control entry."""
+    if x_access_level == "view":
+        raise HTTPException(status_code=403, detail="your role has view-only access to products")
+
+
 def _sanitize_filename(filename: str | None) -> str:
     """Strips directory components (blocks path traversal via the object
     key) and collapses everything else to a safe character set — mirrors
@@ -151,7 +164,12 @@ def _generate_sku(db: Session, category_name: str | None) -> str:
 
 
 @router.post("", response_model=schemas.ProductOut, status_code=201)
-def create_product(payload: schemas.ProductCreate, db: Session = Depends(get_db)):
+def create_product(
+    payload: schemas.ProductCreate,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     sku = payload.sku or _generate_sku(db, payload.category)
 
     existing = db.query(models.Product).filter_by(sku=sku).first()
@@ -223,6 +241,7 @@ def bulk_import_products(
     excel_file: UploadFile = File(...),
     catalogue_zip: UploadFile | None = File(None),
     db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     """
     Creates many products at once from a spreadsheet, optionally matched
@@ -241,6 +260,7 @@ def bulk_import_products(
     its number, so numbering always matches the row's position in the
     sheet, not the count of products actually created.
     """
+    _require_edit_access(x_access_level)
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(excel_file.file.read()), data_only=True)
     except Exception:
@@ -359,10 +379,12 @@ def trash_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     """Soft delete — hides it from the catalogue and main list, but keeps
     it recoverable via the recycle bin. For a permanent purge, use
     DELETE /{product_id} instead (only called from within the recycle bin)."""
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
@@ -378,7 +400,9 @@ def restore_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
@@ -412,7 +436,9 @@ def update_product(
     payload: schemas.ProductUpdate,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
@@ -432,7 +458,9 @@ def delete_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
@@ -448,7 +476,9 @@ def upload_product_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
@@ -568,7 +598,13 @@ def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/{product_id}/sub-items", response_model=schemas.SubItemOut, status_code=201)
-def add_sub_item(product_id: uuid.UUID, payload: schemas.SubItemAdd, db: Session = Depends(get_db)):
+def add_sub_item(
+    product_id: uuid.UUID,
+    payload: schemas.SubItemAdd,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     parent = db.query(models.Product).filter_by(id=product_id).first()
     if not parent:
         raise HTTPException(status_code=404, detail="product not found")
@@ -609,7 +645,13 @@ def add_sub_item(product_id: uuid.UUID, payload: schemas.SubItemAdd, db: Session
 
 
 @router.delete("/{product_id}/sub-items/{sub_item_id}", status_code=204)
-def remove_sub_item(product_id: uuid.UUID, sub_item_id: uuid.UUID, db: Session = Depends(get_db)):
+def remove_sub_item(
+    product_id: uuid.UUID,
+    sub_item_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     sub_item = (
         db.query(models.ProductSubItem)
         .filter_by(id=sub_item_id, parent_product_id=product_id)
