@@ -103,8 +103,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     if logo_bytes and logo_mime != "image/svg+xml":
         try:
             img = XLImage(BytesIO(logo_bytes))
-            img.width = 80
-            img.height = 80
+            img.width = 100
+            img.height = 100
             ws.add_image(img, f"A{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
@@ -112,14 +112,14 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     if seal_bytes and seal_mime != "image/svg+xml":
         try:
             seal_img = XLImage(BytesIO(seal_bytes))
-            seal_img.width = 80
-            seal_img.height = 80
+            seal_img.width = 100
+            seal_img.height = 100
             ws.add_image(seal_img, f"F{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
 
     if has_header_image:
-        row += 5  # reserve rows for the logo/seal row before the title
+        row += 6  # reserve rows for the (now taller) logo/seal row before the title
 
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "QUOTATION"
@@ -261,9 +261,17 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         if director_seal_bytes and director_seal_mime != "image/svg+xml":
             try:
                 md_seal_img = XLImage(BytesIO(director_seal_bytes))
-                md_seal_img.width = 90
-                md_seal_img.height = 90
-                ws.add_image(md_seal_img, f"F{row}")
+                md_seal_img.width = 100
+                md_seal_img.height = 100
+                # Anchored at G, not F: the name/title below is centered
+                # across the merged F:G span, and column F alone (16
+                # units wide) is roughly as wide as this image itself —
+                # anchoring at F left-aligns the image within F, well
+                # left of the F:G merge's visual center. G's left edge
+                # sits close to where that center actually falls, so
+                # anchoring there lines the seal up with the name/title
+                # underneath it instead of drifting left of them.
+                ws.add_image(md_seal_img, f"G{row}")
                 row += 6  # leave room for the image before writing the name below it
             except Exception:
                 pass  # bad/unsupported image format shouldn't block the whole export
