@@ -772,15 +772,18 @@ jobs:
           xlsx_code=$(curl -s -o /tmp/quotation.xlsx -w '%{http_code}' "http://localhost:8080/api/documents/$doc_id/export/quotation" "${auth[@]}")
           echo "quotation export -> $xlsx_code"
           [ "$xlsx_code" = "200" ] || { echo "FAIL: quotation export failed"; fail=1; }
-          unzip -p /tmp/quotation.xlsx xl/sharedStrings.xml > /tmp/shared_strings.xml 2>/dev/null
-          grep -q "Restructure Test Co\." /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the company name"; fail=1; }
-          grep -q "Company HQ, Yangon" /tmp/shared_strings.xml || { echo "FAIL: exported quotation Supplier block missing the company's own address"; fail=1; }
-          grep -q "+95911111111" /tmp/shared_strings.xml || { echo "FAIL: exported quotation Supplier block missing the company's own contact number"; fail=1; }
-          grep -q "supplier@restructuretest.example.com" /tmp/shared_strings.xml || { echo "FAIL: exported quotation Supplier block missing the company's own support_email"; fail=1; }
-          grep -q "Aung Aung" /tmp/shared_strings.xml || { echo "FAIL: exported quotation missing the selected director's name in the MD signature block"; fail=1; }
-          grep -q ">Director<" /tmp/shared_strings.xml && { echo "FAIL: exported quotation leaks company.position ('Director') as its own shared string — must not appear in the Supplier block"; fail=1; }
-          grep -q "Mayangon, Yangon" /tmp/shared_strings.xml && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's address instead of the company's"; fail=1; }
-          grep -q "+95900000001" /tmp/shared_strings.xml && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's contact number instead of the company's"; fail=1; }
+          # Search every XML member of the archive (not just xl/sharedStrings.xml
+          # by an assumed exact path) via Python's stdlib zipfile, so this
+          # doesn't depend on exactly how openpyxl laid out the workbook.
+          python3 -c 'import zipfile; z = zipfile.ZipFile("/tmp/quotation.xlsx"); text = "".join(z.read(n).decode("utf-8", "replace") for n in z.namelist() if n.endswith(".xml")); open("/tmp/xlsx_text.txt", "w").write(text)'
+          grep -q "Restructure Test Co\." /tmp/xlsx_text.txt || { echo "FAIL: exported quotation missing the company name"; fail=1; }
+          grep -q "Company HQ, Yangon" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation Supplier block missing the company's own address"; fail=1; }
+          grep -q "+95911111111" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation Supplier block missing the company's own contact number"; fail=1; }
+          grep -q "supplier@restructuretest.example.com" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation Supplier block missing the company's own support_email"; fail=1; }
+          grep -q "Aung Aung" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation missing the selected director's name in the MD signature block"; fail=1; }
+          grep -q ">Director<" /tmp/xlsx_text.txt && { echo "FAIL: exported quotation leaks company.position ('Director') as its own shared string — must not appear in the Supplier block"; fail=1; }
+          grep -q "Mayangon, Yangon" /tmp/xlsx_text.txt && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's address instead of the company's"; fail=1; }
+          grep -q "+95900000001" /tmp/xlsx_text.txt && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's contact number instead of the company's"; fail=1; }
 
           # --- (14)/(15) existing document/company create+edit flows still
           # work end to end (already exercised above — a 400 here would
