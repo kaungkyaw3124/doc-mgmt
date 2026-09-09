@@ -1,6 +1,6 @@
 """add director contact fields, drop unused company.support_phone
 
-Revision ID: 0002_director_contact_fields_drop_company_support_phone
+Revision ID: 0002_director_contact_fields
 Revises: 0001_initial
 Create Date: 2026-09-09
 
@@ -22,6 +22,17 @@ docs/known-issues.md #10 and docs/decisions.md #4 — Alembic is present
 but not run at app startup in this project). This migration creates them
 here too, guarded to be a no-op wherever create_all() already has, so
 `alembic upgrade head` produces a consistent schema either way.
+
+NOTE on the revision id itself: it was previously
+"0002_director_contact_fields_drop_company_support_phone" (55 chars) —
+Alembic's own alembic_version.version_num column defaults to
+VARCHAR(32), so the migration's own final `UPDATE alembic_version SET
+version_num=...` step failed with StringDataRightTruncation on first
+real-world use. Postgres DDL is transactional, so that failure rolled
+back cleanly (no partial schema change, no data touched) — but the id
+still had to be shortened to fit. The filename is intentionally left as
+the original, more descriptive text; only the `revision` identifier
+below (what Alembic actually stores) was shortened.
 """
 from typing import Sequence, Union
 
@@ -29,7 +40,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0002_director_contact_fields_drop_company_support_phone"
+revision: str = "0002_director_contact_fields"
 down_revision: Union[str, None] = "0001_initial"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
