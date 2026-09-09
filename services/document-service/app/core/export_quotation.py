@@ -91,12 +91,21 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
 
     row = 1
 
+    # Header order matches the PDF export (quotation.html): logo/seal row
+    # FIRST, then the QUOTATION title below it — not side by side. An
+    # anchored image floats independently of cell content, so if the
+    # title were written into row 1 (the same row the images anchor to),
+    # it would render overlapping/beside the images instead of clearly
+    # above them; reserving dedicated rows for the images before writing
+    # the title avoids that.
+    has_header_image = bool((logo_bytes and logo_mime != "image/svg+xml") or (seal_bytes and seal_mime != "image/svg+xml"))
+
     if logo_bytes and logo_mime != "image/svg+xml":
         try:
             img = XLImage(BytesIO(logo_bytes))
             img.width = 80
             img.height = 80
-            ws.add_image(img, "F1")
+            ws.add_image(img, f"A{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
 
@@ -105,14 +114,17 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             seal_img = XLImage(BytesIO(seal_bytes))
             seal_img.width = 80
             seal_img.height = 80
-            ws.add_image(seal_img, "H1")
+            ws.add_image(seal_img, f"F{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
+
+    if has_header_image:
+        row += 5  # reserve rows for the logo/seal row before the title
 
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "QUOTATION"
     ws[f"A{row}"].font = Font(name="Arial", size=18, bold=True)
-    row += 4  # leave room for the logo alongside the title
+    row += 2
 
     ws[f"A{row}"] = "Date:"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
