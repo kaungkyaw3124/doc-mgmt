@@ -195,6 +195,26 @@ def list_all_users(
             .all()
         )
 
+    # Groups/roles inline per user (rather than making the frontend fetch
+    # each user's roles separately — see GET /users/{id}/roles) so the
+    # "All users" table can show Group/Role in one request.
+    user_ids = [u.id for u in users]
+    memberships_by_user: dict = {}
+    if user_ids:
+        for m in db.query(models.UserGroup).filter(models.UserGroup.user_id.in_(user_ids)).all():
+            memberships_by_user.setdefault(m.user_id, []).append(m)
+
+    role_assignments_by_user: dict = {}
+    if user_ids:
+        for a in db.query(models.UserRole).filter(models.UserRole.user_id.in_(user_ids)).all():
+            role_assignments_by_user.setdefault(a.user_id, []).append(a)
+
+    all_group_ids = {m.group_id for ms in memberships_by_user.values() for m in ms}
+    groups_by_id = {g.id: g for g in db.query(models.Group).filter(models.Group.id.in_(all_group_ids)).all()} if all_group_ids else {}
+
+    all_role_ids = {a.role_id for ras in role_assignments_by_user.values() for a in ras}
+    roles_by_id = {r.id: r for r in db.query(models.Role).filter(models.Role.id.in_(all_role_ids)).all()} if all_role_ids else {}
+
     return [
         {
             "id": str(u.id),
@@ -202,6 +222,16 @@ def list_all_users(
             "is_superuser": u.is_superuser,
             "is_approved": u.is_approved,
             "is_active": u.is_active,
+            "groups": sorted({
+                groups_by_id[m.group_id].name
+                for m in memberships_by_user.get(u.id, [])
+                if m.group_id in groups_by_id
+            }),
+            "roles": sorted({
+                roles_by_id[a.role_id].name
+                for a in role_assignments_by_user.get(u.id, [])
+                if a.role_id in roles_by_id
+            }),
         }
         for u in users
     ]
@@ -233,6 +263,37 @@ def get_user_roles(
             "role_name": role.name,
             "group_id": str(role.group_id),
             "group_name": group.name if group else "—",
+        })
+    return result
+
+
+@router.get("/users/{user_id}/groups")
+def get_user_groups(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Raw group memberships (unlike /roles, includes a group the user
+    belongs to even if they have no role assigned in it yet) — used by the
+    'Manage user' UI's group section."""
+    _require_can_manage_users(db, current_user)
+    target = db.query(models.User).filter_by(id=user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    if not current_user.is_superuser and not _target_is_in_an_administered_group(db, current_user, target):
+        raise HTTPException(status_code=403, detail="you can only view users who belong to a group you administer")
+
+    memberships = db.query(models.UserGroup).filter_by(user_id=user_id).all()
+    result = []
+    for m in memberships:
+        group = db.query(models.Group).filter_by(id=m.group_id).first()
+        if not group:
+            continue
+        result.append({
+            "group_id": str(group.id),
+            "group_name": group.name,
+            "is_group_admin": m.is_group_admin,
         })
     return result
 
@@ -307,39 +368,14 @@ def _target_is_in_an_administered_group(db: Session, current_user: models.User, 
     return membership is not None
 
 
-@router.delete("/users/{user_id}", status_code=204)
-def remove_user(
-    user_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    """
-    Permanently removes a user account (their group memberships and role
-    assignments go with it, via cascade). Superuser can remove anyone. A
-    group admin (or anyone else with the "users" grant, short of being a
-    superuser) can only remove a user who belongs to a group they
-    administer — and can never remove a superuser's account.
-    """
-    _require_can_manage_users(db, current_user)
-
-    target = db.query(models.User).filter_by(id=user_id).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="user not found")
-
-    if target.is_superuser:
-        raise HTTPException(status_code=403, detail="a superuser's account can't be removed this way")
-
-    if target.id == current_user.id:
-        raise HTTPException(status_code=400, detail="you can't remove your own account")
-
-    if not current_user.is_superuser and not _target_is_in_an_administered_group(db, current_user, target):
-        raise HTTPException(
-            status_code=403,
-            detail="you can only remove users who belong to a group you administer",
-        )
-
-    db.delete(target)
-    db.commit()
+# NOTE: there is deliberately no DELETE /users/{user_id} endpoint. User
+# Control requires that an approved account can never be deleted, only
+# deactivated (see PATCH /users/{user_id}/active) — deactivating already
+# blocks login, refresh, and every protected API call (see auth.py's
+# /login, /verify, /refresh), and revokes any outstanding refresh tokens.
+# A still-pending (never-approved) registration is different — it never
+# had real access to lose — and can still be rejected via POST
+# /users/{user_id}/deny or /reject above.
 
 
 class UserActiveUpdate(BaseModel):
@@ -534,6 +570,7 @@ class CreateUserInGroupRequest(BaseModel):
     username: str
     password: str
     is_group_admin: bool = False
+    role_id: uuid.UUID | None = None  # must be a role belonging to this same group, e.g. Editor/Viewer
 
 
 def _require_can_manage_group(db: Session, current_user: models.User, group_id: uuid.UUID):
@@ -552,18 +589,31 @@ def create_user_in_group(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """Create a brand-new user and add them to this group in one step.
-    Callable by superuser (any group) or that group's own admin(s)."""
-    _require_can_manage_group(db, current_user, group_id)
+    """Create a brand-new user and add them to this group in one step —
+    approved and active immediately (no self-registration wait). Callable
+    by superuser (any group) or that group's own admin(s). Never accepts
+    is_superuser — there is no field for it here at all; promoting to
+    superuser stays out of reach of this UI/endpoint entirely. If role_id
+    is given, it must be a role belonging to this same group (e.g. this
+    group's Editor or Viewer) — assigned in the same transaction so
+    permissions are correct from the very first login."""
+    group = _require_can_manage_group(db, current_user, group_id)
 
     existing = db.query(models.User).filter_by(username=payload.username).first()
     if existing:
         raise HTTPException(status_code=409, detail="username already exists")
 
+    role = None
+    if payload.role_id is not None:
+        role = db.query(models.Role).filter_by(id=payload.role_id, group_id=group.id).first()
+        if not role:
+            raise HTTPException(status_code=400, detail="role_id must be a role belonging to this group")
+
     user = models.User(
         username=payload.username,
         hashed_password=hash_password(payload.password),
         is_approved=True,  # created directly by an authorized admin, so no approval wait needed
+        is_active=True,
     )
     db.add(user)
     db.flush()  # get user.id without committing yet
@@ -572,12 +622,20 @@ def create_user_in_group(
         user_id=user.id, group_id=group_id, is_group_admin=payload.is_group_admin
     )
     db.add(membership)
+    if role is not None:
+        db.add(models.UserRole(user_id=user.id, role_id=role.id))
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="username already exists")
-    return {"username": user.username, "group_id": str(group_id), "is_group_admin": payload.is_group_admin}
+    return {
+        "username": user.username,
+        "group_id": str(group_id),
+        "is_group_admin": payload.is_group_admin,
+        "role_id": str(role.id) if role else None,
+        "role_name": role.name if role else None,
+    }
 
 
 @router.post("/groups/{group_id}/members", status_code=201)
