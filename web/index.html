@@ -815,16 +815,19 @@
       </div>
 
       <div class="card" id="all-users-card" style="display:none;">
-        <h3>All users</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+          <h3 style="margin:0;">All users</h3>
+          <button class="btn-secondary" id="open-create-user-btn">+ Create User</button>
+        </div>
         <div class="filter-bar">
           <input type="text" id="all-users-filter" placeholder="Filter by username…">
         </div>
         <table>
-          <thead><tr><th>Username</th><th>Superuser?</th><th>Approved?</th><th>Status</th><th>Edit</th><th>Remove</th></tr></thead>
+          <thead><tr><th>Username</th><th>Group</th><th>Role</th><th>Status</th><th>Manage</th></tr></thead>
           <tbody id="all-users-tbody">
-            <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-            <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-            <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="5"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="5"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+            <tr class="empty-row skeleton-row"><td colspan="5"><span class="skeleton-bar" style="width:70%"></span></td></tr>
           </tbody>
         </table>
       </div>
@@ -975,11 +978,31 @@
   </div>
 </div>
 
+<!-- ============ CREATE USER MODAL ============ -->
+<div class="modal-overlay" id="create-user-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="create-user-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+    <h3>Create User</h3>
+    <div id="create-user-banner"></div>
+
+    <label for="create-user-username">Username</label>
+    <input type="text" id="create-user-username" placeholder="username">
+    <label for="create-user-password">Password</label>
+    <input type="text" id="create-user-password" placeholder="temporary password">
+    <label for="create-user-group">Group</label>
+    <select id="create-user-group"></select>
+    <label for="create-user-role">Role</label>
+    <select id="create-user-role"></select>
+    <p style="font-size:12px; color:var(--text-dim); margin:4px 0 14px;">Created users are approved and active immediately — no self-registration wait.</p>
+    <button class="btn-primary" id="create-user-submit-btn">Create user</button>
+  </div>
+</div>
+
 <!-- ============ EDIT USER MODAL ============ -->
 <div class="modal-overlay" id="edit-user-modal">
   <div class="modal-box">
     <button class="link-btn-inline modal-close" id="edit-user-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
-    <h3 id="edit-user-title">Edit user</h3>
+    <h3 id="edit-user-title">Manage user</h3>
     <div id="edit-user-banner"></div>
 
     <label for="edit-user-username">Username</label>
@@ -987,6 +1010,19 @@
     <label for="edit-user-password">New password (leave blank to keep current)</label>
     <input type="text" id="edit-user-password" placeholder="new password">
     <button class="btn-primary" id="edit-user-save-btn">Save changes</button>
+
+    <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Current groups</label>
+    <div id="edit-user-groups-list" style="margin-bottom:14px;"></div>
+
+    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Add to a group</label>
+    <div class="form-row">
+      <div>
+        <select id="edit-user-add-group" style="margin-bottom:0;">
+          <option value="">— choose a group —</option>
+        </select>
+      </div>
+      <div><button type="button" class="btn-secondary" id="edit-user-add-group-btn" style="padding:10px 14px;">Add</button></div>
+    </div>
 
     <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Current roles</label>
     <div id="edit-user-roles-list" style="margin-bottom:14px;"></div>

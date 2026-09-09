@@ -3027,28 +3027,31 @@ async function loadAllUsers() {
     renderAllUsersTable(users);
   } catch (err) {
     // 403 here just means this account can't manage users — card is hidden anyway in that case
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderAllUsersTable(users) {
   const tbody = document.getElementById('all-users-tbody');
   if (!users.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No users match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No users match.</td></tr>';
     return;
   }
+  // Users are never removable (only deactivated) — see Task 5 of the User
+  // Control feature: there is deliberately no delete/remove action here.
   tbody.innerHTML = users.map(u => `
     <tr>
       <td>${escapeHtml(u.username)}</td>
-      <td>${u.is_superuser ? 'Yes' : '—'}</td>
-      <td>${u.is_approved ? 'Yes' : '<span style="color:var(--danger);">Pending</span>'}</td>
+      <td>${u.groups && u.groups.length ? escapeHtml(u.groups.join(', ')) : '—'}</td>
+      <td>${u.is_superuser ? 'Superuser' : (u.roles && u.roles.length ? escapeHtml(u.roles.join(', ')) : '<span style="color:var(--text-dim);">— no role —</span>')}</td>
       <td>
         ${u.is_superuser
           ? '<span class="stamp stamp-paid" style="font-size:10px;">active</span>'
-          : `<button class="status-toggle-btn ${u.is_active ? 'is-active' : 'is-disabled'}" data-toggle-user-id="${u.id}" data-toggle-active="${u.is_active}">${u.is_active ? 'Active' : 'Disabled'}</button>`}
+          : (!u.is_approved
+              ? '<span style="color:var(--danger);">Pending</span>'
+              : `<button class="status-toggle-btn ${u.is_active ? 'is-active' : 'is-disabled'}" data-toggle-user-id="${u.id}" data-toggle-active="${u.is_active}">${u.is_active ? 'Active' : 'Disabled'}</button>`)}
       </td>
-      <td><button class="link-btn-inline" data-edit-user-id="${u.id}">Edit</button></td>
-      <td>${u.is_superuser ? '<span style="color:var(--text-dim);">—</span>' : `<button class="link-btn-inline" data-remove-user-id="${u.id}" data-remove-username="${escapeHtml(u.username)}" style="color:var(--danger);">Remove</button>`}</td>
+      <td>${u.is_superuser ? '<span style="color:var(--text-dim);">—</span>' : `<button class="link-btn-inline" data-edit-user-id="${u.id}">Manage</button>`}</td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-edit-user-id]').forEach(btn => {
@@ -3072,18 +3075,6 @@ function renderAllUsersTable(users) {
       }
     });
   });
-  tbody.querySelectorAll('[data-remove-user-id]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm(`Remove user "${btn.dataset.removeUsername}"? This deletes their account, group memberships, and role assignments. This can't be undone.`)) return;
-      showBanner('admin-banner', '');
-      try {
-        await apiFetch('/admin/users/' + btn.dataset.removeUserId, { method: 'DELETE' });
-        loadAllUsers();
-      } catch (err) {
-        showBanner('admin-banner', err.message);
-      }
-    });
-  });
 }
 
 document.getElementById('all-users-filter').addEventListener('input', (e) => {
@@ -3094,15 +3085,78 @@ document.getElementById('all-users-filter').addEventListener('input', (e) => {
 
 async function openEditUserModal(user) {
   editingUserId = user.id;
-  document.getElementById('edit-user-title').textContent = 'Edit user — ' + user.username;
+  document.getElementById('edit-user-title').textContent = 'Manage user — ' + user.username;
   document.getElementById('edit-user-username').value = user.username;
   document.getElementById('edit-user-password').value = '';
   showBanner('edit-user-banner', '');
   document.getElementById('edit-user-modal').classList.add('active');
+  await loadEditUserGroups();
+  await loadGroupsForAddPicker();
   await loadEditUserRoles();
   await loadManageableRolesForPicker();
   await loadEditUserProjectAccess();
 }
+
+async function loadEditUserGroups() {
+  const container = document.getElementById('edit-user-groups-list');
+  container.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Loading…</p>';
+  try {
+    const groups = await apiFetch('/admin/users/' + editingUserId + '/groups');
+    if (!groups.length) {
+      container.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Not a member of any group yet.</p>';
+      return;
+    }
+    container.innerHTML = groups.map(g => `
+      <span class="user-chip">${escapeHtml(g.group_name)}${g.is_group_admin ? ' <span style="color:var(--text-dim);">(admin)</span>' : ''}
+        <button data-remove-group-id="${g.group_id}">✕</button>
+      </span>
+    `).join('');
+    container.querySelectorAll('[data-remove-group-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const user = cachedAllUsers.find(u => u.id === editingUserId);
+        if (!user) return;
+        try {
+          await apiFetch('/admin/groups/' + btn.dataset.removeGroupId + '/members/' + encodeURIComponent(user.username), { method: 'DELETE' });
+          loadEditUserGroups();
+          loadEditUserRoles(); // removing a group also drops any roles held via it — refresh both
+        } catch (err) {
+          showBanner('edit-user-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--danger); font-size:13px;">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadGroupsForAddPicker() {
+  const select = document.getElementById('edit-user-add-group');
+  select.innerHTML = '<option value="">— choose a group —</option>';
+  try {
+    const groups = await apiFetch('/admin/groups');
+    groups.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = g.name;
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    // non-fatal — user can still manage roles/password without a group picker
+  }
+}
+
+document.getElementById('edit-user-add-group-btn').addEventListener('click', async () => {
+  const groupId = document.getElementById('edit-user-add-group').value;
+  const user = cachedAllUsers.find(u => u.id === editingUserId);
+  if (!groupId || !user) return;
+  showBanner('edit-user-banner', '');
+  try {
+    await apiFetch('/admin/groups/' + groupId + '/members', { method: 'POST', body: JSON.stringify({ username: user.username }) });
+    loadEditUserGroups();
+  } catch (err) {
+    showBanner('edit-user-banner', err.message);
+  }
+});
 
 async function loadEditUserProjectAccess() {
   const container = document.getElementById('edit-user-project-checkboxes');
@@ -3157,6 +3211,80 @@ async function loadEditUserProjectAccess() {
 
 document.getElementById('edit-user-close').addEventListener('click', () => {
   document.getElementById('edit-user-modal').classList.remove('active');
+});
+
+// ---------- create user (Task 3 — Admin -> All Users -> Create User) ----------
+
+async function loadCreateUserRolePicker() {
+  const groupId = document.getElementById('create-user-group').value;
+  const roleSelect = document.getElementById('create-user-role');
+  roleSelect.innerHTML = '<option value="">— no role yet —</option>';
+  if (!groupId) return;
+  try {
+    const roles = await apiFetch('/admin/groups/' + groupId + '/roles');
+    roles.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = r.name;
+      roleSelect.appendChild(opt);
+    });
+  } catch (err) {
+    // non-fatal — admin can still create the user without picking a role yet
+  }
+}
+
+document.getElementById('create-user-group').addEventListener('change', loadCreateUserRolePicker);
+
+document.getElementById('open-create-user-btn').addEventListener('click', async () => {
+  showBanner('create-user-banner', '');
+  document.getElementById('create-user-username').value = '';
+  document.getElementById('create-user-password').value = '';
+  const groupSelect = document.getElementById('create-user-group');
+  groupSelect.innerHTML = '';
+  try {
+    const groups = await apiFetch('/admin/groups');
+    groups.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = g.name;
+      groupSelect.appendChild(opt);
+    });
+    // Default to the Operation group — that's where normal operational users belong.
+    const operation = groups.find(g => g.name === 'Operation');
+    if (operation) groupSelect.value = operation.id;
+  } catch (err) {
+    showBanner('create-user-banner', err.message);
+  }
+  await loadCreateUserRolePicker();
+  document.getElementById('create-user-modal').classList.add('active');
+});
+
+document.getElementById('create-user-close').addEventListener('click', () => {
+  document.getElementById('create-user-modal').classList.remove('active');
+});
+
+document.getElementById('create-user-submit-btn').addEventListener('click', async () => {
+  const username = document.getElementById('create-user-username').value.trim();
+  const password = document.getElementById('create-user-password').value;
+  const groupId = document.getElementById('create-user-group').value;
+  const roleId = document.getElementById('create-user-role').value;
+  showBanner('create-user-banner', '');
+  if (!username || !password || !groupId) {
+    showBanner('create-user-banner', 'Username, password, and group are required.');
+    return;
+  }
+  try {
+    document.getElementById('create-user-submit-btn').disabled = true;
+    const payload = { username, password };
+    if (roleId) payload.role_id = roleId;
+    await apiFetch('/admin/groups/' + groupId + '/users', { method: 'POST', body: JSON.stringify(payload) });
+    document.getElementById('create-user-modal').classList.remove('active');
+    loadAllUsers();
+  } catch (err) {
+    showBanner('create-user-banner', err.message);
+  } finally {
+    document.getElementById('create-user-submit-btn').disabled = false;
+  }
 });
 
 document.getElementById('edit-user-save-btn').addEventListener('click', async () => {
