@@ -3863,9 +3863,37 @@ regression.
 with `return_content: true` — raw log content, never the `conclusion`
 field alone)
 
-Pushed as commit `<PENDING>`. Results to be recorded once independently
-verified against real CI log content, per this repo's established
-practice.
+Pushed as commit `6470440`, verified on run `34439989940`. All 5 jobs
+**PASSED**: `auth-service`, `catalogue-service`, `search-service`
+unaffected; `document-service` — `73 passed` (70 prior + 3 new
+`test_migrations_idempotent.py` tests); `infra-integration` —
+"Build and start the full stack" itself succeeded (proving the new
+automatic `alembic upgrade head` at startup does not break normal
+boot), and every acceptance step in this entire log passed, including
+the previous task's recycle-bin deletion-audit step (same `documents`
+table/columns). The new self-heal step's real output, quoted directly
+from the job log:
+
+```
+baseline GET /api/documents -> 200, GET /api/documents/trash -> 200
+Simulating a pre-migration-0003 schema (dropping deleted_by/deleted_at, rolling back alembic_version)…
+ALTER TABLE
+UPDATE 1
+GET /api/documents against the simulated older schema (before restart) -> 500
+Container infra-document-service-1  Restarting
+Container infra-document-service-1  Started
+after self-heal: GET /api/documents -> 200, GET /api/documents/trash -> 200
+restore a document that was trashed before the simulated regression -> 200
+deleted_by for a document trashed after self-heal -> admin
+```
+
+The middle line is the important one: the simulated older schema
+**genuinely reproduced a 500** (not skipped, not assumed) before any
+fix was applied — proving the repro is real — and a plain
+`docker compose restart document-service`, with no manual migration
+command run by the test, brought both endpoints back to 200 while
+leaving the pre-existing trashed document intact and restorable. No
+`FAIL:` lines anywhere in the step's output.
 
 ### Recommendation
 
@@ -3882,10 +3910,19 @@ Worth setting up the same guarded-migration-at-startup pattern there
 
 ### Commits (branch `security/auth-hardening`)
 
-- `<PENDING>` — Documents API 500 fix (guarded migration chain,
-  automatic `alembic upgrade head` at startup).
+- `6470440` — Documents API 500 fix (guarded migration chain,
+  automatic `alembic upgrade head` at startup). **This is the commit CI
+  is green on (run `34439989940`).**
 
 ### Verification
 
-Real GitHub Actions CI, raw log content — reference to be added once
-the push above is verified.
+Real GitHub Actions CI (`mcp__github__actions_list` /
+`mcp__github__get_job_logs` with `return_content: true`), raw log
+content quoted above — not the `conclusion` field alone, not assumed
+from a green checkmark.
+
+**Net result: the Documents API 500 fix is genuinely PASS as of commit
+`6470440`, independently verified by actually reproducing the reported
+500 against a simulated real-world (older) schema and confirming a
+plain container restart — no manual migration step — self-heals it,
+with existing data left intact and restorable throughout.**
