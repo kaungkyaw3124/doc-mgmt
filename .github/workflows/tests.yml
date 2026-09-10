@@ -1192,6 +1192,18 @@ jobs:
           editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
           viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
 
+          # --- This step exercises recycle-bin deletion audit behavior
+          # (who/when a document was trashed), not the separate "Delete"
+          # permission gate itself (that's covered by its own acceptance
+          # step below) — grant the Editor role documents-delete so its
+          # trash calls here reflect a user who is allowed to delete,
+          # same as this step assumed before Delete became a distinct,
+          # opt-in permission.
+          delete_grant_code=$(curl -s -o /tmp/recyclebin_delete_grant.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"service_name":"documents-delete"}')
+          echo "grant documents-delete to the Editor role (recycle bin step) -> $delete_grant_code"
+          [ "$delete_grant_code" = "201" ] || { echo "FAIL: could not grant documents-delete to Editor for recycle bin test (got $delete_grant_code)"; cat /tmp/recyclebin_delete_grant.json; fail=1; }
+
           curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
             -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_editor_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
           curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
