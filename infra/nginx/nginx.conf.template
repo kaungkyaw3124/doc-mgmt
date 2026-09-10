@@ -322,12 +322,20 @@ http {
             auth_request /_verify;
             auth_request_set $has_category_access $upstream_http_x_has_category_access;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
+            auth_request_set $access_level $upstream_http_x_access_level;
             rewrite ^/api/products(.*)$ /products$1 break;
             proxy_pass http://catalogue-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Has-Category-Access $has_category_access;
             proxy_set_header X-Allowed-Projects $allowed_projects;
+            # Task 7/User Control gap fix: this was previously never
+            # captured or forwarded here, so Nginx left the client's own
+            # X-Access-Level header untouched instead of overwriting it —
+            # a Viewer could forge "X-Access-Level: edit" directly and
+            # products.py's _require_edit_access would trust it. See
+            # docs/SECURITY_HARDENING_LOG.md's User Control entry.
+            proxy_set_header X-Access-Level $access_level;
         }
 
         location /api/categories {
@@ -343,6 +351,11 @@ http {
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             proxy_set_header X-Has-Category-Access $has_category_access;
             proxy_set_header X-Allowed-Projects "";
+            # Not read by categories.py today (it uses its own
+            # X-Has-Category-Access axis), but blanked anyway per this
+            # file's redundant-blanking policy — see the note above
+            # /api/documents.
+            proxy_set_header X-Access-Level "";
         }
 
         location /api/search {
