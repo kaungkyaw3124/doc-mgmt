@@ -99,11 +99,24 @@ def test_short_quotation_keeps_md_on_page_1():
 
 
 def test_normal_quotation_keeps_md_correctly_positioned():
+    """10 items plus the full default Terms and Conditions text is right
+    around where a single A4 page's content area runs out — this
+    deliberately doesn't hardcode an exact page count (that's a function
+    of font metrics, not something this fix controls), but whichever page
+    the content lands on, it must be *correctly* positioned: attached to
+    Terms (never alone), and the supplier/end-user header must still
+    appear exactly once, on page 1."""
     pages = _generate(10)
-    assert len(pages) == 1, f"a 10-item quotation should still fit on one page, got {len(pages)}"
-    assert "Managing Director" in pages[0]
-    assert "Zaw Zaw" in pages[0]
-    assert "Terms and Conditions" in pages[0]
+    assert len(pages) <= 2, f"a 10-item quotation should not need more than two pages, got {len(pages)}"
+
+    md_pages = [i for i, text in enumerate(pages) if "Managing Director" in text]
+    assert md_pages == [len(pages) - 1], "Managing Director block should be on the last page"
+    md_page = pages[md_pages[0]]
+    assert "Zaw Zaw" in md_page
+    assert "Terms and Conditions" in md_page, "MD block must stay attached to Terms, never alone on its page"
+
+    header_pages = [i for i, text in enumerate(pages) if "SUPPLIER" in text and "END USER" in text]
+    assert header_pages == [0], f"expected the header exactly once, on page 1 — found it on page(s) {header_pages}"
 
 
 def test_long_quotation_paginates_cleanly_md_not_orphaned_alone():

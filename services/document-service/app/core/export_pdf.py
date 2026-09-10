@@ -58,7 +58,20 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
     catalogue_number = 0  # matches the Catalogue zip export's numbering — only product-based items count
     for item, product, sub_items in items_with_product:
         item_name = product["name"] if product else (item.description or "")
-        description = (product.get("description") if product else None) or item.description or ""
+        # item.description is also what item_name falls back to above (a
+        # manual line item has no separate name/description split, and a
+        # product-linked item defaults its description to the product's
+        # own name at creation time — see _process_items in
+        # routers/documents.py). Falling back to it unconditionally here
+        # (as this used to) printed that identical text a second time on
+        # the row, in regular weight right below the bold name, quietly
+        # doubling the row's height. Only treat it as a genuinely separate
+        # description when it actually differs from item_name — e.g. a
+        # product with its own description, or a line item whose
+        # description was deliberately customized away from the product
+        # name at creation.
+        item_description_override = item.description if item.description != item_name else None
+        description = (product.get("description") if product else None) or item_description_override or ""
         amount = float(item.quantity or 0) * float(item.unit_price or 0)
         total += amount
 
