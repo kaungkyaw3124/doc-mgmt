@@ -3449,9 +3449,32 @@ Compose stack through Nginx:
 with `return_content: true` — raw log content, never the `conclusion`
 field alone)
 
-Pushed as commit `<PENDING>` on branch `security/auth-hardening`.
-Results to be recorded once independently verified against real CI log
-content, per this repo's established practice.
+Pushed as commit `40e83ce`, verified on run `34436918402`. All 5 jobs
+**PASSED**: `auth-service`, `catalogue-service`, `document-service`,
+`search-service` (all unaffected — this was a frontend-only change),
+and `infra-integration`, including the new step and every prior task's
+acceptance step in this entire log (no regression). The new step's
+real output, quoted directly from the job log:
+
+Element-absence + full-flow checks against the actually-served page:
+no `FAIL:` lines for any removed id/function, `+ Create User` and
+`edit-user-add-group-btn` both present. Then, the surviving backend
+endpoints exercised directly (exactly what User Management now drives):
+
+```
+POST /admin/groups/{id}/members (backend behind the removed 'Add existing user' form) -> 201
+Editor (added/assigned via the surviving backend endpoints) GET /api/documents -> 200
+POST /admin/groups/{id}/project-access (backend behind the removed pool UI) -> 201
+```
+
+`pool_revoke_code` (`DELETE .../project-access/{id}` -> 204) and
+`su_code` (superuser `GET /api/documents` -> 200) were asserted
+silently (no `echo` on the success path for those two) and did not
+trigger their `FAIL:` branches — `exit $fail` returned 0 for the whole
+step. (Two benign `echo: write error: Broken pipe` lines appear in the
+raw log from the `grep -q` early-exit in the element-absence loops —
+standard `SIGPIPE` behavior on a `-q` match, did not affect the
+step's exit code or any assertion.)
 
 ### Security impact
 
@@ -3469,9 +3492,19 @@ that confirmed no functional gap would result.
 
 ### Commits (branch `security/auth-hardening`)
 
-- `<PENDING>` — Operation Group UI simplification, CI acceptance step.
+- `40e83ce` — Operation Group UI simplification, CI acceptance step.
+  **This is the commit CI is green on (run `34436918402`).**
 
 ### Verification
 
-Real GitHub Actions CI, raw log content — reference to be added once
-the push above is verified.
+Real GitHub Actions CI (`mcp__github__actions_list` /
+`mcp__github__get_job_logs` with `return_content: true`), raw log
+content quoted above — not the `conclusion` field alone, not assumed
+from a green checkmark.
+
+**Net result: the Operation Group UI simplification is genuinely PASS
+as of commit `40e83ce`, independently verified against raw CI evidence
+that the removed UI is gone from the served page, its replacements
+exist, every surviving backend endpoint still works, and the complete
+Superuser -> register -> approve -> add-to-Operation -> assign-role ->
+login -> protected-API authorization flow is unbroken.**
