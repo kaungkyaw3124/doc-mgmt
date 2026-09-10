@@ -3508,3 +3508,190 @@ that the removed UI is gone from the served page, its replacements
 exist, every surviving backend endpoint still works, and the complete
 Superuser -> register -> approve -> add-to-Operation -> assign-role ->
 login -> protected-API authorization flow is unbroken.**
+
+## Task 13 — Documents Recycle Bin: UI and Deletion Audit
+
+### Task
+
+1. Resize the Documents recycle-bin modal to ~80% viewport width/height,
+   responsive on smaller screens, with the document list scrolling
+   inside the modal while the table header stays usable (visible/pinned)
+   during scroll. Restore must keep working unchanged.
+2. Show who deleted each document ("Deleted by") and when ("Deleted
+   at"), alongside doc number/type/total/Restore — identifying the real
+   authenticated user who deleted it (Editor or Superuser/Admin alike),
+   correct after logout/login, never inferred from whoever happens to be
+   viewing the recycle bin, and never trusting a client-supplied value.
+
+### Inspection
+
+Read the Document/AuditLogEntry models, `documents.py`'s trash/restore
+endpoints, the existing `log_action`/`AuditLogEntry` audit mechanism,
+and the Nginx `X-Username` header pipeline before changing anything:
+
+- **Root cause, confirmed by reading the code, not assumed**:
+  `trash_document` (`PATCH /documents/{id}/trash`) never accepted the
+  `X-Username` header at all and never recorded anything about who
+  deleted the document — `is_deleted` just flips to `True`. No deletion
+  identity was captured anywhere, by any mechanism.
+- **`log_action`/`AuditLogEntry`** (`app/core/audit.py`,
+  `models.AuditLogEntry`) is this app's one existing audit mechanism —
+  already used for `"created"`/`"viewed"`/`"edited"`/`"status_changed"`/
+  `"file_uploaded"` actions, called consistently as
+  `log_action(db, doc.id, x_username, action)` right after each
+  operation's own `db.commit()`. `trash_document`/`restore_document`
+  were the only mutating endpoints in this router that never called it.
+  This is exactly the "existing audit/log mechanism" the task asked to
+  extend rather than duplicate — extended it with `"deleted"` and
+  `"restored"` action types, same call pattern as everywhere else.
+- **`X-Username` is genuinely server-side, not client-suppliable**:
+  auth-service's `/verify` (`app/routers/auth.py`) sets
+  `response.headers["X-Username"] = user.username` unconditionally for
+  every valid, active, approved request — including superuser, no
+  special-casing — derived from the JWT's verified `sub` claim, never
+  from anything the client sent. Nginx's `/api/documents` location
+  already captures this via `auth_request_set` and overwrites (not
+  merges with) whatever `X-Username` the client itself sent — the same
+  redundant-blanking/overwrite pattern already relied on for
+  `X-Access-Level` (see Task 7 of the User Control entry above). So the
+  only change needed to make deletion identity forgery-proof was to
+  actually *read* the header that was already being delivered correctly
+  — confirmed with a forged-header acceptance test below, not assumed.
+- **Where to store "who deleted it" for display**: the recycle-bin
+  table needs to show it directly, to every Editor/Viewer who can open
+  the recycle bin — but `AuditLogEntry` is gated behind the separate
+  `audit-log` service grant (`X-Has-Audit-Log`, intended for a
+  "Director"-style role), which regular Editors/Viewers don't have.
+  Querying `AuditLogEntry` for the trash listing would have quietly
+  exposed audit-log data through a side door to users who aren't
+  supposed to have that permission — a real architectural inconsistency
+  avoided by NOT doing that. Instead added two small denormalized
+  columns directly on `Document` — `deleted_by`/`deleted_at` — set on
+  trash, cleared on restore: the same pattern the model already uses for
+  `is_deleted`/`updated_at` (a plain, visible-to-everyone attribute of
+  the record's current state), not a second parallel audit trail.
+  `AuditLogEntry` remains the one full event-timeline mechanism;
+  `Document.deleted_by`/`deleted_at` is just today's snapshot of it,
+  cheap to read in the same query that already lists trashed documents.
+
+### Implementation
+
+- `services/document-service/app/models.py`: `Document` gains
+  `deleted_by` (`String(100)`, nullable) and `deleted_at`
+  (`DateTime(timezone=True)`, nullable). `AuditLogEntry.action`'s
+  comment extended with `"deleted"`/`"restored"` (plain `String(30)`,
+  no DB-level enum constraint, so no schema change needed there).
+- `services/document-service/app/schemas.py`: `DocumentOut` gains
+  `deleted_by`/`deleted_at` (both `Optional`, default `None`).
+- `services/document-service/app/routers/documents.py`:
+  `trash_document` and `restore_document` both now take
+  `x_username: str | None = Header(default=None, alias="X-Username")`.
+  `trash_document` sets `deleted_by`/`deleted_at` and calls
+  `log_action(db, doc.id, x_username, "deleted")` after its commit;
+  `restore_document` clears both fields and logs `"restored"` — same
+  commit-then-log ordering every other action in this router already
+  uses.
+- `services/document-service/alembic/versions/0003_document_deleted_by_at.py`
+  (new): adds the two columns, guarded idempotent (checks
+  `_existing_columns` first) exactly like migration 0002's pattern —
+  needed because this project's `create_all()`-on-startup approach only
+  creates missing *tables*, not missing *columns* on a table that
+  already exists in a real, already-running deployment (see 0002's own
+  module docstring for the established reasoning). A fresh CI database
+  never needs this migration (create_all already includes the new
+  columns from `models.py`); a real deployment's existing `documents`
+  table does.
+- `web/index.html` / `web/js/app.js`: new `.modal-box-scrollbody` CSS
+  class — fixed `80vw`/`80vh` box (`96vw`/`90vh` under a 700px
+  breakpoint), `display:flex; flex-direction:column; overflow:hidden`
+  on the box itself, with a single inner `.table-scroll-wrap` that
+  scrolls (`overflow:auto`) and a `position:sticky` `<thead>` so the
+  header stays visible/usable while rows scroll underneath it. Applied
+  only to the documents recycle-bin modal — every other modal
+  (including the other four resources' recycle bins) is untouched.
+  Table gained "Deleted by"/"Deleted at" columns (colspan 4→6
+  throughout); `Restore`'s button/handler is unchanged. A missing
+  `deleted_by` (pre-migration record) displays as "Unknown", not a
+  fabricated name; a missing `deleted_at` displays as "—".
+
+### Existing deleted-data handling (per the task's explicit ask)
+
+A document already sitting in the recycle bin **before** this change
+has `deleted_by = NULL` and `deleted_at = NULL` after the migration —
+there is no reliable source to backfill either from: `AuditLogEntry`
+never recorded a `"deleted"` action before this same change added it,
+so there is nothing truthful to backfill from, and fabricating a name
+would be actively wrong. The safest, and only honest, choice: leave
+both `NULL` and display `"Unknown"` for `deleted_by` (and `"—"` for
+`deleted_at`) rather than guessing. **Nothing existing is corrupted,
+modified, or lost** — this migration only ever adds two new nullable
+columns; no existing row, column, or table is touched, and `is_deleted`
+records their trashed status exactly as before.
+
+### Security
+
+- Deletion identity is read exclusively from the `X-Username` header
+  Nginx sets from auth-service's server-verified `/verify` response —
+  never from a request body field, never trusted as client-supplied.
+  Verified directly: an Editor's own delete request sent with a forged
+  `X-Username: someone-else` header still records the Editor's real
+  username, proving Nginx overwrites (not merges) the header exactly as
+  designed — see the acceptance evidence below.
+- Viewer's existing inability to delete (`_require_edit_access`,
+  unchanged by this task) was re-verified, not assumed: an explicit
+  Viewer-delete-attempt acceptance check confirms 403 and that the
+  target document is still present afterward.
+- No new attack surface: the two new columns are populated exclusively
+  from `trash_document`/`restore_document`'s own server-derived
+  `x_username`, never accepted as request input from any client.
+
+### Tests
+
+- `services/document-service/tests/test_recycle_bin.py` (new,
+  schema-level, no DB needed — same pattern as `test_companies.py`):
+  `DocumentOut` exposes `deleted_by`/`deleted_at`, and both validate as
+  `None` when absent (a pre-migration/never-deleted document).
+- New infra-integration acceptance step, "Acceptance — Documents
+  recycle bin deletion audit (Deleted by / Deleted at, real Nginx)",
+  run against the real Docker Compose stack through Nginx: Editor
+  creates+trashes their own document and the recycle bin shows their
+  exact username with a real `deleted_at`; a Viewer's delete attempt on
+  a separate document 403s and the document is provably still present
+  afterward; the superuser trashes a document and the recycle bin shows
+  `"admin"`; restore succeeds and clears `deleted_by` back to `None`;
+  a completely fresh login (new access token, unrelated to the one used
+  to view the trash) sees the exact same stored `deleted_by` value,
+  proving it's read from the row, not inferred from the current
+  viewer; and an Editor's delete request carrying a forged
+  `X-Username: someone-else` header still records the Editor's real
+  username.
+
+### Actual results (real GitHub Actions CI, `mcp__github__get_job_logs`
+with `return_content: true` — raw log content, never the `conclusion`
+field alone)
+
+Pushed as commit `<PENDING>`. Results to be recorded once independently
+verified against real CI log content, per this repo's established
+practice.
+
+### Recommendation
+
+Denormalizing `deleted_by`/`deleted_at` onto `Document` (rather than
+querying `AuditLogEntry` for the trash listing) was the one real design
+decision in this task, made specifically to avoid leaking audit-log-
+gated data to regular Editors/Viewers through the recycle bin. If a
+future task wants the recycle bin to show a fuller *history* per
+document (not just "who deleted it last" but every action ever taken),
+that's a legitimate reason to surface a filtered view of
+`AuditLogEntry` — but it should be a new, explicitly-scoped read path
+with its own authorization decision, not a widening of what the
+existing `audit-log` grant already protects.
+
+### Commits (branch `security/auth-hardening`)
+
+- `<PENDING>` — Recycle Bin UI + deletion audit.
+
+### Verification
+
+Real GitHub Actions CI, raw log content — reference to be added once
+the push above is verified.

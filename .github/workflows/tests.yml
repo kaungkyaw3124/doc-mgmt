@@ -1178,6 +1178,109 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — Documents recycle bin deletion audit (Deleted by / Deleted at, real Nginx)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_editor_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_viewer_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}"
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_editor_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_viewer_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_auth=(-H "Authorization: Bearer $editor_token")
+          viewer_auth=(-H "Authorization: Bearer $viewer_token")
+
+          new_doc() {
+            curl -s -X POST http://localhost:8080/api/documents "$@" \
+              -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'
+          }
+
+          # --- Editor deletes their own document -> recycle bin shows that Editor.
+          editor_doc_id=$(new_doc "${editor_auth[@]}")
+          editor_trash_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$editor_doc_id/trash" "${editor_auth[@]}")
+          echo "Editor trash own document -> $editor_trash_code"
+          [ "$editor_trash_code" = "200" ] || { echo "FAIL: Editor could not trash a document (got $editor_trash_code)"; fail=1; }
+
+          trash_json=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          editor_deleted_by=$(echo "$trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$editor_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "recycle bin deleted_by for Editor's document -> $editor_deleted_by"
+          [ "$editor_deleted_by" = "recyclebin_editor_$suffix" ] || { echo "FAIL: recycle bin does not correctly show the Editor as deleted_by (got '$editor_deleted_by')"; fail=1; }
+          editor_deleted_at=$(echo "$trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$editor_doc_id']; print(bool(d and d[0]['deleted_at']))")
+          [ "$editor_deleted_at" = "True" ] || { echo "FAIL: recycle bin missing deleted_at for the Editor's document"; fail=1; }
+
+          # --- Viewer cannot delete — the document Editor creates here must
+          # still exist (not trashed) after the Viewer's attempt.
+          viewer_target_doc_id=$(new_doc "${editor_auth[@]}")
+          viewer_trash_code=$(curl -s -o /tmp/viewer_trash.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$viewer_target_doc_id/trash" "${viewer_auth[@]}")
+          echo "Viewer attempt to trash a document -> $viewer_trash_code"
+          [ "$viewer_trash_code" = "403" ] || { echo "FAIL: Viewer was able to trash a document (got $viewer_trash_code)"; cat /tmp/viewer_trash.json; fail=1; }
+          still_there_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/documents/$viewer_target_doc_id" "${admin_auth[@]}")
+          [ "$still_there_code" = "200" ] || { echo "FAIL: the document Viewer failed to delete is no longer reachable (got $still_there_code) — it may have been deleted anyway"; fail=1; }
+
+          # --- Admin/superuser deletes -> recycle bin shows Admin.
+          admin_doc_id=$(new_doc "${admin_auth[@]}")
+          admin_trash_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$admin_doc_id/trash" "${admin_auth[@]}")
+          echo "Superuser trash a document -> $admin_trash_code"
+          [ "$admin_trash_code" = "200" ] || { echo "FAIL: superuser could not trash a document (got $admin_trash_code)"; fail=1; }
+
+          trash_json=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          admin_deleted_by=$(echo "$trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$admin_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "recycle bin deleted_by for superuser's document -> $admin_deleted_by"
+          [ "$admin_deleted_by" = "admin" ] || { echo "FAIL: recycle bin does not correctly show the superuser as deleted_by (got '$admin_deleted_by')"; fail=1; }
+
+          # --- Restore still works, and clears deleted_by/deleted_at.
+          restore_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$editor_doc_id/restore" "${editor_auth[@]}")
+          echo "Editor restore their own document -> $restore_code"
+          [ "$restore_code" = "200" ] || { echo "FAIL: restore broke (got $restore_code)"; fail=1; }
+          restored_doc=$(curl -s "http://localhost:8080/api/documents/$editor_doc_id" "${admin_auth[@]}")
+          restored_deleted_by=$(echo "$restored_doc" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('deleted_by'))")
+          [ "$restored_deleted_by" = "None" ] || { echo "FAIL: deleted_by was not cleared on restore (got $restored_deleted_by)"; fail=1; }
+
+          # --- Deleted-by information persists after logout/login: a
+          # completely fresh session (new login, new access token, no
+          # relation to the token used to view the trash above) must see
+          # the exact same stored value — proving it's read from the
+          # document row, never inferred from "whoever is currently
+          # logged in and viewing" the recycle bin.
+          admin_token_2=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          trash_json_2=$(curl -s http://localhost:8080/api/documents/trash -H "Authorization: Bearer $admin_token_2")
+          admin_deleted_by_2=$(echo "$trash_json_2" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$admin_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "deleted_by after a fresh login -> $admin_deleted_by_2"
+          [ "$admin_deleted_by_2" = "admin" ] || { echo "FAIL: deleted_by did not persist across logout/login (got '$admin_deleted_by_2')"; fail=1; }
+
+          # --- Forged X-Username bypass attempt — a Viewer with edit access
+          # forged (from an earlier acceptance step's own proof that Nginx
+          # overwrites this) must not be able to attribute a deletion to
+          # someone else even if they could delete at all.
+          forged_code=$(curl -s -o /tmp/forged.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$viewer_target_doc_id/trash" "${editor_auth[@]}" -H 'X-Username: someone-else')
+          echo "Editor trash with forged X-Username header -> $forged_code"
+          [ "$forged_code" = "200" ] || { echo "FAIL: expected the Editor's own trash to still succeed (got $forged_code)"; fail=1; }
+          forged_trash_json=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          forged_deleted_by=$(echo "$forged_trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$viewer_target_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "deleted_by after forged X-Username attempt -> $forged_deleted_by"
+          [ "$forged_deleted_by" = "recyclebin_editor_$suffix" ] || { echo "FAIL: forged X-Username header changed deleted_by (got '$forged_deleted_by', expected the real Editor) — Nginx is not overwriting client-supplied X-Username"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

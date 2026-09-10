@@ -179,4 +179,6 @@ class DocumentOut(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
+    deleted_by: Optional[str] = None
+    deleted_at: Optional[datetime] = None
     items: list[DocumentItemOut] = []

@@ -867,11 +867,11 @@ document.getElementById('document-trash-close').addEventListener('click', () => 
 
 async function loadDocumentTrash() {
   const tbody = document.getElementById('document-trash-tbody');
-  tbody.innerHTML = skeletonRows(4);
+  tbody.innerHTML = skeletonRows(6);
   try {
     const docs = await apiFetch('/documents/trash');
     if (!docs.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Recycle bin is empty.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Recycle bin is empty.</td></tr>';
       return;
     }
     tbody.innerHTML = docs.map(d => `
@@ -879,6 +879,8 @@ async function loadDocumentTrash() {
         <td class="mono">${escapeHtml(d.doc_number)}</td>
         <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
         <td class="mono">${fmtMoney(d.total)} ${escapeHtml(d.currency || '')}</td>
+        <td>${d.deleted_by ? escapeHtml(d.deleted_by) : '<span style="color:var(--text-dim);">Unknown</span>'}</td>
+        <td>${d.deleted_at ? fmtDate(d.deleted_at) : '<span style="color:var(--text-dim);">—</span>'}</td>
         <td><button class="link-btn-inline" data-restore-doc-id="${d.id}">Restore</button></td>
       </tr>
     `).join('');
@@ -895,7 +897,7 @@ async function loadDocumentTrash() {
       });
     });
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 

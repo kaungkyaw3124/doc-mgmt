@@ -81,6 +81,8 @@ class Document(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     doc_type = Column(String(20), nullable=False, index=True)  # quotation | invoice | catalogue
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)  # soft delete — trashed, recoverable via recycle bin
+    deleted_by = Column(String(100))  # username of who trashed it (from the server-verified X-Username header, never client-supplied) — cleared on restore
+    deleted_at = Column(DateTime(timezone=True))  # cleared on restore; NULL for both a never-deleted doc and one trashed before this column existed (see docs/SECURITY_HARDENING_LOG.md's Recycle Bin entry)
     doc_number = Column(String(50), unique=True, nullable=False)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
@@ -134,5 +136,5 @@ class AuditLogEntry(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     username = Column(String(100), nullable=False)
-    action = Column(String(30), nullable=False)  # "created" | "viewed" | "edited" | "status_changed" | "file_uploaded"
+    action = Column(String(30), nullable=False)  # "created" | "viewed" | "edited" | "status_changed" | "file_uploaded" | "deleted" | "restored"
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

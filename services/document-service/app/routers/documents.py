@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
@@ -404,17 +404,30 @@ def trash_document(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_username: str | None = Header(default=None, alias="X-Username"),
 ):
     """Soft delete — hides it from the main list and marks it recoverable.
     For a permanent purge, use DELETE /{document_id} instead (only ever
-    called from within the recycle bin in the UI)."""
+    called from within the recycle bin in the UI).
+
+    Records who deleted it: X-Username is set by Nginx from auth-service's
+    /verify response (the JWT's own subject, server-side — see
+    infra/nginx/nginx.conf.template and gateway_auth.py), never trusted
+    from an arbitrary client header, so this can't be spoofed by whoever
+    is deleting. Stored on the document itself (deleted_by/deleted_at)
+    rather than only in the audit log so the recycle-bin listing can show
+    it directly without requiring the separate audit-log permission — see
+    docs/SECURITY_HARDENING_LOG.md's Recycle Bin entry for why."""
     _require_edit_access(x_access_level)
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
     doc.is_deleted = True
+    doc.deleted_by = x_username
+    doc.deleted_at = datetime.utcnow()
     db.commit()
     db.refresh(doc)
+    log_action(db, doc.id, x_username, "deleted")
     return doc
 
 
@@ -423,14 +436,18 @@ def restore_document(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_username: str | None = Header(default=None, alias="X-Username"),
 ):
     _require_edit_access(x_access_level)
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
     doc.is_deleted = False
+    doc.deleted_by = None
+    doc.deleted_at = None
     db.commit()
     db.refresh(doc)
+    log_action(db, doc.id, x_username, "restored")
     return doc
 
 
