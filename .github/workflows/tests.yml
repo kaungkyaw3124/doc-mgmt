@@ -1291,6 +1291,21 @@ jobs:
           echo "deleted_by after forged X-Username attempt -> $forged_deleted_by"
           [ "$forged_deleted_by" = "recyclebin_editor_$suffix" ] || { echo "FAIL: forged X-Username header changed deleted_by (got '$forged_deleted_by', expected the real Editor) — Nginx is not overwriting client-supplied X-Username"; fail=1; }
 
+          # --- Revoke the documents-delete grant made above: it was only
+          # needed to let this step's own Editor trash documents, but it
+          # lives on the shared "Editor" role — leaving it granted would
+          # leak into every later step's Editor users too (they run
+          # sequentially against the same Postgres). The dedicated Delete
+          # permission acceptance step below assumes a *fresh* Editor
+          # (never granted documents-delete) to prove the "no Delete by
+          # default" behavior; without this revoke, its own grant call
+          # would be a no-op against an already-delete-capable role and
+          # its "Editor-without-delete" user would incorrectly inherit
+          # documents-delete from this step.
+          revoke_code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://localhost:8080/api/admin/roles/$editor_role_id/access/documents-delete" "${admin_auth[@]}")
+          echo "revoke documents-delete from the Editor role (recycle bin step cleanup) -> $revoke_code"
+          [ "$revoke_code" = "204" ] || { echo "FAIL: could not revoke documents-delete after the recycle bin test (got $revoke_code)"; fail=1; }
+
           exit $fail
 
       - name: Acceptance — Documents API self-heals an older/pre-migration schema (reproduces and fixes the reported 500 regression)
