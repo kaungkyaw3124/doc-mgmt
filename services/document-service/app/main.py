@@ -1,3 +1,7 @@
+import os
+
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI
 
 from app.core.config import settings
@@ -36,12 +40,45 @@ def _secret_problems() -> list[str]:
     return problems
 
 
+def _run_migrations() -> None:
+    """
+    Runs `alembic upgrade head` in-process before anything else touches
+    the database. See docs/SECURITY_HARDENING_LOG.md's "Documents API
+    500s" entry: this project used to rely solely on
+    `Base.metadata.create_all()`, which only ever creates *missing
+    tables* — it never adds a column to a table that already exists.
+    That's exactly what broke GET /documents and GET /documents/trash
+    the moment migration 0003 added Document.deleted_by/deleted_at: any
+    already-running deployment's `documents` table already existed, so
+    create_all() silently did nothing for those two columns, and the ORM
+    started querying for columns the real database didn't have.
+
+    Every migration in alembic/versions is now guarded/idempotent (checks
+    what already exists before creating/altering anything — see 0001's
+    own module docstring for why that had to be fixed too), so this is
+    safe to run unconditionally on every startup, from any starting
+    state: a brand-new empty database, one that only ever saw
+    create_all() and was never stamped, or one already correctly stamped
+    at some earlier revision. Deliberately NOT wrapped in a try/except —
+    a database left behind by a failed or partial migration is not a
+    state this service should silently keep running against.
+    """
+    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
+    alembic_cfg = AlembicConfig(config_path)
+    alembic_command.upgrade(alembic_cfg, "head")
+
+
 @app.on_event("startup")
 def on_startup():
     enforce_production_secrets(settings.environment, _secret_problems())
 
-    # NOTE: back to create_all() for now. Alembic migrations are set up
-    # (see /alembic) but shelved until a later session — see project-status.md.
+    _run_migrations()
+
+    # create_all() runs AFTER the real migrations, as a safety net only —
+    # it catches a table/column that exists in models.py but doesn't yet
+    # have a migration written for it (this has happened before, see
+    # migration 0002's own docstring), never as the primary way schema
+    # changes reach a real deployment.
     Base.metadata.create_all(bind=engine)
     ensure_bucket_exists()
 

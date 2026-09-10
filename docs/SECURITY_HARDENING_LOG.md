@@ -3730,3 +3730,162 @@ PASS as of commit `60dab87`, independently verified against raw CI
 evidence covering Editor, Viewer, superuser, restore, cross-login
 persistence, and a forged-header bypass attempt, all through the real
 Nginx API.**
+
+## Task 14 — Documents API 500s (root-caused to the migration chain, not the new columns)
+
+### Task
+
+`GET /api/documents` and `GET /api/documents/trash` started returning
+500 after the recycle-bin `deleted_by`/`deleted_at` feature was
+deployed — the Documents page and Recycle Bin modal both showed
+"Something went wrong." Investigate the real backend error, find the
+exact root cause, and fix it properly through the existing migration
+system — no manual DB surgery, no frontend-side error hiding.
+
+### Investigation
+
+Could not reach the real deployment's Postgres or container logs from
+this sandbox (no Docker/Postgres available here — an established,
+repeatedly-confirmed limitation of this environment throughout this
+whole project). Root-caused instead by tracing the exact code path a
+500 on these two endpoints would come from, and cross-checking against
+what CI could and couldn't have caught:
+
+- `GET /api/documents`/`GET /api/documents/trash` both do a plain
+  `db.query(models.Document)...all()` and serialize through
+  `DocumentOut`. `models.Document` now declares `deleted_by`/
+  `deleted_at` (added in the previous task, commit `60dab87`). SQLAlchemy
+  builds its `SELECT` from every mapped column — if the real `documents`
+  table in Postgres doesn't actually have those two columns, Postgres
+  itself raises `UndefinedColumn` on the very first `SELECT`, which
+  FastAPI surfaces as a 500. This matches the reported symptom exactly:
+  both endpoints touch the same table, both would break the same way,
+  immediately, with no code path that could partially succeed.
+- **Why the columns might not actually exist despite the migration
+  being written**: `services/document-service/app/main.py`'s
+  `on_startup()` only ever called `Base.metadata.create_all(bind=engine)`
+  — and `create_all()` **only creates missing tables**, it never alters
+  a table that already exists. The real deployment's `documents` table
+  already existed (this app has been live and used), so `create_all()`
+  silently did nothing for the two new columns — they were only ever
+  going to appear via `alembic upgrade head`, a **separate, manual step**
+  that this project's own `main.py` explicitly flagged as "shelved" (see
+  its old comment, quoted in the diff below) and that nothing forces
+  anyone to actually run.
+- **Why CI never caught this**: `infra-integration` always starts from
+  a brand-new, empty Postgres volume. `create_all()` against an empty
+  database creates the *entire* current schema straight from
+  `models.py`, deleted_by/deleted_at included — CI never needed a
+  migration to pass, so a broken or never-run migration path was
+  completely invisible there. This is exactly the gap between "CI green"
+  and "real deployment 500s" the task is asking to close, not just the
+  immediate symptom.
+- **The deeper bug, found by trying to fix it properly**: simply making
+  `main.py` run `alembic upgrade head` automatically was not safe by
+  itself — `alembic/versions/0001_initial.py` called `op.create_table`/
+  `op.create_index` **unconditionally**. Running `alembic upgrade head`
+  against a real deployment's database (tables already created by
+  `create_all()`, never `alembic stamp`ped) would fail on 0001's very
+  first statement with `relation "customers" already exists` — meaning
+  the migration chain could never even reach 0003 to add the missing
+  columns. **This is the actual root cause**: not "the new columns are
+  wrong," but "the migration chain was never actually runnable against
+  the kind of database this app has been running on in practice," so
+  0003 was unreachable from day one. Confirmed by inspection against
+  0002/0003, which already used a guarded, idempotent
+  `_existing_tables()`/`_existing_columns()` pattern for exactly this
+  reason — 0001 was the one file that had never been brought in line
+  with that pattern.
+
+### Fix
+
+- `services/document-service/alembic/versions/0001_initial.py`:
+  rewritten to use the same guard pattern as 0002/0003 —
+  `_create_table_if_missing`/`_create_index_if_missing` helpers check
+  `sa.inspect(bind).get_table_names()`/`get_indexes()` before creating
+  anything. `alembic upgrade head` is now safe to run from *any*
+  starting state: a truly empty database, one populated only by
+  `create_all()` and never stamped, or one already correctly stamped at
+  a later revision. `downgrade()` is unchanged (still drops everything —
+  a downgrade already assumes it owns what it's removing).
+- `services/document-service/app/main.py`: `on_startup()` now calls a
+  new `_run_migrations()` (`alembic.command.upgrade(cfg, "head")`, run
+  in-process via `alembic.config.Config`) **before** `create_all()`, on
+  every startup, unconditionally — not wrapped in a `try/except`, since
+  a database left in a partially-migrated state is not something this
+  service should silently keep running against. `create_all()` stays
+  immediately after, now purely as a safety net for a future column that
+  exists in `models.py` but doesn't have a migration written for it yet
+  (matching 0002's own documented precedent for `company_directors`).
+  This directly replaces the stale "shelved until a later session"
+  comment that was the real root enabler of this incident.
+
+### Migration / database changes
+
+No new migration was needed for this task — migration 0003 (from the
+previous task) already contains the correct `ADD COLUMN` statements;
+the bug was that it could never run. The fix is entirely in **how**
+migrations run (0001 made idempotent, `alembic upgrade head` now
+automatic at startup), not in adding another migration. On next boot,
+any real deployment self-heals: `alembic upgrade head` runs
+automatically, 0001-through-0002 no-op (everything they'd create
+already exists), and 0003 finally applies, adding the two missing
+columns — no manual `docker compose exec ... alembic upgrade head` step
+required from here on. Existing documents and existing trashed
+documents are untouched by this fix (same non-destructive `ADD COLUMN`
+as before) — verified explicitly in the regression test below, which
+restores a document that was trashed *before* the simulated schema
+regression.
+
+### Tests
+
+- `services/document-service/tests/test_migrations_idempotent.py`
+  (new, source-level, no DB needed): asserts `0001_initial.upgrade()`
+  never calls `op.create_table`/`op.create_index` directly (only
+  through the guard helpers) — a regression guard against ever
+  reintroducing the exact bug that caused this incident.
+- New infra-integration acceptance step, "Acceptance — Documents API
+  self-heals an older/pre-migration schema (reproduces and fixes the
+  reported 500 regression)", run against the real Docker Compose stack:
+  confirms a healthy baseline, trashes one real document, then
+  **reproduces the exact reported bug** by directly dropping
+  `deleted_by`/`deleted_at` from the live `documents` table and rolling
+  `alembic_version` back to `0002_director_contact_fields` (the same
+  state a real pre-existing deployment was in) — confirms this actually
+  reproduces a 500 (so the repro itself is proven real, not assumed) —
+  then does nothing but a plain `docker compose restart document-service`
+  (no manual migration command) and confirms both `GET /api/documents`
+  and `GET /api/documents/trash` come back to 200, the document trashed
+  *before* the regression is still present and still restorable, and a
+  freshly trashed document afterward correctly records `deleted_by`.
+
+### Actual results (real GitHub Actions CI, `mcp__github__get_job_logs`
+with `return_content: true` — raw log content, never the `conclusion`
+field alone)
+
+Pushed as commit `<PENDING>`. Results to be recorded once independently
+verified against real CI log content, per this repo's established
+practice.
+
+### Recommendation
+
+This incident is a direct consequence of `main.py`'s own documented
+"shelved until later" state for Alembic — this task resolves that
+debt for document-service specifically, but `catalogue-service` has no
+Alembic setup at all yet and relies purely on `create_all()` the same
+way document-service used to. It currently has no migration history to
+be unsafe, but the exact same class of bug (an already-running
+deployment silently missing a new column) will resurface there the
+first time its schema needs a real `ALTER` against a live database.
+Worth setting up the same guarded-migration-at-startup pattern there
+*before* that happens, not after.
+
+### Commits (branch `security/auth-hardening`)
+
+- `<PENDING>` — Documents API 500 fix (guarded migration chain,
+  automatic `alembic upgrade head` at startup).
+
+### Verification
+
+Real GitHub Actions CI, raw log content — reference to be added once
+the push above is verified.

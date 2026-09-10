@@ -1281,6 +1281,85 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — Documents API self-heals an older/pre-migration schema (reproduces and fixes the reported 500 regression)
+        working-directory: infra
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+
+          # --- Baseline, before simulating anything: both endpoints work,
+          # and put one real document into the recycle bin so we can prove
+          # it's still there AND still restorable after the schema is
+          # regressed and self-healed below.
+          baseline_list_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          baseline_trash_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          echo "baseline GET /api/documents -> $baseline_list_code, GET /api/documents/trash -> $baseline_trash_code"
+          [ "$baseline_list_code" = "200" ] && [ "$baseline_trash_code" = "200" ] || { echo "FAIL: baseline endpoints aren't even healthy before the regression test — can't proceed"; exit 1; }
+
+          heal_doc_id=$(curl -s -X POST http://localhost:8080/api/documents "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          curl -s -o /dev/null -X PATCH "http://localhost:8080/api/documents/$heal_doc_id/trash" "${admin_auth[@]}"
+
+          # --- Reproduce the EXACT reported bug: an already-running
+          # deployment whose `documents` table predates migration 0003 —
+          # drop the two columns it added and roll alembic_version back to
+          # 0002, the same state a real pre-existing database was in.
+          echo "Simulating a pre-migration-0003 schema (dropping deleted_by/deleted_at, rolling back alembic_version)…"
+          docker compose exec -T postgres psql -U docmgmt -d docmgmt -c \
+            "ALTER TABLE documents DROP COLUMN IF EXISTS deleted_by, DROP COLUMN IF EXISTS deleted_at;"
+          docker compose exec -T postgres psql -U docmgmt -d docmgmt -c \
+            "UPDATE alembic_version SET version_num = '0002_director_contact_fields';"
+
+          regressed_code=$(curl -s -o /tmp/regressed.json -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          echo "GET /api/documents against the simulated older schema (before restart) -> $regressed_code"
+          [ "$regressed_code" = "500" ] || { echo "FAIL: expected the simulated older schema to actually reproduce a 500 (got $regressed_code) — the repro setup itself is wrong"; cat /tmp/regressed.json; fail=1; }
+
+          # --- The fix under test: document-service's own startup now
+          # runs `alembic upgrade head` automatically, so simply
+          # restarting it (no manual migration command, nothing run by
+          # this CI script beyond a plain restart) must self-heal the
+          # schema before it starts serving again.
+          docker compose restart document-service
+          healed=0
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}" || echo 000)
+            if [ "$code" = "200" ]; then healed=1; break; fi
+            sleep 2
+          done
+          if [ "$healed" != "1" ]; then
+            echo "FAIL: document-service never came back healthy after restart"
+            docker compose logs document-service --tail=100
+            fail=1
+          fi
+
+          list_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          trash_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          echo "after self-heal: GET /api/documents -> $list_code, GET /api/documents/trash -> $trash_code"
+          [ "$list_code" = "200" ] || { echo "FAIL: GET /api/documents still broken after self-heal (got $list_code)"; fail=1; }
+          [ "$trash_code" = "200" ] || { echo "FAIL: GET /api/documents/trash still broken after self-heal (got $trash_code)"; fail=1; }
+
+          # --- Existing (trashed-before-the-regression) document is still
+          # there, still restorable — nothing was lost or corrupted.
+          restore_code=$(curl -s -o /tmp/heal_restore.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$heal_doc_id/restore" "${admin_auth[@]}")
+          echo "restore a document that was trashed before the simulated regression -> $restore_code"
+          [ "$restore_code" = "200" ] || { echo "FAIL: a document trashed before the regression is no longer restorable (got $restore_code)"; cat /tmp/heal_restore.json; fail=1; }
+
+          # --- The columns are back and working, not just present-but-broken.
+          new_doc_id=$(curl -s -X POST http://localhost:8080/api/documents "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          curl -s -o /dev/null -X PATCH "http://localhost:8080/api/documents/$new_doc_id/trash" "${admin_auth[@]}"
+          post_heal_deleted_by=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}" \
+            | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$new_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "deleted_by for a document trashed after self-heal -> $post_heal_deleted_by"
+          [ "$post_heal_deleted_by" = "admin" ] || { echo "FAIL: deleted_by not recorded correctly after self-heal (got '$post_heal_deleted_by')"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra
