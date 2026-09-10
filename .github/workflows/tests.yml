@@ -999,6 +999,95 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — User Control existing-data migration (pre-existing records stay accessible per role)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          # --- "Legacy" data: created by the superuser BEFORE the Editor/
+          # Viewer below exist, simulating records that predate a user's
+          # Operation membership (and, in a real deployment, predate this
+          # migration ever running). Nothing here is created by or scoped
+          # to any Operation member.
+          legacy_company_id=$(curl -s -X POST http://localhost:8080/api/companies "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Co $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_customer_id=$(curl -s -X POST http://localhost:8080/api/customers "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Customer $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_project_id=$(curl -s -X POST http://localhost:8080/api/projects "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Project $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_product_id=$(curl -s -X POST http://localhost:8080/api/products "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Product $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_document_id=$(curl -s -X POST http://localhost:8080/api/documents "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$legacy_company_id\",\"customer_id\":\"$legacy_customer_id\",\"project_id\":\"$legacy_project_id\",\"items\":[]}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          for id_var in legacy_company_id legacy_customer_id legacy_project_id legacy_product_id legacy_document_id; do
+            [ -n "${!id_var}" ] || { echo "FAIL: could not create legacy record ($id_var is empty) — setup itself failed"; fail=1; }
+          done
+
+          # --- Operation Editor/Viewer created AFTER the legacy data above,
+          # then the real migration is what's expected to make that legacy
+          # data visible to them (not any ownership/creation relationship,
+          # since neither of them created any of it).
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_editor_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_viewer_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}"
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_editor_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_viewer_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_auth=(-H "Authorization: Bearer $editor_token")
+          viewer_auth=(-H "Authorization: Bearer $viewer_token")
+
+          check_legacy_record() {
+            resource="$1"; record_id="$2"; patch_body="$3"
+
+            editor_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource/$record_id" "${editor_auth[@]}")
+            echo "Editor GET legacy $resource/$record_id -> $editor_get_code"
+            [ "$editor_get_code" = "200" ] || { echo "FAIL: Editor cannot see the pre-existing $resource (got $editor_get_code) — migration did not backfill visibility"; fail=1; }
+
+            editor_patch_code=$(curl -s -o /tmp/editor_patch.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/$resource/$record_id" "${editor_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$patch_body")
+            echo "Editor PATCH legacy $resource/$record_id -> $editor_patch_code"
+            [ "$editor_patch_code" = "200" ] || { echo "FAIL: Editor cannot edit the pre-existing $resource (got $editor_patch_code)"; cat /tmp/editor_patch.json; fail=1; }
+
+            viewer_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource/$record_id" "${viewer_auth[@]}")
+            echo "Viewer GET legacy $resource/$record_id -> $viewer_get_code"
+            [ "$viewer_get_code" = "200" ] || { echo "FAIL: Viewer cannot see the pre-existing $resource (got $viewer_get_code) — migration did not backfill visibility"; fail=1; }
+
+            viewer_patch_code=$(curl -s -o /tmp/viewer_patch.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/$resource/$record_id" "${viewer_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$patch_body")
+            echo "Viewer PATCH legacy $resource/$record_id -> $viewer_patch_code"
+            [ "$viewer_patch_code" = "403" ] || { echo "FAIL: Viewer was able to edit the pre-existing $resource (got $viewer_patch_code, expected 403)"; cat /tmp/viewer_patch.json; fail=1; }
+
+            admin_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource/$record_id" "${admin_auth[@]}")
+            admin_patch_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/$resource/$record_id" "${admin_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$patch_body")
+            echo "Superuser GET/PATCH legacy $resource/$record_id -> $admin_get_code / $admin_patch_code"
+            [ "$admin_get_code" = "200" ] && [ "$admin_patch_code" = "200" ] || { echo "FAIL: superuser is not unrestricted on pre-existing $resource"; fail=1; }
+          }
+
+          check_legacy_record "companies" "$legacy_company_id" "{\"short_name\":\"LGC\"}"
+          check_legacy_record "customers" "$legacy_customer_id" "{\"phone\":\"+95900000000\"}"
+          check_legacy_record "projects" "$legacy_project_id" "{\"description\":\"migrated visibility check\"}"
+          check_legacy_record "products" "$legacy_product_id" "{\"description\":\"migrated visibility check\"}"
+          check_legacy_record "documents" "$legacy_document_id" "{\"company_id\":\"$legacy_company_id\",\"items\":[]}"
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

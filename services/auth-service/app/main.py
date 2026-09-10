@@ -6,7 +6,7 @@ from app.core.db import Base, engine, SessionLocal
 from app.core.config import settings
 from app.core.security import hash_password
 from app.core.secrets_check import db_password_from_url, enforce_production_secrets, is_insecure
-from app.core.seed import ensure_default_groups_and_roles
+from app.core.seed import ensure_default_groups_and_roles, migrate_operation_members_to_full_existing_data_access
 from app import models
 from app.routers import auth, admin
 
@@ -60,6 +60,14 @@ def on_startup():
         # database, and idempotent so re-running it never duplicates or
         # resets an admin's own later edits.
         ensure_default_groups_and_roles(db)
+
+        # Existing-data migration for User Control: any Operation member
+        # left over from a stale/pre-existing UserProjectAccess restriction
+        # is restored to unrestricted ("ALL projects") visibility — see
+        # migrate_operation_members_to_full_existing_data_access's
+        # docstring for why this is the correct and only necessary
+        # backfill. Idempotent, always run (not just on an empty database).
+        migrate_operation_members_to_full_existing_data_access(db)
     finally:
         db.close()
 

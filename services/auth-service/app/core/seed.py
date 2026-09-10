@@ -71,3 +71,68 @@ def ensure_default_groups_and_roles(db: Session) -> None:
         _ensure_access(db, viewer, service, "view")
 
     db.commit()
+
+
+def migrate_operation_members_to_full_existing_data_access(db: Session) -> int:
+    """
+    Existing-data migration for the User Control feature.
+
+    Inspection of the schema (see app/models.py, app/core/authz.py) found
+    NO per-record group/owner scoping for any of the five operational
+    resources — Documents/Projects are visibility-gated only by
+    UserProjectAccess ("no rows for this user" == "ALL projects visible",
+    an opt-in restriction, not a default lockdown — see
+    get_user_allowed_project_ids); Products/Customers/Companies have no
+    project or group scoping at all, only the service-level Editor/Viewer
+    access_level (already enforced server-side — see the User Control
+    entry in docs/SECURITY_HARDENING_LOG.md).
+
+    That means a brand-new Operation member already sees every existing
+    record for free, by construction, with zero rows to add — restrictions
+    are opt-in and none exist for a user who's never had one. The only way
+    an Operation member could fail to see existing data is a **leftover**
+    UserProjectAccess restriction predating their membership (e.g. an
+    admin scoped them down to specific projects under a different
+    group/role before this feature existed, or before they joined
+    Operation) — that row would still narrow them to an allow-list instead
+    of "ALL", in direct conflict with this feature's requirement that
+    Operation users see existing data unconditionally by role.
+
+    This migration corrects exactly that conflict: for every current
+    Operation group member, it removes any UserProjectAccess rows they
+    have, restoring them to the unrestricted "ALL projects" default so
+    every pre-existing (and future) Document/Project is visible per their
+    Editor/Viewer access_level. It does NOT touch any other group's
+    members, any RoleProjectAccess/GroupProjectAccess provisioning data
+    (those are pools/bookkeeping for admin-driven grants, not read at
+    authorization time), or any operational data itself (Documents,
+    Products, Customers, Projects, Companies are untouched — this only
+    ever deletes auth-service's own UserProjectAccess rows).
+
+    Idempotent: the first run removes any leftover restrictions; every
+    run after that finds nothing left to remove and is a no-op. Returns
+    the number of rows removed, for logging/tests.
+
+    Deliberately NOT rolled into ensure_default_groups_and_roles above:
+    that function only ever ADDS default provisioning and never touches
+    per-user state; this one actively removes rows tied to specific
+    users, which deserves to stay a clearly separate, clearly named step.
+    """
+    operation = db.query(models.Group).filter_by(name=OPERATION_GROUP_NAME).first()
+    if not operation:
+        return 0  # ensure_default_groups_and_roles hasn't run yet — nothing to migrate
+
+    member_ids = [
+        row.user_id
+        for row in db.query(models.UserGroup.user_id).filter_by(group_id=operation.id).all()
+    ]
+    if not member_ids:
+        return 0
+
+    removed = (
+        db.query(models.UserProjectAccess)
+        .filter(models.UserProjectAccess.user_id.in_(member_ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return removed
