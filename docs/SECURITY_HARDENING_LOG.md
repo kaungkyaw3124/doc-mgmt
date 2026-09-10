@@ -3226,13 +3226,47 @@ users see existing data unconditionally by role.
 with `return_content: true` — raw log content, never the `conclusion`
 field alone)
 
-Pushed as commit `<PENDING>` on branch `security/auth-hardening`.
-`auth-service` (including the 5 new migration tests),
-`catalogue-service`, `document-service`, `search-service`, and
-`infra-integration` (including the new existing-data acceptance step
-above, alongside every prior task's acceptance step from this entire
-log) all **PASSED**. See the commit/run reference recorded at the end
-of this entry once verified — not claimed here without that evidence.
+Pushed as commit `7bbea78`, verified on run `34435133213`. All 5 jobs
+**PASSED**: `auth-service` (`75 passed, 5 warnings in 35.76s`, up from
+70 before this task's 5 new tests), `catalogue-service`,
+`document-service`, `search-service`, and `infra-integration`
+(including the new existing-data acceptance step, alongside every
+prior task's acceptance step from this entire log). The new step's
+real output, quoted directly from the job log
+(`mcp__github__get_job_logs`, `return_content: true`), for one full
+pass over all five resources — a Company, Customer, Project, Product,
+and Document all created by the superuser *before* the Editor/Viewer
+pair below existed:
+
+```
+Editor GET legacy companies/60494499-3540-4716-8cfa-4b936813b6f0 -> 200
+Editor PATCH legacy companies/60494499-3540-4716-8cfa-4b936813b6f0 -> 200
+Viewer GET legacy companies/60494499-3540-4716-8cfa-4b936813b6f0 -> 200
+Viewer PATCH legacy companies/60494499-3540-4716-8cfa-4b936813b6f0 -> 403
+Superuser GET/PATCH legacy companies/60494499-3540-4716-8cfa-4b936813b6f0 -> 200 / 200
+Editor GET legacy customers/c93bbc6a-38ac-460a-939e-97d2a8e503a3 -> 200
+Editor PATCH legacy customers/c93bbc6a-38ac-460a-939e-97d2a8e503a3 -> 200
+Viewer GET legacy customers/c93bbc6a-38ac-460a-939e-97d2a8e503a3 -> 200
+Viewer PATCH legacy customers/c93bbc6a-38ac-460a-939e-97d2a8e503a3 -> 403
+Superuser GET/PATCH legacy customers/c93bbc6a-38ac-460a-939e-97d2a8e503a3 -> 200 / 200
+Editor GET legacy projects/7f1d0a64-d1c0-4ba2-9d34-06ba3dff12f3 -> 200
+Editor PATCH legacy projects/7f1d0a64-d1c0-4ba2-9d34-06ba3dff12f3 -> 200
+Viewer GET legacy projects/7f1d0a64-d1c0-4ba2-9d34-06ba3dff12f3 -> 200
+Viewer PATCH legacy projects/7f1d0a64-d1c0-4ba2-9d34-06ba3dff12f3 -> 403
+Superuser GET/PATCH legacy projects/7f1d0a64-d1c0-4ba2-9d34-06ba3dff12f3 -> 200 / 200
+Editor GET legacy products/a330a32e-56d0-4ab9-8699-1056082540c1 -> 200
+Editor PATCH legacy products/a330a32e-56d0-4ab9-8699-1056082540c1 -> 200
+Viewer GET legacy products/a330a32e-56d0-4ab9-8699-1056082540c1 -> 200
+Viewer PATCH legacy products/a330a32e-56d0-4ab9-8699-1056082540c1 -> 403
+Superuser GET/PATCH legacy products/a330a32e-56d0-4ab9-8699-1056082540c1 -> 200 / 200
+Editor GET legacy documents/b2d563a6-73af-4bbb-ae11-76b4205b9d6b -> 200
+Editor PATCH legacy documents/b2d563a6-73af-4bbb-ae11-76b4205b9d6b -> 200
+Viewer GET legacy documents/b2d563a6-73af-4bbb-ae11-76b4205b9d6b -> 200
+Viewer PATCH legacy documents/b2d563a6-73af-4bbb-ae11-76b4205b9d6b -> 403
+Superuser GET/PATCH legacy documents/b2d563a6-73af-4bbb-ae11-76b4205b9d6b -> 200 / 200
+```
+
+No `FAIL:` lines anywhere in the step's output; `exit $fail` returned 0.
 
 ### Security impact
 
@@ -3259,10 +3293,18 @@ logic, made real via the dedicated leftover-restriction test above.
 
 ### Commits (branch `security/auth-hardening`)
 
-- `<PENDING>` — existing-data migration, tests, and CI acceptance step.
+- `7bbea78` — existing-data migration, tests, and CI acceptance step.
+  **This is the commit CI is green on (run `34435133213`).**
 
 ### Verification
 
-Real GitHub Actions CI, raw log content — reference to be added once
-the push above is verified, per this repo's established practice of
-never reporting PASS without independently read log content.
+Real GitHub Actions CI (`mcp__github__actions_list` /
+`mcp__github__get_job_logs` with `return_content: true`), raw log
+content quoted above — not the `conclusion` field alone, not assumed
+from a green checkmark.
+
+**Net result: the existing-data migration is genuinely PASS as of
+commit `7bbea78`, independently verified against raw CI evidence
+showing Editor/Viewer/superuser access on records that predate their
+Operation membership, across all five operational resources, through
+the real Nginx API.**
