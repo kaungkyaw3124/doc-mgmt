@@ -5,30 +5,33 @@
 <style>
   @page {
     size: A4;
-    /* Reserve room at the top/bottom of every page for the repeating
-       header/footer (see .pdf-header/.pdf-footer below). Sized generously —
-       a long wrapping supplier address can make the header quite tall, and
-       CSS paged-media margin boxes are a FIXED height (content that
-       overflows them collides with the body below), so it's safer to
-       reserve more than needed than to risk that overlap. Bumped up
-       further to fit the extra top spacing above the logo/seal row. */
-    /* This has overflowed twice now at smaller values (6.5cm, then 10cm,
-       then 12.5cm) — the actual header content (logo+seal row, title,
-       date, and a supplier address that can wrap to many lines) keeps
-       coming out taller than estimated. Being deliberately generous here
-       instead of guessing again; the trade-off is more blank space at
-       the top of documents with a short address, which is far better
-       than text colliding with the items table. */
-    margin: 13cm 2cm 3cm 2cm;
-    @top-center { content: element(pdfHeader); vertical-align: top; }
+    /* Only the footer is a repeating margin-box element now (see
+       .pdf-footer below) — it's short and its height is predictable, so a
+       fixed 3cm reservation for it is safe. The header (logo/seal, title,
+       date, supplier/end-user parties) used to live in a `running()` margin
+       box too, which forced a huge, guessed top margin on *every* page to
+       avoid the fixed-height margin box colliding with body content when a
+       long address wrapped to extra lines (previous values of 6.5cm, 10cm,
+       then 12.5cm all still overflowed). That header is normal in-flow body
+       content now (see .pdf-header below): it renders once, at the top of
+       page 1, sized to whatever it actually needs — no guessing, no
+       reserved dead space on every page, and it no longer repeats on later
+       pages. */
+    margin: 1.5cm 2cm 3cm 2cm;
     @bottom-center { content: element(pdfFooter); vertical-align: top; }
   }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #1a1a1a; }
 
+  /* Normal in-flow block (not `position: running()`): it renders once, at
+     the top of page 1, and is never repeated on later pages — this is what
+     stops the supplier/end-user header from being duplicated onto a page 2
+     that only exists because the signature block overflowed. */
+  .pdf-header { break-inside: avoid; page-break-inside: avoid; }
+
   /* `position: running()` pulls this block out of normal body flow and
-     into the @page top/bottom margin boxes above — WeasyPrint then repeats
-     it on every page automatically. */
-  .pdf-header { position: running(pdfHeader); width: 17cm; padding-top: 30px; }
+     into the @page bottom margin box above — WeasyPrint then repeats
+     it on every page automatically. Kept running (small, fixed height,
+     genuinely meant to appear on every page). */
   .pdf-footer { position: running(pdfFooter); width: 17cm; }
 
   .header-top {
@@ -61,7 +64,13 @@
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
 
-  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; }
+  /* Wraps .terms + .md-block together (see body) so the signature block
+     can never be orphaned alone on a page by itself: if the pair doesn't
+     fit in the room left on the current page, the whole group moves to
+     the next page as one unit instead of splitting mid-way through. */
+  .closing-section { break-inside: avoid; page-break-inside: avoid; }
+
+  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; break-inside: avoid; page-break-inside: avoid; }
   .md-seal { width: 130px; height: 130px; }
   .md-name { font-weight: bold; margin-top: 6px; }
   .md-title { font-size: 9pt; color: #555; }
@@ -146,18 +155,20 @@
     </tbody>
   </table>
 
-  <div class="terms">
-    <h3>Terms and Conditions</h3>
-    <p>{{ terms_text }}</p>
-  </div>
+  <div class="closing-section">
+    <div class="terms">
+      <h3>Terms and Conditions</h3>
+      <p>{{ terms_text }}</p>
+    </div>
 
-  {% if director %}
-  <div class="md-block">
-    {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
-    <div class="md-name">{{ director.name }}</div>
-    <div class="md-title">Managing Director</div>
+    {% if director %}
+    <div class="md-block">
+      {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
+      <div class="md-name">{{ director.name }}</div>
+      <div class="md-title">Managing Director</div>
+    </div>
+    {% endif %}
   </div>
-  {% endif %}
 
 </body>
 </html>
