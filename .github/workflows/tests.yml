@@ -1088,6 +1088,96 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — Operation Group UI simplification (removed UI gone, backend + full auth flow intact)
+        run: |
+          fail=0
+
+          # --- The removed controls must actually be gone from what's
+          # served, not just deleted from source and still cached/inlined
+          # somewhere. Fetch the real served page + script through Nginx.
+          index_html=$(curl -s http://localhost:8080/)
+          app_js=$(curl -s http://localhost:8080/js/app.js)
+
+          for removed_id in group-project-pool-card add-member-btn add-member-username add-member-is-admin new-member-username new-member-password new-member-is-admin create-member-btn group-members-tbody; do
+            if echo "$index_html" | grep -q "id=\"$removed_id\""; then
+              echo "FAIL: index.html still contains removed element #$removed_id"
+              fail=1
+            fi
+          done
+          for removed_fn in loadGroupMembers loadGroupProjectPool refreshMemberRolePickers; do
+            if echo "$app_js" | grep -q "$removed_fn"; then
+              echo "FAIL: app.js still references removed function $removed_fn"
+              fail=1
+            fi
+          done
+          echo "$index_html" | grep -q 'id="open-create-user-btn"' \
+            || { echo "FAIL: the + Create User button (User Management's replacement path) is missing"; fail=1; }
+          echo "$index_html" | grep -q 'id="edit-user-add-group-btn"' \
+            || { echo "FAIL: User Management's Add-to-group control (the replacement for group-page's Add existing user) is missing"; fail=1; }
+
+          # --- The underlying backend the removed UI used to call must
+          # still work when called directly — this task only removed a
+          # redundant UI, not the API or its authorization semantics.
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          # Full end-to-end authorization flow, exactly as an admin would
+          # now do it entirely through User Management: register a normal
+          # account, add it to Operation (the same POST /members endpoint
+          # the removed "Add existing user" form used to call — still
+          # live), assign it the Editor role, and confirm it actually
+          # works end to end through Nginx.
+          register_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/register \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\",\"password\":\"correct horse battery staple\"}")
+          [ "$register_code" = "201" ] || { echo "FAIL: self-registration broke (got $register_code)"; fail=1; }
+          new_user_id=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}" | python3 -c "import sys,json; print([u['id'] for u in json.load(sys.stdin) if u['username']=='uism_editor_$suffix'][0])")
+
+          approve_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:8080/api/admin/users/$new_user_id/approve" "${admin_auth[@]}")
+          [ "$approve_code" = "200" ] || { echo "FAIL: approve broke (got $approve_code)"; fail=1; }
+
+          add_member_code=$(curl -s -o /tmp/add_member.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/members" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\"}")
+          echo "POST /admin/groups/{id}/members (backend behind the removed 'Add existing user' form) -> $add_member_code"
+          [ "$add_member_code" = "201" ] || { echo "FAIL: add-existing-member endpoint broke (got $add_member_code)"; cat /tmp/add_member.json; fail=1; }
+
+          assign_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/assign" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\"}")
+          [ "$assign_code" = "201" ] || { echo "FAIL: role assign broke (got $assign_code)"; fail=1; }
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          verify_code=$(curl -s -o /tmp/verify.json -w '%{http_code}' http://localhost:8080/api/documents -H "Authorization: Bearer $editor_token")
+          echo "Editor (added/assigned via the surviving backend endpoints) GET /api/documents -> $verify_code"
+          [ "$verify_code" = "200" ] || { echo "FAIL: end-to-end Operation Editor flow broke after the UI simplification (got $verify_code)"; cat /tmp/verify.json; fail=1; }
+
+          # GroupProjectAccess (the removed "Project access — Operation"
+          # pool's own backend) must also still work directly — kept
+          # deliberately, per this task's recommendation, as still-valid
+          # generic group RBAC provisioning for any future non-Operation
+          # group, even though no UI calls it anymore.
+          dummy_project_id="00000000-0000-0000-0000-000000000001"
+          pool_grant_code=$(curl -s -o /tmp/pool_grant.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/project-access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"project_id\":\"$dummy_project_id\"}")
+          echo "POST /admin/groups/{id}/project-access (backend behind the removed pool UI) -> $pool_grant_code"
+          [ "$pool_grant_code" = "201" ] || { echo "FAIL: group project-access pool endpoint broke (got $pool_grant_code)"; cat /tmp/pool_grant.json; fail=1; }
+          pool_revoke_code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://localhost:8080/api/admin/groups/$operation_group_id/project-access/$dummy_project_id" "${admin_auth[@]}")
+          [ "$pool_revoke_code" = "204" ] || { echo "FAIL: group project-access revoke endpoint broke (got $pool_revoke_code)"; fail=1; }
+
+          # Superuser remains completely unrestricted throughout.
+          su_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          [ "$su_code" = "200" ] || { echo "FAIL: superuser access broke (got $su_code)"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

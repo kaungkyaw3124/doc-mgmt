@@ -3463,54 +3463,11 @@ document.getElementById('group-select').addEventListener('change', (e) => {
     return;
   }
   const group = cachedGroups.find(g => g.id === selectedGroupId);
-  document.getElementById('group-detail-name').textContent = group ? group.name : '';
   document.getElementById('group-detail-name-2').textContent = group ? group.name : '';
-  document.getElementById('group-detail-name-pool').textContent = group ? group.name : '';
   panel.style.display = 'block';
   refreshGroupManageControls(group);
-  loadGroupMembers();
-  loadGroupProjectPool().then(loadGroupRoles);
+  loadGroupRoles();
 });
-
-async function loadGroupProjectPool() {
-  const card = document.getElementById('group-project-pool-card');
-  card.style.display = currentUserIsSuperuser ? 'block' : 'none';
-  try {
-    cachedGroupProjectPool = await apiFetch('/admin/groups/' + selectedGroupId + '/project-access');
-  } catch (err) {
-    cachedGroupProjectPool = [];
-  }
-
-  if (currentUserIsSuperuser) {
-    const container = document.getElementById('group-project-pool-checkboxes');
-    container.innerHTML = cachedProjects.map(p => `
-      <label>
-        <input type="checkbox" class="group-pool-cb" data-project-id="${p.id}" ${cachedGroupProjectPool.includes(p.id) ? 'checked' : ''}>
-        ${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}
-      </label>
-    `).join('') || '<span style="color:var(--text-dim); font-size:13px;">No projects created yet.</span>';
-
-    container.querySelectorAll('.group-pool-cb').forEach(cb => {
-      cb.addEventListener('change', async () => {
-        showBanner('admin-banner', '');
-        try {
-          if (cb.checked) {
-            await apiFetch('/admin/groups/' + selectedGroupId + '/project-access', {
-              method: 'POST', body: JSON.stringify({ project_id: cb.dataset.projectId })
-            });
-          } else {
-            await apiFetch('/admin/groups/' + selectedGroupId + '/project-access/' + cb.dataset.projectId, { method: 'DELETE' });
-          }
-          flashSaved(cb.closest('label'));
-          await loadGroupProjectPool();
-          loadGroupRoles();
-        } catch (err) {
-          showBanner('admin-banner', err.message);
-        }
-      });
-    });
-  }
-}
 
 function refreshGroupManageControls(group) {
   if (!group) return;
@@ -3556,77 +3513,6 @@ document.getElementById('group-delete-btn').addEventListener('click', async () =
   }
 });
 
-async function loadGroupMembers() {
-  const tbody = document.getElementById('group-members-tbody');
-  tbody.innerHTML = skeletonRows(2);
-  const mySeq = startLoad('groupMembers');
-  const groupId = selectedGroupId;
-  try {
-    const members = await apiFetch('/admin/groups/' + groupId + '/members');
-    if (isStaleLoad('groupMembers', mySeq)) return; // a newer group was selected while this was in flight
-    if (!members.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="2">No members yet.</td></tr>';
-      return;
-    }
-    tbody.innerHTML = members.map(m => `
-      <tr><td>${escapeHtml(m.username)}</td><td>${m.is_group_admin ? 'Yes' : '—'}</td></tr>
-    `).join('');
-  } catch (err) {
-    if (isStaleLoad('groupMembers', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="2">${escapeHtml(err.message)}</td></tr>`;
-  }
-}
-
-document.getElementById('add-member-btn').addEventListener('click', async () => {
-  const username = document.getElementById('add-member-username').value.trim();
-  const isAdmin = document.getElementById('add-member-is-admin').checked;
-  const roleId = document.getElementById('add-member-role').value;
-  if (!username || !selectedGroupId) return;
-  showBanner('admin-banner', '');
-  try {
-    await apiFetch('/admin/groups/' + selectedGroupId + '/members', {
-      method: 'POST',
-      body: JSON.stringify({ username, is_group_admin: isAdmin })
-    });
-    if (roleId) {
-      await apiFetch('/admin/roles/' + roleId + '/assign', { method: 'POST', body: JSON.stringify({ username }) });
-    }
-    document.getElementById('add-member-username').value = '';
-    document.getElementById('add-member-is-admin').checked = false;
-    document.getElementById('add-member-role').value = '';
-    loadGroupMembers();
-    loadGroupRoles();
-  } catch (err) {
-    showBanner('admin-banner', err.message);
-  }
-});
-
-document.getElementById('create-member-btn').addEventListener('click', async () => {
-  const username = document.getElementById('new-member-username').value.trim();
-  const password = document.getElementById('new-member-password').value;
-  const isAdmin = document.getElementById('new-member-is-admin').checked;
-  const roleId = document.getElementById('new-member-role').value;
-  if (!username || !password || !selectedGroupId) return;
-  showBanner('admin-banner', '');
-  try {
-    await apiFetch('/admin/groups/' + selectedGroupId + '/users', {
-      method: 'POST',
-      body: JSON.stringify({ username, password, is_group_admin: isAdmin })
-    });
-    if (roleId) {
-      await apiFetch('/admin/roles/' + roleId + '/assign', { method: 'POST', body: JSON.stringify({ username }) });
-    }
-    document.getElementById('new-member-username').value = '';
-    document.getElementById('new-member-password').value = '';
-    document.getElementById('new-member-is-admin').checked = false;
-    document.getElementById('new-member-role').value = '';
-    loadGroupMembers();
-    loadGroupRoles();
-  } catch (err) {
-    showBanner('admin-banner', err.message);
-  }
-});
-
 document.getElementById('create-role-btn').addEventListener('click', async () => {
   const name = document.getElementById('new-role-name').value.trim();
   if (!name || !selectedGroupId) return;
@@ -3644,16 +3530,6 @@ const ALL_SERVICES = ['documents', 'products', 'search', 'audit-log', 'categorie
 
 let cachedGroupRoles = [];
 let currentUserIsSuperuser = false;
-let cachedGroupProjectPool = [];
-
-function refreshMemberRolePickers() {
-  const options = '<option value="">— no role yet —</option>' +
-    cachedGroupRoles.map(r => `<option value="${r.id}">${escapeHtml(r.name)}${r.is_active ? '' : ' (disabled)'}</option>`).join('');
-  const addSel = document.getElementById('add-member-role');
-  const newSel = document.getElementById('new-member-role');
-  if (addSel) addSel.innerHTML = options;
-  if (newSel) newSel.innerHTML = options;
-}
 
 async function loadGroupRoles() {
   const tbody = document.getElementById('roles-tbody');
@@ -3664,7 +3540,6 @@ async function loadGroupRoles() {
     const roles = await apiFetch('/admin/groups/' + groupId + '/roles');
     if (isStaleLoad('groupRoles', mySeq)) return; // a newer group was selected while this was in flight
     cachedGroupRoles = roles;
-    refreshMemberRolePickers();
     renderRolesTable(roles);
   } catch (err) {
     if (isStaleLoad('groupRoles', mySeq)) return;

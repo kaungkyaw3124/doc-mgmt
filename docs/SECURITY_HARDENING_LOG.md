@@ -3308,3 +3308,170 @@ commit `7bbea78`, independently verified against raw CI evidence
 showing Editor/Viewer/superuser access on records that predate their
 Operation membership, across all five operational resources, through
 the real Nginx API.**
+
+## Task 12 — Operation Group UI Simplification
+
+### Task
+
+Simplify the group management page to match the intended, already-
+implemented authorization model: Superuser/Admin unrestricted,
+Operation+Editor = view/create/edit, Operation+Viewer = view-only, and
+admin assigns normal users to Operation and their role entirely through
+User Management. Remove from the page: Project access (the group-level
+project pool), Members (the member list, Add existing user, Make group
+admin), and Create brand-new account — but only once confirmed these
+aren't required elsewhere, without inventing a second permission
+system, without deleting users/data, and without breaking superuser
+access.
+
+### Inspection
+
+There is exactly one group-detail page in the frontend
+(`#group-detail-panel` in `web/index.html`) — it is **generic**, shared
+by every group (Operation or any admin-created group), not an
+Operation-specific page. Traced every control slated for removal to
+its backend endpoint and every other frontend caller before touching
+anything:
+
+- **"Add existing user" / "Create brand-new account"** (group-detail's
+  own forms) posted to `POST /admin/groups/{id}/members` and
+  `POST /admin/groups/{id}/users` respectively. Both endpoints are
+  **already called elsewhere**: `POST /admin/groups/{id}/members` is
+  the same endpoint User Management's per-user "Manage" modal uses for
+  its "Add to a group" picker (added in the User Control task); `POST
+  /admin/groups/{id}/users` is the same endpoint the Admin -> All Users
+  "+ Create User" button uses. Removing the group-page's own copies of
+  these forms removes nothing — both flows survive, reachable from
+  User Management instead, which is exactly where the intended model
+  says admin should be doing this work.
+- **"Members" table** (view-only: username + group-admin yes/no, no
+  remove button at all) is strictly worse than what User Management's
+  "Current groups" list on a user's Manage modal already offers (same
+  information, plus a working remove-from-group button) — confirmed by
+  reading `loadGroupMembers`'s render output before deleting it.
+  Admin -> All Users' own Group/Role columns (from the User Control
+  task) already give the equivalent "who's in Operation" view without
+  opening a group at all.
+- **"Project access — Operation" (the `GroupProjectAccess` pool)**:
+  confirmed via `grep` that its three endpoints
+  (`GET/POST/DELETE /admin/groups/{id}/project-access`) were called
+  **only** by this one card — no other frontend caller. Read
+  `grant_user_project_access` in `admin.py`: a **superuser bypasses the
+  pool check entirely** (`if not current_user.is_superuser: ... in_pool
+  check`) — so removing this card's UI does not block the superuser
+  from using the per-user "Project access" checklist already in User
+  Management (which calls `UserProjectAccess`, the row that's actually
+  read at authorization time — see the existing-data migration task
+  above). The pool only matters for a **delegated, non-superuser group
+  admin**, a role the intended model doesn't use for Operation at all
+  (Admin/Superuser handles everything centrally).
+- **"Make group admin"**: the `is_group_admin` flag and
+  `can_manage_group`/`_shared_administered_group_ids` machinery it
+  feeds remain read in several places (deciding who can see the Admin
+  panel at all, gating `add_existing_member`/`create_user_in_group`/
+  role management for non-superusers) — this is live, load-bearing RBAC
+  infrastructure, not dead code, even though no UI can newly *grant*
+  the flag once this page's forms are gone. Existing group-admin flags
+  (if any) keep working exactly as before.
+
+**Conclusion**: every capability the removed UI exposed is either (a)
+already available through User Management, using the *same* backend
+endpoints, or (b) still reachable directly via the API and
+intentionally not needed by the intended Operation-only model. No
+backend endpoint was orphaned by this change, so none was deleted —
+this was a pure frontend simplification.
+
+### Implementation
+
+- `web/index.html`: removed the `#group-project-pool-card` card and
+  the entire "Members" card (member table, "Add existing user" form,
+  "Make group admin" checkboxes ×2, "Create brand-new account" form) from
+  `#group-detail-panel`. Left an HTML comment pointing at this log
+  entry and explaining the replacement path. The "Roles" card (create
+  role, edit role, service access) is unchanged — the intended model
+  still needs an admin-facing way to manage what Editor/Viewer grant.
+- `web/js/app.js`: removed `loadGroupMembers`, `loadGroupProjectPool`,
+  `refreshMemberRolePickers`, the `add-member-btn`/`create-member-btn`
+  click handlers, and the now-unused `cachedGroupProjectPool` variable
+  — all of it existed only to drive the removed UI. Removed their calls
+  from the `group-select` change handler and from `loadGroupRoles`
+  (which called `refreshMemberRolePickers` after every role list
+  refresh). `currentUserIsSuperuser` was kept — still used by the
+  per-user Project access checklist in User Management.
+
+### Recommendations / judgment calls (per your "tell me" request)
+
+1. **Applied globally, not just to Operation.** The group-detail page
+   has no per-group branching today, and adding an
+   `if (group.name === 'Operation')` special case to keep the removed
+   controls for hypothetical *other* future groups would be the
+   "second permission system"-adjacent complexity you asked me to
+   avoid, for a scenario (a non-Operation, non-superuser-managed group)
+   the intended model doesn't describe. If you do want a genuinely
+   different, richer management page for a future custom group later,
+   that's a new, explicit feature to design then — not something to
+   half-keep here speculatively.
+2. **Kept `GroupProjectAccess` and `is_group_admin` in the backend, not
+   just "not confirmed unused" but actively still correct**: they are
+   this app's only existing mechanism for a future delegated (non-
+   superuser) group admin, and deleting live RBAC primitives to match a
+   UI simplification would be the actual second-system risk — better
+   to leave working, generic infrastructure in place and just not
+   surface it here. If you're certain delegated group-admins will never
+   be used for *any* group going forward, that's a separate, larger
+   removal decision worth its own review — I did not take it here.
+3. **No migration/backfill needed.** This task touched no schema, no
+   authorization logic, and no operational or user data — it is purely
+   two frontend files plus this log entry and a CI acceptance step.
+
+### Tests
+
+New infra-integration acceptance step, "Acceptance — Operation Group UI
+simplification (removed UI gone, backend + full auth flow intact)",
+added to `.github/workflows/tests.yml`, run against the real Docker
+Compose stack through Nginx:
+
+- Fetches the actually-served `/` and `/js/app.js` and greps for every
+  removed element id / function name — must be **absent**.
+- Confirms the replacement controls (`+ Create User`, User Management's
+  "Add to a group" button) are present.
+- Full end-to-end authorization flow using only the *surviving* backend
+  endpoints, simulating exactly what an admin now does entirely through
+  User Management: self-register a user, approve, add to Operation via
+  `POST /admin/groups/{id}/members` (the same endpoint the removed "Add
+  existing user" form used), assign the Editor role, log in, and
+  confirm a real protected request through Nginx succeeds (200).
+- Directly exercises the kept-but-unexposed `GroupProjectAccess` pool
+  endpoints (grant + revoke) to prove that backend is still intact.
+- Reconfirms superuser access is unrestricted throughout.
+
+### Actual results (real GitHub Actions CI, `mcp__github__get_job_logs`
+with `return_content: true` — raw log content, never the `conclusion`
+field alone)
+
+Pushed as commit `<PENDING>` on branch `security/auth-hardening`.
+Results to be recorded once independently verified against real CI log
+content, per this repo's established practice.
+
+### Security impact
+
+None expected, and none found: no authorization logic changed, no
+endpoint was removed, no permission check was altered. The only
+runtime-observable difference is that two admin-facing forms are no
+longer rendered — their equivalent, already-existing capability in
+User Management is unaffected. Superuser access, Editor/Viewer
+enforcement, and existing data are all unchanged.
+
+### Bugs found/fixed
+
+None. This was a planned UI simplification following an inspection
+that confirmed no functional gap would result.
+
+### Commits (branch `security/auth-hardening`)
+
+- `<PENDING>` — Operation Group UI simplification, CI acceptance step.
+
+### Verification
+
+Real GitHub Actions CI, raw log content — reference to be added once
+the push above is verified.

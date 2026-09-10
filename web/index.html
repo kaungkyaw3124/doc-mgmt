@@ -861,64 +861,17 @@
 
       <div id="group-detail-panel" style="display:none;">
 
-        <div class="card" id="group-project-pool-card" style="display:none;">
-          <h3>Project access — <span id="group-detail-name-pool"></span></h3>
-          <p style="font-size:13px; color:var(--text-dim); margin-bottom:12px;">
-            Which projects this group's roles are allowed to be granted access to. A group admin can only hand out projects checked here — nothing else.
-          </p>
-          <div class="checkbox-list" id="group-project-pool-checkboxes"></div>
-        </div>
-
-        <div class="card">
-          <h3>Members — <span id="group-detail-name"></span></h3>
-          <table>
-            <thead><tr><th>Username</th><th>Group admin?</th></tr></thead>
-            <tbody id="group-members-tbody"></tbody>
-          </table>
-          <div class="form-row" style="margin-top:14px;">
-            <div>
-              <label for="add-member-username">Add existing user (username)</label>
-              <input type="text" id="add-member-username" placeholder="username">
-            </div>
-            <div>
-              <label for="add-member-role">Role</label>
-              <select id="add-member-role">
-                <option value="">— no role yet —</option>
-              </select>
-            </div>
-          </div>
-          <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-bottom:14px;">
-            <input type="checkbox" id="add-member-is-admin" style="width:auto; margin:0;"> Make group admin
-          </label>
-          <button class="btn-secondary" id="add-member-btn">Add to group</button>
-
-          <p style="margin: 18px 0 10px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">— or —</p>
-          <p style="margin: 0 0 12px; font-size:13px; color:var(--text-dim);">Create a brand-new account and add them to this group in one step (skips the registration/approval wait):</p>
-          <div class="form-row">
-            <div>
-              <label for="new-member-username">New username</label>
-              <input type="text" id="new-member-username" placeholder="username">
-            </div>
-            <div>
-              <label for="new-member-password">Password</label>
-              <input type="text" id="new-member-password" placeholder="temporary password">
-            </div>
-          </div>
-          <div class="form-row">
-            <div>
-              <label for="new-member-role">Role — decides what they can do (e.g. Viewer = view/download only, Member = can edit/upload)</label>
-              <select id="new-member-role">
-                <option value="">— no role yet —</option>
-              </select>
-            </div>
-            <div>
-              <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-top:28px;">
-                <input type="checkbox" id="new-member-is-admin" style="width:auto; margin:0;"> Make group admin
-              </label>
-            </div>
-          </div>
-          <button class="btn-secondary" id="create-member-btn">Create user &amp; add to group</button>
-        </div>
+        <!-- Project access (per-group pool) and Members (view/add existing
+             user/make group admin/create new account) were removed here —
+             simplified per the intended authorization model: Admin manages
+             group membership and role assignment for normal users entirely
+             through User Management's per-user "Manage" flow (Admin ->
+             All Users), which already covers add/remove group membership
+             and role assignment for any group. See
+             docs/SECURITY_HARDENING_LOG.md's Operation Group UI
+             Simplification entry. The underlying group-admin/project-pool
+             backend endpoints are unchanged and still reachable via the
+             API — only this now-redundant UI was removed. -->
 
         <div class="card">
           <h3>Roles — <span id="group-detail-name-2"></span></h3>
