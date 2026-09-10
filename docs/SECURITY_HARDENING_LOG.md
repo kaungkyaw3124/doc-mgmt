@@ -2865,3 +2865,257 @@ from a green checkmark.
 **Net result: Task 9 is genuinely PASS as of commit `f151afa`,
 independently verified against raw CI evidence for the complete
 relevant test suite.**
+
+## Task 10 — User Control (Operation group, Editor/Viewer roles, admin user management, no deletion, pending registration)
+
+### Task
+
+Implement a full "User Control" system on top of the existing
+Group/Role/RoleAccess authorization model, without inventing a second
+access-control system:
+
+1. An "Operation" group that normal operational users belong to,
+   scoped to five operational resources (Documents, Products,
+   Customers, Projects, Companies).
+2. Exactly two normal roles — Editor (view/create/edit) and Viewer
+   (view only) — enforced server-side, not bypassable via direct API
+   calls.
+3. Admin "Create User" (username/password/group/role), approved+active
+   immediately, never able to create a superuser through this path.
+4. User management: list shows Username/Group/Role/Status/Manage;
+   manage allows changing group, role, active/inactive, and password.
+5. No user deletion, ever — only Active/Inactive. Deactivation must
+   fail login, fail refresh, revoke existing refresh tokens, and block
+   the already-issued access token on its next protected call.
+6. Existing self-registration/pending-approval workflow preserved
+   alongside admin-created users.
+7. Full authorization audit across all five resources — confirm the
+   DB actually provides group/role scope for each, find and fix any
+   gap, verify server-side enforcement can't be bypassed via direct
+   API manipulation (including forged trust headers).
+8. Full end-to-end regression after all of the above.
+
+### Implementation
+
+Reused the existing Group/Role/RoleAccess/UserRole/UserGroup model
+end-to-end — no new authorization system:
+
+- `services/auth-service/app/core/seed.py` (new): idempotent
+  startup seeding of the Operation group with Editor (edit) and Viewer
+  (view) roles, granted on the `documents` and `products` services —
+  covers all five resources because `/api/customers`, `/api/companies`,
+  and `/api/projects` already share the `documents` service_name in
+  Nginx (see Task 4's routing). Re-seeding never overwrites an admin's
+  manual changes; superuser is never auto-added; called from
+  `main.py`'s existing `on_startup()`.
+- `services/auth-service/app/routers/admin.py`: `POST
+  /admin/groups/{id}/users` gained an optional `role_id` (validated to
+  belong to the same group) assigned atomically with user creation;
+  the created account is approved+active immediately;
+  `CreateUserInGroupRequest` has no `is_superuser` field. `GET
+  /admin/users` now returns each user's group and role names
+  (batch-queried). New `GET /admin/users/{id}/groups` for the
+  manage-user UI. **`DELETE /users/{id}` removed entirely** — deletion
+  is not reachable through the API at all; deactivation (pre-existing
+  `PATCH /users/{id}/active`, which already revoked refresh tokens and
+  is already checked on every `/verify` call) is the only lifecycle
+  control left.
+- `web/index.html` / `web/js/app.js`: "+ Create User" button/modal on
+  Admin → All Users; table columns become
+  Username/Group/Role/Status/Manage; a single "Manage" action replaces
+  the old Edit+Remove pair; manage-user modal gained a group list and
+  an "add to group" picker. No CSP changes needed — `app.js` is
+  already the external `script-src 'self'` file from Task 10 of the
+  prior work (numbered independently in this branch's own history).
+- **Real gap #1 found during the Task 7 audit**:
+  `services/catalogue-service/app/routers/products.py` had **zero**
+  server-side enforcement of view/edit access on any of its 9 write
+  endpoints (`create_product`, `bulk_import_products`, `trash_product`,
+  `restore_product`, `update_product`, `delete_product`,
+  `upload_product_file`, `add_sub_item`, `remove_sub_item`) — a Viewer
+  could write Products directly via the API despite the role model
+  saying they shouldn't. Fixed by adding the same
+  `_require_edit_access(x_access_level)` pattern already used by
+  `document-service`'s companies/customers/projects routers to all
+  nine endpoints. (`categories.py`'s separate `X-Has-Category-Access`
+  axis was audited and confirmed out of scope — Editor/Viewer never
+  grant the `categories` service.)
+- **Real gap #2 found via real CI, not local review** (see Bugs
+  found/fixed below): `infra/nginx/nginx.conf.template`'s
+  `/api/products` location never captured or forwarded
+  `X-Access-Level` at all.
+- `.github/workflows/tests.yml`: new infra-integration acceptance step
+  ("Acceptance — User Control") covering Tasks 1–7 end-to-end against
+  the real Docker Compose stack: Operation group existence, exactly
+  Editor+Viewer roles, admin-created Editor/Viewer login immediately
+  with the correct `X-Access-Level`, `/admin/users` listing
+  correctness, Editor create + Viewer 403 (plain **and** forged-header)
+  on all 5 resources, no-deletion + deactivation's full login/
+  refresh/live-token blast radius, self-registration's
+  pending→approve→role-assign flow, and superuser remaining
+  unrestricted.
+
+### Tests
+
+- `services/auth-service/tests/test_seed.py` (new, 8 tests): group
+  creation, exactly-two-roles, Editor/Viewer grant correctness,
+  idempotent + non-destructive re-seeding, superuser not auto-added,
+  normal user can join.
+- `services/auth-service/tests/test_user_control.py` (new, 13 tests):
+  admin create Editor/Viewer with correct access level end-to-end
+  through a real `/login` + `/verify` flow, cross-group `role_id`
+  rejected, no `is_superuser` field on the create-user request schema,
+  `/admin/users` listing correctness, no delete route (and the account
+  provably still exists after attempting one), deactivation blocking
+  login/refresh/the live access token, pending self-registration
+  staying pending until approved, and the full
+  approve→assign→login path working end to end.
+- `services/catalogue-service/tests/test_products_access_level.py`
+  (new): `_require_edit_access` unit behavior (allows edit, allows a
+  missing header for backward compat, rejects view with 403), plus a
+  parametrized check that every one of the 9 write endpoints 403s a
+  Viewer with a schema-valid request (necessary because FastAPI
+  validates the body before the route function runs, so an
+  under-specified body would 422 before the access check is ever
+  exercised — an early version of this test made that mistake and was
+  corrected, see Bugs found/fixed).
+- Full infra-integration acceptance step described above (real
+  Postgres/MinIO/Meilisearch/Nginx/all four services, via `docker
+  compose up -d --build`).
+
+### Actual results (real CI, `mcp__github__get_job_logs` with
+`return_content: true`, never the `conclusion` field alone)
+
+First full push (commit `5ac8ab4`): `auth-service` **PASSED**.
+`catalogue-service` **FAILED** (5 of 66 tests) and `infra-integration`
+**FAILED** (1 of 18 acceptance steps) — both real, both diagnosed from
+raw log content, not assumed.
+
+After the CI/test-script fix (commit `4cabe8c`): `auth-service`,
+`catalogue-service`, `document-service`, `search-service` all
+**PASSED**. `infra-integration` **still FAILED** — but this time on a
+genuine, newly-surfaced security bug, not a test bug (see below).
+
+After the Nginx fix (commit `670eff5`, run `34433933359`): **all 5
+jobs PASSED**, confirmed by reading the actual "Acceptance — User
+Control" step's own output, not just its green conclusion:
+
+```
+Operation group id -> 4d59c059-8400-459f-98b1-d5137165769b
+Operation roles -> Editor,Viewer
+create editor -> 201
+create viewer -> 201
+Editor POST /api/companies -> 201
+Viewer GET /api/companies -> 200
+Viewer POST /api/companies -> 403
+Viewer POST /api/companies with forged X-Access-Level: edit -> 403
+Editor POST /api/customers -> 201
+Viewer POST /api/customers -> 403
+Viewer POST /api/customers with forged X-Access-Level: edit -> 403
+Editor POST /api/projects -> 201
+Viewer POST /api/projects -> 403
+Viewer POST /api/projects with forged X-Access-Level: edit -> 403
+Editor POST /api/products -> 201
+Viewer GET /api/products -> 200
+Viewer POST /api/products -> 403
+Viewer POST /api/products with forged X-Access-Level: edit -> 403
+Editor POST /api/documents -> 201
+Viewer POST /api/documents -> 403
+DELETE /api/admin/users/{id} -> 405
+deactivate editor -> 200
+login after deactivation -> 403
+deactivated user's still-live access token on a protected API -> 403
+self-register -> 201
+login while pending -> 403
+approve pending user -> 200
+assign Editor role to approved user -> 201
+login after approval + role assignment -> 200
+superuser POST /api/products -> 201
+```
+
+No `FAIL:` lines anywhere in the step's output; `exit $fail` returned
+0. All four services' unit-test jobs (`auth-service`,
+`catalogue-service`, `document-service`, `search-service`) and every
+other infra-integration acceptance step from Tasks 1–9 of this log
+also **PASSED** on this same run — zero regression.
+
+### Bugs found/fixed
+
+1. **Real application bug (Task 7 audit)**: `products.py` had no
+   server-side access-level check on any write endpoint at all —
+   fixed by adding `_require_edit_access` to all 9 (commit `eb5d9f0`).
+2. **Real infrastructure/security bug, caught by real CI, not by
+   local review**: `infra/nginx/nginx.conf.template`'s `/api/products`
+   location never set `auth_request_set $access_level` nor
+   `proxy_set_header X-Access-Level` at all — every other resource's
+   location does both. Nginx's default behavior for a header a
+   location doesn't explicitly override is to forward the client's own
+   copy unchanged, so a Viewer could forge `X-Access-Level: edit`
+   directly and it would reach `catalogue-service` unmodified;
+   `_require_edit_access` correctly trusted it because, from the
+   application's point of view, the request came through the gateway
+   as usual. First CI run on this feature showed it plainly:
+   `Viewer POST /api/products -> 201` (twice — once plain, once with
+   the forged header) where every other resource correctly showed
+   `403`. Fixed by adding the missing `auth_request_set`/
+   `proxy_set_header` pair to `/api/products`, matching the pattern
+   already used everywhere else, plus an explicit (currently unused)
+   blank on `/api/categories` per this file's stated
+   redundant-blanking policy (commit `670eff5`).
+3. Two test-script bugs, not application bugs (commit `4cabe8c`):
+   `TestClient.delete()` doesn't accept a `json=` kwarg on the
+   httpx-based `TestClient`; and several of
+   `test_products_access_level.py`'s write-endpoint checks sent an
+   empty body, which FastAPI 422s before the route body (and thus
+   `_require_edit_access`) ever runs — the test needed schema-valid
+   minimal payloads to actually exercise the access check. Also: the
+   infra-integration CI script's Task 6 self-registration check didn't
+   pass `requested_group_id` on `/register`, so `/approve` never added
+   the user to Operation and the subsequent role-assign call correctly
+   400'd — a gap in the CI script itself (the equivalent unit test in
+   `test_user_control.py` already passed `requested_group_id`
+   correctly and never had this bug).
+
+### Security impact
+
+Net positive, and non-trivial: this task found and closed a real
+authorization bypass (bug #2 above) that would otherwise have shipped
+— a Viewer able to write Products by simply forging one HTTP header,
+with no changes to catalogue-service required to exploit it. The fix
+brings `/api/products` in line with every other resource's existing,
+already-correct pattern of Nginx overwriting (never merging with)
+client-supplied trust headers. No authentication behavior was touched;
+the existing JWT/refresh/gateway-trust-header architecture from Tasks
+4 and 6 is unchanged and re-verified passing on every run in this
+task's own CI evidence.
+
+### Commits (branch `security/auth-hardening`)
+
+- `ed1364c` — Tasks 1–2: Operation group + Editor/Viewer role seeding.
+- `896afd0` — Tasks 3–6: admin create-user-with-role, richer user
+  listing, no user deletion.
+- `eb5d9f0` — Task 7 (app-level fix): `products.py` access-level
+  enforcement.
+- `db7ce6d` — frontend for admin-created users and user management.
+- `5ac8ab4` — Task 8: infra-integration CI coverage for the full
+  feature.
+- `4cabe8c` — fix: test/CI script bugs found by the first real CI run.
+- `670eff5` — Task 7 (infra-level fix): Nginx `X-Access-Level`
+  forwarding gap on `/api/products` — **this is the commit CI is green
+  on.**
+
+### Verification
+
+Real GitHub Actions CI (`mcp__github__actions_list` /
+`mcp__github__get_job_logs` with `return_content: true`), raw log
+content quoted above for the final green run (`34433933359`,
+commit `670eff5`) — not the `conclusion` field alone, not assumed from
+a green checkmark. Two real bugs (one application, one infrastructure)
+were found and fixed only because this task insisted on reading actual
+log content after every push instead of trusting the pass/fail flag.
+
+**Net result: the User Control feature (Tasks 1–8) is genuinely PASS
+as of commit `670eff5`, independently verified against raw CI evidence
+for the complete relevant test suite, including a real authorization
+bypass that was found and closed during this task's own audit rather
+than shipped.**
