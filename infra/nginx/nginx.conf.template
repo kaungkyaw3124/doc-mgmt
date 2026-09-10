@@ -240,6 +240,7 @@ http {
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
             auth_request_set $access_level $upstream_http_x_access_level;
             auth_request_set $has_audit_log $upstream_http_x_has_audit_log;
+            auth_request_set $has_document_delete $upstream_http_x_has_document_delete;
             auth_request_set $current_username $upstream_http_x_username;
             rewrite ^/api/documents(.*)$ /documents$1 break;
             proxy_pass http://document-service:8000;
@@ -253,6 +254,10 @@ http {
             proxy_set_header X-Allowed-Projects $allowed_projects;
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Has-Audit-Log $has_audit_log;
+            # Delete permission (see docs/SECURITY_HARDENING_LOG.md's
+            # "Delete permission" entry) is deliberately separate from
+            # X-Access-Level — a role can grant edit but not delete.
+            proxy_set_header X-Has-Document-Delete $has_document_delete;
             proxy_set_header X-Username $current_username;
             # The catalogue export can take a while — it makes several
             # sequential calls to catalogue-service per document, and
@@ -276,6 +281,7 @@ http {
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Allowed-Projects "";
             proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Has-Document-Delete "";
             proxy_set_header X-Username "";
         }
 
@@ -293,6 +299,7 @@ http {
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Allowed-Projects "";
             proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Has-Document-Delete "";
             proxy_set_header X-Username "";
         }
 
@@ -311,6 +318,7 @@ http {
             proxy_set_header X-Allowed-Projects $allowed_projects;
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Has-Document-Delete "";
             proxy_set_header X-Username "";
         }
 

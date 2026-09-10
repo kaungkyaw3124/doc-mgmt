@@ -1360,6 +1360,118 @@ jobs:
 
           exit $fail
 
+      - name: Acceptance — Documents Delete permission (separate from Edit, real Nginx)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          # --- Two Editors: one with Delete explicitly granted, one
+          # without — same role name, proving Delete is not implied by
+          # Editor by default (the safe/intended default after this task).
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_del_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_nodel_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"viewer_del_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}"
+
+          grant_code=$(curl -s -o /tmp/grant_delete.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"service_name":"documents-delete"}')
+          echo "grant documents-delete to the Editor role -> $grant_code"
+          [ "$grant_code" = "201" ] || { echo "FAIL: could not grant documents-delete (got $grant_code)"; cat /tmp/grant_delete.json; fail=1; }
+
+          editor_del_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_del_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_del_auth=(-H "Authorization: Bearer $editor_del_token")
+
+          # editor_nodel was created (and its role assigned) BEFORE the
+          # grant above — logging in now still reflects "no delete" since
+          # the grant lives on the shared role, re-evaluated fresh on
+          # every /verify call, not cached at creation time.
+          editor_nodel_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_nodel_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_nodel_auth=(-H "Authorization: Bearer $editor_nodel_token")
+
+          viewer_del_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"viewer_del_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_del_auth=(-H "Authorization: Bearer $viewer_del_token")
+
+          # --- /admin/me reflects the permission (what the frontend uses
+          # to decide whether to render the Delete button at all).
+          editor_del_me=$(curl -s http://localhost:8080/api/admin/me "${editor_del_auth[@]}")
+          has_delete_in_me=$(echo "$editor_del_me" | python3 -c "import sys,json; print('documents-delete' in json.load(sys.stdin)['service_access'])")
+          echo "Editor-with-delete's /admin/me service_access includes documents-delete -> $has_delete_in_me"
+          [ "$has_delete_in_me" = "True" ] || { echo "FAIL: /admin/me does not reflect the granted documents-delete permission"; fail=1; }
+
+          editor_nodel_me=$(curl -s http://localhost:8080/api/admin/me "${editor_nodel_auth[@]}")
+          no_delete_in_me=$(echo "$editor_nodel_me" | python3 -c "import sys,json; print('documents-delete' in json.load(sys.stdin)['service_access'])")
+          echo "Editor-without-delete's /admin/me service_access includes documents-delete -> $no_delete_in_me"
+          [ "$no_delete_in_me" = "False" ] || { echo "FAIL: /admin/me reports documents-delete for an Editor that was never granted it"; fail=1; }
+
+          new_doc() {
+            curl -s -X POST http://localhost:8080/api/documents "$@" \
+              -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'
+          }
+
+          # --- Editor + Delete -> DELETE (trash) succeeds.
+          doc_a=$(new_doc "${editor_del_auth[@]}")
+          code_a=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_a/trash" "${editor_del_auth[@]}")
+          echo "Editor+Delete trash a document -> $code_a"
+          [ "$code_a" = "200" ] || { echo "FAIL: Editor with Delete permission could not delete (got $code_a)"; fail=1; }
+
+          # --- Editor without Delete -> 403, and can still edit normally.
+          doc_b=$(new_doc "${editor_nodel_auth[@]}")
+          edit_code=$(curl -s -o /tmp/edit_ok.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_b" "${editor_nodel_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"items":[]}')
+          echo "Editor-without-Delete can still edit -> $edit_code"
+          [ "$edit_code" = "200" ] || { echo "FAIL: Editor without Delete lost normal edit access too (got $edit_code)"; cat /tmp/edit_ok.json; fail=1; }
+          code_b=$(curl -s -o /tmp/nodel_trash.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_b/trash" "${editor_nodel_auth[@]}")
+          echo "Editor-without-Delete trash attempt -> $code_b"
+          [ "$code_b" = "403" ] || { echo "FAIL: Editor without Delete permission was able to delete (got $code_b)"; cat /tmp/nodel_trash.json; fail=1; }
+          still_there=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/documents/$doc_b" "${admin_auth[@]}")
+          [ "$still_there" = "200" ] || { echo "FAIL: the document from the rejected delete attempt is no longer reachable"; fail=1; }
+
+          # --- Viewer (never had Delete) -> 403 too (already view-only,
+          # re-confirmed here alongside the new permission).
+          doc_c=$(new_doc "${editor_del_auth[@]}")
+          code_c=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_c/trash" "${viewer_del_auth[@]}")
+          echo "Viewer trash attempt -> $code_c"
+          [ "$code_c" = "403" ] || { echo "FAIL: Viewer was able to delete a document (got $code_c)"; fail=1; }
+
+          # --- Forged X-Has-Document-Delete: true from a user who
+          # genuinely lacks it must still be rejected — Nginx must
+          # overwrite, not merge, this header exactly like the others.
+          forged_code=$(curl -s -o /tmp/forged_delete.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_b/trash" "${editor_nodel_auth[@]}" -H 'X-Has-Document-Delete: true')
+          echo "Editor-without-Delete + forged X-Has-Document-Delete: true -> $forged_code"
+          [ "$forged_code" = "403" ] || { echo "FAIL: forged X-Has-Document-Delete header bypassed the Delete permission check (got $forged_code)"; cat /tmp/forged_delete.json; fail=1; }
+
+          # --- Superuser remains completely unrestricted.
+          doc_d=$(new_doc "${admin_auth[@]}")
+          code_d=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_d/trash" "${admin_auth[@]}")
+          echo "Superuser trash -> $code_d"
+          [ "$code_d" = "200" ] || { echo "FAIL: superuser could not delete a document (got $code_d)"; fail=1; }
+
+          # --- Restore is unaffected by the new Delete gate (it was never
+          # a delete action) — re-confirm it still works for Editor+Delete.
+          restore_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_a/restore" "${editor_del_auth[@]}")
+          echo "Editor+Delete restore a document -> $restore_code"
+          [ "$restore_code" = "200" ] || { echo "FAIL: restore broke for a user with Delete permission (got $restore_code)"; fail=1; }
+
+          exit $fail
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra

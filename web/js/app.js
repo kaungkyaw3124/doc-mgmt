@@ -251,6 +251,11 @@ async function enterApp() {
     }
     const canManageCategories = me.is_superuser || (me.service_access && me.service_access.includes('categories'));
     document.getElementById('category-split-btn-wrap').style.display = canManageCategories ? 'inline-flex' : 'none';
+    // Delete is a separate permission from documents' own edit access —
+    // see docs/SECURITY_HARDENING_LOG.md's "Delete permission" entry.
+    // Enforced server-side regardless; this only controls whether the
+    // Delete button is rendered at all (never shown-then-rejected).
+    currentUserCanDeleteDocuments = me.is_superuser || (me.service_access && me.service_access.includes('documents-delete'));
   } catch (e) {
     document.getElementById('whoami-username').textContent = '—';
   }
@@ -778,7 +783,9 @@ function renderDocumentsTable(docs) {
         &nbsp;|&nbsp;
         <button class="link-btn-inline" data-log-doc-id="${d.id}" data-log-doc-number="${escapeHtml(d.doc_number)}">Log</button>
       </td>
-      <td><button class="link-btn-inline" data-trash-doc-id="${d.id}" data-trash-doc-number="${escapeHtml(d.doc_number)}" style="color:var(--danger);">Delete</button></td>
+      <td>${currentUserCanDeleteDocuments
+        ? `<button class="link-btn-inline" data-trash-doc-id="${d.id}" data-trash-doc-number="${escapeHtml(d.doc_number)}" style="color:var(--danger);">Delete</button>`
+        : '<span style="color:var(--text-dim);">—</span>'}</td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-goto-project-id]').forEach(btn => {
@@ -3532,6 +3539,7 @@ const ALL_SERVICES = ['documents', 'products', 'search', 'audit-log', 'categorie
 
 let cachedGroupRoles = [];
 let currentUserIsSuperuser = false;
+let currentUserCanDeleteDocuments = false;
 
 async function loadGroupRoles() {
   const tbody = document.getElementById('roles-tbody');
@@ -3609,19 +3617,30 @@ async function renderEditRoleModal() {
       : '<span class="stamp stamp-void" style="font-size:10px;">disabled</span>';
     document.getElementById('edit-role-toggle-btn').textContent = detail.is_active ? 'Disable role' : 'Enable role';
 
-    const serviceCheckboxes = ALL_SERVICES.map(s => `
-      <label>
-        <input type="checkbox" class="role-service-cb" data-service="${s}" ${detail.services.includes(s) ? 'checked' : ''}>
-        ${s}
+    const serviceRows = ALL_SERVICES.map(s => `
+      <div class="role-permission-row">
+        <label>
+          <input type="checkbox" class="role-service-cb" data-service="${s}" ${detail.services.includes(s) ? 'checked' : ''}>
+          ${s}
+        </label>
         ${s === 'documents' ? `
-          <select class="role-level-select" style="margin:0 0 0 4px; padding:2px 4px; font-size:12px; width:auto;" ${detail.services.includes('documents') ? '' : 'disabled'}>
-            <option value="edit" ${detail.service_levels && detail.service_levels.documents === 'edit' ? 'selected' : ''}>Edit</option>
-            <option value="view" ${detail.service_levels && detail.service_levels.documents === 'view' ? 'selected' : ''}>View only</option>
-          </select>
+          <div class="role-permission-suboptions">
+            <label class="inline-suboption">
+              Access level:
+              <select class="role-level-select" style="margin:0; padding:2px 4px; font-size:12px; width:auto;" ${detail.services.includes('documents') ? '' : 'disabled'}>
+                <option value="edit" ${detail.service_levels && detail.service_levels.documents === 'edit' ? 'selected' : ''}>Edit</option>
+                <option value="view" ${detail.service_levels && detail.service_levels.documents === 'view' ? 'selected' : ''}>View only</option>
+              </select>
+            </label>
+            <label class="inline-suboption">
+              <input type="checkbox" class="role-delete-cb" ${detail.services.includes('documents-delete') ? 'checked' : ''} ${detail.services.includes('documents') ? '' : 'disabled'}>
+              Delete — separate from Edit; a role can edit documents without being able to delete them
+            </label>
+          </div>
         ` : ''}
-      </label>
+      </div>
     `).join('');
-    document.getElementById('edit-role-service-checkboxes').innerHTML = serviceCheckboxes;
+    document.getElementById('edit-role-service-checkboxes').innerHTML = serviceRows;
 
     const userChips = detail.assigned_users.map(u => `
       <span class="user-chip">${escapeHtml(u)} <button data-unassign-user="${escapeHtml(u)}" title="Remove this role from ${escapeHtml(u)}">✕</button></span>
@@ -3636,12 +3655,26 @@ async function renderEditRoleModal() {
             const levelSelect = document.querySelector('.role-level-select');
             const level = (cb.dataset.service === 'documents' && levelSelect) ? levelSelect.value : 'edit';
             await apiFetch('/admin/roles/' + roleId + '/access', { method: 'POST', body: JSON.stringify({ service_name: cb.dataset.service, access_level: level }) });
-            if (cb.dataset.service === 'documents' && levelSelect) levelSelect.disabled = false;
+            if (cb.dataset.service === 'documents') {
+              const levelSelect2 = document.querySelector('.role-level-select');
+              const deleteCb = document.querySelector('.role-delete-cb');
+              if (levelSelect2) levelSelect2.disabled = false;
+              if (deleteCb) deleteCb.disabled = false;
+            }
           } else {
             await apiFetch('/admin/roles/' + roleId + '/access/' + cb.dataset.service, { method: 'DELETE' });
             if (cb.dataset.service === 'documents') {
-              const levelSelect = document.querySelector('.role-level-select');
-              if (levelSelect) levelSelect.disabled = true;
+              // Turning off "documents" entirely also revokes the separate
+              // Delete permission server-side isn't automatic — Delete is
+              // meaningless without any documents access at all, so drop
+              // it here too rather than leaving an orphaned grant.
+              const deleteCb = document.querySelector('.role-delete-cb');
+              if (deleteCb && deleteCb.checked) {
+                try { await apiFetch('/admin/roles/' + roleId + '/access/documents-delete', { method: 'DELETE' }); } catch (e) { /* best-effort */ }
+              }
+              const levelSelect2 = document.querySelector('.role-level-select');
+              if (levelSelect2) levelSelect2.disabled = true;
+              if (deleteCb) { deleteCb.checked = false; deleteCb.disabled = true; }
             }
           }
           flashSaved(cb.closest('label'));
@@ -3659,6 +3692,24 @@ async function renderEditRoleModal() {
         try {
           await apiFetch('/admin/roles/' + roleId + '/access', { method: 'POST', body: JSON.stringify({ service_name: 'documents', access_level: sel.value }) });
           flashSaved(sel);
+        } catch (err) {
+          showBanner('edit-role-banner', err.message);
+          renderEditRoleModal();
+        }
+      });
+    });
+
+    document.getElementById('edit-role-service-checkboxes').querySelectorAll('.role-delete-cb').forEach(cb => {
+      cb.addEventListener('change', async () => {
+        showBanner('edit-role-banner', '');
+        try {
+          if (cb.checked) {
+            await apiFetch('/admin/roles/' + roleId + '/access', { method: 'POST', body: JSON.stringify({ service_name: 'documents-delete' }) });
+          } else {
+            await apiFetch('/admin/roles/' + roleId + '/access/documents-delete', { method: 'DELETE' });
+          }
+          flashSaved(cb.closest('label'));
+          loadGroupRoles();
         } catch (err) {
           showBanner('edit-role-banner', err.message);
           renderEditRoleModal();

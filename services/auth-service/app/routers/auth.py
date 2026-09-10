@@ -264,6 +264,7 @@ def verify(
         response.headers["X-Access-Level"] = get_user_access_level(db, user, x_service)
     response.headers["X-Has-Audit-Log"] = str(user_has_service_access(db, user, "audit-log")).lower()
     response.headers["X-Has-Category-Access"] = str(user_has_service_access(db, user, "categories")).lower()
+    response.headers["X-Has-Document-Delete"] = str(user_has_service_access(db, user, "documents-delete")).lower()
 
     return {"status": "ok"}
 

@@ -14,7 +14,13 @@ from app import models
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-VALID_SERVICES = {"documents", "products", "search", "audit-log", "categories"}
+VALID_SERVICES = {"documents", "products", "search", "audit-log", "categories", "documents-delete"}
+# "documents-delete" is a separate, orthogonal permission from "documents"'s
+# own view/edit access_level — granting it does not imply Editor/Viewer, and
+# neither of those implies it. Same boolean-presence pattern already used
+# for "audit-log"/"categories" (checked via user_has_service_access, not a
+# third access_level value) — see docs/SECURITY_HARDENING_LOG.md's "Delete
+# permission" entry for why a third access_level would have been wrong here.
 
 
 # ---------- Pending user approval ----------

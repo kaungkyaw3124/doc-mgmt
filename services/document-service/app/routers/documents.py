@@ -56,6 +56,26 @@ def _require_edit_access(x_access_level: str | None):
         raise HTTPException(status_code=403, detail="your role has view-only access to documents")
 
 
+def _require_delete_access(x_has_document_delete: str | None):
+    """
+    x_has_document_delete comes from Nginx (forwarded from auth-service's
+    /verify, computed via user_has_service_access(db, user, "documents-delete")
+    — a superuser always gets "true" from that call, no special-casing
+    needed here).
+
+    Deliberately FAIL-CLOSED, unlike _require_edit_access's missing-header
+    default: Delete is a brand-new permission carved out of what edit access
+    used to also allow, not a retrofit onto pre-existing behavior — the
+    opt-in-restriction philosophy that makes sense for compatibility with
+    accounts that already had edit access does NOT apply to a capability
+    that's being newly separated out. Only an explicit "true" is accepted;
+    anything else (missing, "false", or any unexpected value) is denied.
+    See docs/SECURITY_HARDENING_LOG.md's "Delete permission" entry.
+    """
+    if x_has_document_delete != "true":
+        raise HTTPException(status_code=403, detail="your role does not have permission to delete documents")
+
+
 def _process_items(items_payload, db: Session):
     """Validates/builds LineItem objects from a list of DocumentItemIn,
     returning (line_items, subtotal, tax_total). Shared between create and
@@ -405,10 +425,17 @@ def trash_document(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
+    x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
 ):
     """Soft delete — hides it from the main list and marks it recoverable.
     For a permanent purge, use DELETE /{document_id} instead (only ever
     called from within the recycle bin in the UI).
+
+    Requires the separate Delete permission, not just edit access — see
+    _require_delete_access's own docstring and
+    docs/SECURITY_HARDENING_LOG.md's "Delete permission" entry: an Editor
+    can view/create/edit without being able to delete unless their role
+    is explicitly granted "documents-delete".
 
     Records who deleted it: X-Username is set by Nginx from auth-service's
     /verify response (the JWT's own subject, server-side — see
@@ -419,6 +446,7 @@ def trash_document(
     it directly without requiring the separate audit-log permission — see
     docs/SECURITY_HARDENING_LOG.md's Recycle Bin entry for why."""
     _require_edit_access(x_access_level)
+    _require_delete_access(x_has_document_delete)
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
@@ -606,8 +634,12 @@ def delete_document(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
 ):
+    """Permanent purge — same Delete permission requirement as the
+    soft-delete trash action above."""
     _require_edit_access(x_access_level)
+    _require_delete_access(x_has_document_delete)
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")

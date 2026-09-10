@@ -3926,3 +3926,202 @@ from a green checkmark.
 500 against a simulated real-world (older) schema and confirming a
 plain container restart — no manual migration step — self-heals it,
 with existing data left intact and restorable throughout.**
+
+## Task 15 — Delete Permission (separate from Edit) + Edit Role Modal Resize
+
+### Task
+
+1. Resize the Edit Role modal to ~80% viewport width/height, responsive,
+   with permission controls organized clearly enough to stay usable at
+   that size.
+2. Add a separate "Delete" permission to the role/service access system,
+   independent of Edit: a user needs Documents + Delete to delete
+   documents; Documents alone (even with edit access) must not be
+   enough. Enforced server-side, never trusted from a client header.
+   Frontend must not render the Delete button/action at all when the
+   user lacks the permission (never show-then-reject). Superuser stays
+   unrestricted. Editor/Viewer must not automatically receive Delete —
+   it's an explicit, separate grant, combinable either way (Editor
+   without Delete; Viewer with Delete, if an admin chooses to grant it).
+
+### Inspection
+
+Read `Role`/`RoleAccess`/`UserRole`, `auth-service`'s `/verify` and
+`authz.py`, `document-service`'s deletion endpoints
+(`trash_document`/`delete_document`), and the frontend's role-editing
+and documents-table rendering before changing anything:
+
+- `RoleAccess.access_level` (`"view"`/`"edit"`) already gates every
+  document write operation uniformly via `_require_edit_access` — a
+  single dial. Making "delete" a third `access_level` value would have
+  made it **mutually exclusive** with plain edit (a role can only have
+  one `access_level` per service_name row today), directly
+  contradicting the requirement that Delete be independently
+  combinable with Edit or View. Rejected that approach for this reason.
+- This app already has exactly the right precedent for an *independent*
+  boolean permission: `"audit-log"` and `"categories"` are both plain
+  `RoleAccess` rows with no meaningful `access_level` distinction — just
+  presence-checked via `user_has_service_access(db, user, "<name>")`,
+  surfaced as `X-Has-Audit-Log`/`X-Has-Category-Access` response headers
+  from `/verify`, forwarded by Nginx, read directly by the relevant
+  service. **Delete uses the exact same mechanism** — a new
+  `"documents-delete"` entry in `VALID_SERVICES`, granted/revoked
+  through the *same* existing `POST/DELETE /admin/roles/{id}/access`
+  endpoints (no new API surface at all), checked via
+  `user_has_service_access(db, user, "documents-delete")`, surfaced as
+  a new `X-Has-Document-Delete` header. Superuser gets `"true"`
+  automatically — `user_has_service_access` already short-circuits to
+  `True` for `is_superuser`, no special-casing needed anywhere.
+- **Default-allow vs. fail-closed, deliberately different from
+  `_require_edit_access`**: `_require_edit_access`'s "missing header =
+  edit" default exists for backward compatibility with accounts that
+  predate the view/edit distinction entirely. That reasoning does not
+  apply to Delete — it is a **brand-new capability being carved out of
+  what Edit access used to also silently permit**. Applying the same
+  default-allow philosophy here would mean every existing Editor
+  keeps deleting exactly as before, silently defeating the whole point
+  of the task. **Recommendation, applied**: `_require_delete_access`
+  is fail-closed — only an explicit `"true"` is accepted; a missing
+  header, `"false"`, or any other value (including a forged
+  `"True"`/`"1"`/`"yes"`, tested explicitly) is denied. No existing
+  role — including the seeded Operation Editor — was given
+  `documents-delete` by this change; an admin must grant it explicitly
+  per role going forward, exactly matching "Editor/Viewer should NOT
+  automatically receive Delete unless the role explicitly has it."
+- Traced every document-deletion endpoint, not just the obvious one:
+  both `trash_document` (`PATCH /{id}/trash`, soft delete — the
+  Documents page's "Delete" button) and `delete_document`
+  (`DELETE /{id}`, permanent purge, currently reachable only via direct
+  API, no UI button exists for it today) now require the Delete
+  permission. `restore_document` is unaffected — restoring was never a
+  delete action.
+- Frontend: the only place a document-delete action is exposed today is
+  `renderDocumentsTable`'s per-row "Delete" button (soft-delete trash).
+  The document detail/view modal and edit form have no delete action of
+  their own to gate. `GET /admin/me`'s existing `service_access` list
+  (already used identically for the Categories button's visibility)
+  needed zero backend changes — adding `"documents-delete"` to
+  `VALID_SERVICES` makes it propagate through automatically for both
+  normal users and the superuser's "all services" default.
+
+### Implementation
+
+- `services/auth-service/app/routers/admin.py`: `VALID_SERVICES` gains
+  `"documents-delete"`.
+- `services/auth-service/app/routers/auth.py`: `/verify` sets
+  `X-Has-Document-Delete` from `user_has_service_access(db, user,
+  "documents-delete")`, same pattern as the audit-log/categories
+  headers right above it.
+- `infra/nginx/nginx.conf.template`: `/api/documents` captures and
+  forwards `X-Has-Document-Delete` (the same `auth_request_set` +
+  `proxy_set_header` pair every other trust header uses — overwritten,
+  never merged with a client-supplied copy); blanked on
+  `/api/customers`/`/api/companies`/`/api/projects` per this file's
+  existing redundant-blanking policy for headers document-service
+  reads (not on `/api/products`/`/api/categories`/`/api/search`,
+  matching how `X-Has-Audit-Log` is already handled — those route to
+  services that never read either header).
+- `services/document-service/app/routers/documents.py`: new
+  `_require_delete_access` (fail-closed, see above), called in addition
+  to (not instead of) `_require_edit_access` in both `trash_document`
+  and `delete_document`.
+- `web/js/app.js`: `enterApp()` computes
+  `currentUserCanDeleteDocuments` from `me.is_superuser ||
+  me.service_access.includes('documents-delete')`, identical shape to
+  the existing `canManageCategories` check. `renderDocumentsTable`
+  renders the Delete button only when that's true; otherwise the cell
+  shows a plain em-dash — the button is never in the DOM to begin with,
+  not hidden or disabled, so there is no click-then-403 path.
+- `web/index.html` / `web/js/app.js`: Edit Role modal now uses the same
+  `.modal-box-scrollbody` class as the Recycle Bin modal (80vw/80vh,
+  96vw/90vh under 700px, single scrolling inner wrapper). "Service
+  access" is reorganized from an inline flex-wrap chip list into a new
+  `.role-permission-grid` — one bordered card per service — with
+  Documents' existing access-level `<select>` and the new Delete
+  checkbox both shown as clearly indented, labeled sub-options under
+  the Documents row (not a same-level generic checkbox, since Delete is
+  documents-specific and would be confusing listed alongside
+  `products`/`search`/etc.). Unchecking "documents" entirely also
+  clears the Delete grant if it was set (a delete permission with no
+  underlying documents access at all is a meaningless orphaned grant).
+
+### Permission behavior (the matrix from the task, confirmed against the
+implementation above)
+
+| Grants on a role | Can view | Can create/edit | Can delete |
+|---|---|---|---|
+| Documents (view) | yes | no | no |
+| Documents (edit) | yes | yes | no |
+| Documents (edit) + Delete | yes | yes | **yes** |
+| Documents (view) + Delete | yes | no | **yes** |
+| Superuser | yes | yes | yes (always) |
+
+### Tests
+
+- `services/auth-service/tests/test_document_delete_permission.py`
+  (new, real Postgres, real login + `/verify`, same pattern as
+  `test_user_control.py`): Editor without a `documents-delete` grant
+  gets `X-Has-Document-Delete: false` (and `X-Access-Level: edit`
+  unaffected); granting it flips only that header, not the access
+  level; Viewer defaults to `false` too; **Viewer can be independently
+  granted Delete without being upgraded to edit access** (proves the
+  two axes are genuinely orthogonal, not just in one direction);
+  superuser always `true`; the existing `/admin/roles/{id}/access`
+  grant/revoke endpoints work for `"documents-delete"` without
+  disturbing the role's separate `"documents"` grant.
+- `services/document-service/tests/test_delete_permission.py` (new,
+  schema-level, no DB needed): `_require_delete_access` allows only an
+  exact `"true"`; denies missing, `"false"`, and forged near-miss values
+  (`"True"`, `"1"`, `"yes"`) — proving the fail-closed default holds
+  against sloppy or adversarial header values, not just the two
+  expected ones.
+- New infra-integration acceptance step, "Acceptance — Documents Delete
+  permission (separate from Edit, real Nginx)", run against the real
+  Docker Compose stack: two Editors (one granted Delete, one not) and a
+  Viewer; confirms `/admin/me`'s `service_access` correctly reflects the
+  grant either way (what the frontend actually reads); Editor+Delete
+  successfully trashes a document; Editor-without-Delete can still
+  `PATCH` (edit) a document normally but gets 403 trashing one, and that
+  document is still reachable afterward; Viewer gets 403 too; a forged
+  `X-Has-Document-Delete: true` header from the no-Delete Editor is
+  still rejected (proving Nginx overwrites it); superuser deletes
+  successfully; restore continues working for a Delete-permitted user.
+
+### Actual results (real GitHub Actions CI, `mcp__github__get_job_logs`
+with `return_content: true` — raw log content, never the `conclusion`
+field alone)
+
+Pushed as commit `<PENDING>`. Results to be recorded once independently
+verified against real CI log content, per this repo's established
+practice.
+
+### Recommendations / concerns
+
+1. **No existing role was auto-granted Delete**, including the seeded
+   Operation Editor role — this is intentional (see the fail-closed
+   default above) but means every currently-deployed Editor loses the
+   ability to delete documents the moment this ships, until an admin
+   explicitly opens Edit Role and checks the new Delete box for
+   whichever roles should keep it. Worth confirming this is the
+   intended rollout behavior before deploying, since it is a real,
+   immediate behavior change for existing users, not just new ones.
+2. The hard-purge endpoint (`DELETE /{document_id}`) has no UI trigger
+   today — it was still gated with the same Delete permission for
+   completeness/defense-in-depth (the API is reachable directly
+   regardless of whether a button exists for it), but there was nothing
+   to verify on the frontend side for it since no button exists to hide.
+3. Same architecture is directly reusable if Products/Customers/
+   Projects/Companies ever need an equivalent separate Delete
+   permission later — the pattern (`"<resource>-delete"` in
+   `VALID_SERVICES`, checked via `user_has_service_access`, its own
+   `X-Has-<Resource>-Delete` header) requires no new backend
+   infrastructure, just repeating what this task already built.
+
+### Commits (branch `security/auth-hardening`)
+
+- `<PENDING>` — Delete permission + Edit Role modal resize.
+
+### Verification
+
+Real GitHub Actions CI, raw log content — reference to be added once
+the push above is verified.

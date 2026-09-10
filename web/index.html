@@ -377,6 +377,28 @@
   }
   .checkbox-list input[type=checkbox] { width: auto; margin: 0; }
 
+  /* Edit Role modal's "Service access" — one clearly separated row per
+     service (instead of an inline flex-wrap chip list) so the extra
+     per-service sub-controls (documents' access-level select, its
+     separate Delete checkbox) stay readable at the modal's 80% width
+     instead of crowding a single line. */
+  .role-permission-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .role-permission-row {
+    border: 1px solid var(--border, #e2e8f0); border-radius: 6px; padding: 10px 14px;
+  }
+  .role-permission-row > label {
+    display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; margin: 0;
+  }
+  .role-permission-row > label input[type=checkbox] { width: auto; margin: 0; }
+  .role-permission-suboptions {
+    margin: 10px 0 0 26px; padding-left: 12px; border-left: 2px solid var(--border, #e2e8f0);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .role-permission-suboptions .inline-suboption {
+    display: flex; align-items: center; gap: 8px; font-weight: normal; font-size: 13px; margin: 0;
+  }
+  .role-permission-suboptions .inline-suboption input[type=checkbox] { width: auto; margin: 0; }
+
   @keyframes save-flash {
     0% { background: var(--success); color: #fff; }
     100% { background: transparent; color: inherit; }
@@ -1027,30 +1049,32 @@
 
 <!-- ============ EDIT ROLE MODAL ============ -->
 <div class="modal-overlay" id="edit-role-modal">
-  <div class="modal-box">
+  <div class="modal-box modal-box-scrollbody">
     <button class="link-btn-inline modal-close" id="edit-role-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="edit-role-title">Edit role</h3>
-    <div id="edit-role-banner"></div>
+    <div id="edit-role-banner" class="modal-banner-slot"></div>
 
-    <div class="form-row" style="align-items:flex-end;">
-      <div>
-        <label for="edit-role-name">Role name</label>
-        <input type="text" id="edit-role-name" style="margin-bottom:0;">
+    <div class="table-scroll-wrap" style="padding-right:4px;">
+      <div class="form-row" style="align-items:flex-end;">
+        <div>
+          <label for="edit-role-name">Role name</label>
+          <input type="text" id="edit-role-name" style="margin-bottom:0;">
+        </div>
+        <div><button type="button" class="btn-secondary" id="edit-role-rename-btn" style="padding:10px 14px;">Save name</button></div>
       </div>
-      <div><button type="button" class="btn-secondary" id="edit-role-rename-btn" style="padding:10px 14px;">Save name</button></div>
+
+      <div style="margin:14px 0;" id="edit-role-status-stamp"></div>
+      <div style="margin-bottom:18px;">
+        <button type="button" class="btn-secondary" id="edit-role-toggle-btn" style="padding:6px 12px; font-size:13px;">Disable role</button>
+        <button type="button" class="btn-secondary" id="edit-role-delete-btn" style="padding:6px 12px; font-size:13px; color:var(--danger); border-color:var(--danger);">Delete role</button>
+      </div>
+
+      <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Service access</label>
+      <div class="role-permission-grid" id="edit-role-service-checkboxes"></div>
+
+      <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Users with this role</label>
+      <div id="edit-role-users-list"></div>
     </div>
-
-    <div style="margin:14px 0;" id="edit-role-status-stamp"></div>
-    <div style="margin-bottom:18px;">
-      <button type="button" class="btn-secondary" id="edit-role-toggle-btn" style="padding:6px 12px; font-size:13px;">Disable role</button>
-      <button type="button" class="btn-secondary" id="edit-role-delete-btn" style="padding:6px 12px; font-size:13px; color:var(--danger); border-color:var(--danger);">Delete role</button>
-    </div>
-
-    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Service access</label>
-    <div class="checkbox-list" id="edit-role-service-checkboxes"></div>
-
-    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Users with this role</label>
-    <div id="edit-role-users-list"></div>
   </div>
 </div>
 
