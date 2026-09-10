@@ -3670,9 +3670,35 @@ records their trashed status exactly as before.
 with `return_content: true` — raw log content, never the `conclusion`
 field alone)
 
-Pushed as commit `<PENDING>`. Results to be recorded once independently
-verified against real CI log content, per this repo's established
-practice.
+Pushed as commit `60dab87`, verified on run `34439208203`. All 5 jobs
+**PASSED**: `auth-service`, `catalogue-service`, `search-service`
+unaffected; `document-service` — `70 passed` (68 prior + 2 new
+`test_recycle_bin.py` tests); `infra-integration` — the new step and
+every prior task's acceptance step in this entire log, including the
+existing security-headers/CSP check (`script-src 'self'`, no inline
+scripts — unaffected, since this task only added ordinary JS/CSS to
+the existing external `app.js`/`<style>` block, no new inline
+handlers). The new step's real output, quoted directly from the job
+log:
+
+```
+Editor trash own document -> 200
+recycle bin deleted_by for Editor's document -> recyclebin_editor_20139
+Viewer attempt to trash a document -> 403
+Superuser trash a document -> 200
+recycle bin deleted_by for superuser's document -> admin
+Editor restore their own document -> 200
+deleted_by after a fresh login -> admin
+Editor trash with forged X-Username header -> 200
+deleted_by after forged X-Username attempt -> recyclebin_editor_20139
+```
+
+No `FAIL:` lines anywhere in the step's output; `exit $fail` returned
+0. The last two lines are the key security proof: an Editor's own
+delete request sent with a forged `X-Username: someone-else` header
+still recorded their real username (`recyclebin_editor_20139`, not
+`someone-else`) — confirming Nginx overwrites the header exactly as
+designed, not merely assumed from reading the config.
 
 ### Recommendation
 
@@ -3689,9 +3715,18 @@ existing `audit-log` grant already protects.
 
 ### Commits (branch `security/auth-hardening`)
 
-- `<PENDING>` — Recycle Bin UI + deletion audit.
+- `60dab87` — Recycle Bin UI + deletion audit. **This is the commit CI
+  is green on (run `34439208203`).**
 
 ### Verification
 
-Real GitHub Actions CI, raw log content — reference to be added once
-the push above is verified.
+Real GitHub Actions CI (`mcp__github__actions_list` /
+`mcp__github__get_job_logs` with `return_content: true`), raw log
+content quoted above — not the `conclusion` field alone, not assumed
+from a green checkmark.
+
+**Net result: the Recycle Bin UI and deletion-audit fix is genuinely
+PASS as of commit `60dab87`, independently verified against raw CI
+evidence covering Editor, Viewer, superuser, restore, cross-login
+persistence, and a forged-header bypass attempt, all through the real
+Nginx API.**
