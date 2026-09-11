@@ -63,28 +63,33 @@
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
-  /* Three earlier approaches all backfired (see git history): wrapping
-     Terms+MD in a shared break-inside:avoid container made WeasyPrint
-     move the whole group to the next page even when real remaining
-     space clearly exceeded what it needed; pairing break-after:avoid
-     here with break-before:avoid on .md-block caused the same
-     over-conservative "bail early, leave a gap" behavior; giving BOTH
-     .terms and .md-block their own independent break-inside: avoid
-     reproduced it again — real CI showed .md-block jumping to a fresh
-     page even when it was empty of real content and page 1 clearly had
-     room to spare, meaning WeasyPrint was treating the two adjacent
-     break-inside:avoid siblings as one joined run, not two independent
-     decisions.
+  /* Several earlier approaches all backfired (see git history) trying to
+     keep Terms and the MD signature block together: a shared
+     break-inside:avoid wrapper, break-after/break-before:avoid pairing,
+     and independent break-inside:avoid on both blocks all made
+     WeasyPrint push MD to a fresh page even when the current page
+     clearly had room to spare. The last of those ruled out break rules
+     as the cause entirely: real CI showed MD still jumping to a new
+     page with NO break-related CSS on it at all.
      .terms keeps break-inside: avoid — real testing confirmed that one
      is necessary (without it, the Terms paragraph itself split
-     mid-sentence across pages). .md-block does NOT get break-inside:
-     avoid: it's short (a signature name/title, optionally a seal image)
-     and, immediately following Terms in ordinary flow with nothing else
-     asking the engine to treat the pair specially, lands wherever room
-     allows without triggering the sibling-run behavior above. */
+     mid-sentence across pages). */
   .terms { break-inside: avoid; page-break-inside: avoid; }
 
-  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; }
+  /* .md-block previously used `width: 200px; margin-left: auto` (a
+     shrink-to-fit block, auto-margined into place) to right-align
+     itself — the prime remaining suspect once break rules were ruled
+     out, since that's the one structurally unusual thing about this
+     box compared to every other block in the document (.terms, .header,
+     table rows) that behaves normally under pagination. Replaced with
+     the far more ordinary text-align: right + inline-block pattern:
+     .md-block is now a full-width, plain block (nothing unusual for the
+     fragmentation engine to mis-measure), and .md-block-inner is an
+     inline-level box carrying the actual width/centering — the same
+     technique used everywhere else text needs to sit at a fixed width
+     without being a block of its own. */
+  .md-block { margin-top: 40px; text-align: right; }
+  .md-block-inner { display: inline-block; width: 200px; text-align: center; }
   .md-seal { width: 130px; height: 130px; }
   .md-name { font-weight: bold; margin-top: 6px; }
   .md-title { font-size: 9pt; color: #555; }
@@ -176,9 +181,11 @@
 
   {% if director %}
   <div class="md-block">
-    {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
-    <div class="md-name">{{ director.name }}</div>
-    <div class="md-title">Managing Director</div>
+    <div class="md-block-inner">
+      {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
+      <div class="md-name">{{ director.name }}</div>
+      <div class="md-title">Managing Director</div>
+    </div>
   </div>
   {% endif %}
 
