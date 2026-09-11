@@ -37,7 +37,7 @@
   }
   .logo { max-width: 130px; max-height: 130px; }
   .seal { max-width: 130px; max-height: 130px; }
-  .title { font-size: 22pt; font-weight: bold; margin-bottom: 8px; }
+  .title { font-size: 22pt; font-weight: bold; margin-bottom: 8px; color: #c00000; }
   .date-line { margin-bottom: 14px; }
   .parties { display: flex; justify-content: space-between; margin-bottom: 18px; }
   .party { width: 48%; }
@@ -81,9 +81,9 @@
 
     <div class="parties">
       <div class="party">
-        <h3>SUPPLIER</h3>
+        <h3>SUPPLIER: {{ company.name if company else "—" }}</h3>
         <table>
-          <tr><td class="label">Name</td><td>{{ company.name if company else "—" }}</td></tr>
+          <tr><td class="label">Name</td><td>{{ director.name if director else "" }}</td></tr>
           <tr><td class="label">Position</td><td>{{ company.position if company else "" }}</td></tr>
           <tr><td class="label">Address</td><td>{{ company.address if company else "" }}</td></tr>
           <tr><td class="label">Contact No</td><td>{{ company.contact_no if company else "" }}</td></tr>

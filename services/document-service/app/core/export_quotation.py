@@ -105,7 +105,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
 
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "QUOTATION"
-    ws[f"A{row}"].font = Font(name="Arial", size=18, bold=True)
+    ws[f"A{row}"].font = Font(name="Arial", size=18, bold=True, color="C00000")
     row += 4  # leave room for the logo alongside the title
 
     ws[f"A{row}"] = "Date:"
@@ -122,6 +122,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     row += 1
 
     supplier_rows = [
+        ("Name", _safe_str(director.get("name")) if director else ""),
         ("Position", _safe_str(company.get("position")) if company else ""),
         ("Address", _safe_str(company.get("address")) if company else ""),
         ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
