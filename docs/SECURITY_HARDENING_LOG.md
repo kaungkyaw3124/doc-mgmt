@@ -4091,9 +4091,52 @@ implementation above)
 with `return_content: true` — raw log content, never the `conclusion`
 field alone)
 
-Pushed as commit `<PENDING>`. Results to be recorded once independently
-verified against real CI log content, per this repo's established
-practice.
+Feature commit `724393d`'s first CI run (`34440906697`) came back
+`infra-integration: failure` — but not in this task's own step: step 21
+("Documents recycle bin deletion audit", from Task 13, pre-existing)
+failed with real logged output `Editor trash own document -> 403` /
+`FAIL: Editor could not trash a document (got 403)`. Root cause: the new
+fail-closed `_require_delete_access` gate correctly started rejecting
+that older step's Editor, which had never been granted
+`documents-delete`. Fixed in `5ebc9d4` by granting the recycle-bin
+step's Editor `documents-delete` up front — which then leaked into
+*this* task's own acceptance step (same shared "Editor" role, sequential
+steps against the same Postgres): commit `5ebc9d4`'s next run showed
+this task's own step failing for the first time it actually got to run,
+with real logged output `Editor-without-delete's /admin/me
+service_access includes documents-delete -> True` / `FAIL: /admin/me
+reports documents-delete for an Editor that was never granted it`.
+Fixed in `d0dfffc` by revoking the grant at the end of the recycle-bin
+step — but the *identical* failure recurred on `d0dfffc`'s own run,
+revealing a second, independent bug: this task's own step assigns both
+its "with Delete" and "without Delete" Editor test users to the *same*
+shared "Editor" role, then grants `documents-delete` to that role —
+which, since this app's RBAC is role-based, hands the grant to *both*
+users, not just the intended one. This step had never actually reached
+that assertion once, cleanly, until now (masked first by its own
+initial CI run, then by the recycle-bin leak). Fixed in `14e1b04` by
+giving the "with Delete" Editor a dedicated role instead of touching
+the shared one.
+
+Final run, commit `14e1b04` (run `34559396388`), `infra-integration`
+job, step 23 — all real logged output, genuinely green:
+```
+grant documents:edit to the dedicated Editor+Delete role -> 201
+grant documents-delete to the dedicated Editor+Delete role -> 201
+Editor-with-delete's /admin/me service_access includes documents-delete -> True
+Editor-without-delete's /admin/me service_access includes documents-delete -> False
+Editor+Delete trash a document -> 200
+Editor-without-Delete can still edit -> 200
+Editor-without-Delete trash attempt -> 403
+Viewer trash attempt -> 403
+Editor-without-Delete + forged X-Has-Document-Delete: true -> 403
+Superuser trash -> 200
+Editor+Delete restore a document -> 200
+```
+All five jobs on that run (`auth-service`, `document-service`,
+`catalogue-service`, `search-service`, `infra-integration`) came back
+`conclusion: success`, including steps 21/22 (recycle bin, self-heal)
+alongside this task's own step 23.
 
 ### Recommendations / concerns
 
@@ -4119,9 +4162,185 @@ practice.
 
 ### Commits (branch `security/auth-hardening`)
 
-- `<PENDING>` — Delete permission + Edit Role modal resize.
+- `724393d` — Delete permission + Edit Role modal resize (feature).
+- `5ebc9d4` — grant recycle-bin acceptance step's Editor role
+  `documents-delete` (fixes the fail-closed gate correctly rejecting
+  that older, pre-existing step).
+- `d0dfffc` — revoke `documents-delete` from the Editor role at the end
+  of the recycle-bin step (stops that grant leaking into this task's
+  own step).
+- `14e1b04` — give this task's own "with Delete" Editor test user a
+  dedicated role instead of the shared "Editor" role (the actual,
+  independent root cause of this step's own repeated failure).
 
 ### Verification
 
-Real GitHub Actions CI, raw log content — reference to be added once
-the push above is verified.
+Real GitHub Actions CI, `mcp__github__get_job_logs` with
+`return_content: true`. Final green run: commit `14e1b04`, run
+`34559396388` — all five jobs `conclusion: success`, `infra-integration`
+step 23 passing with the real logged output quoted above.
+
+## Task 16 — Quotation PDF Pagination (Managing Director orphaned on page 2)
+
+### Task
+
+Fix the quotation PDF's pagination: the Managing Director signature
+block was being pushed to a page 2 that also duplicated the full
+quotation header (logo, title, supplier/end-user), while page 1 ended
+with mostly blank space. Requirements: MD stays on page 1 whenever
+content fits; no unnecessary duplication of the header/supplier/
+end-user block on a later page; MD stays visually attached to the
+quotation's closing/signature area; genuinely long quotations may
+paginate to multiple pages, but cleanly — never a page containing only
+the MD block. Not a security vulnerability, but recorded here as this
+branch's running change log.
+
+### Inspection
+
+Read `services/document-service/app/core/export_pdf.py` (the Jinja
+render + WeasyPrint call) and `app/templates/quotation.html` (the actual
+layout/CSS) before changing anything — no automated test previously
+covered PDF pagination at all.
+
+Root cause #1: the supplier/end-user header lived in a CSS Paged Media
+`position: running()` @page margin box (`@top-center`), so it would
+repeat on every page automatically — by design for a running element,
+but combined with a massive, historically-guessed `@page` top margin
+(`13cm`, per the file's own comments: bumped up from 6.5cm, then 10cm,
+after each proved too small), the usable body height per page was only
+~13.7cm — enough for even short/normal quotations to overflow onto a
+second page. `.md-block` had no page-break protection, so it landed
+alone on whatever page the overflow produced, which — because the
+header was a `running()` element — still carried the fully repeated
+header even when that page held nothing else of substance.
+
+### Implementation (in two passes — the second found by real-world testing)
+
+**Pass 1 (`6aa04e1`)**: moved the header out of the running margin box
+into normal in-flow body content — it renders once, sized to what it
+actually needs, at the top of page 1, and is never repeated on later
+pages. This dropped the `@page` top margin from the guessed `13cm` down
+to `1.5cm`. Wrapped `.terms` + `.md-block` in a `.closing-section` with
+`break-inside: avoid`, intended to keep the signature block attached to
+Terms as one unit.
+
+**Pass 2 (`f51a173`)**: the user deployed pass 1 to their real server
+and sent screenshots — the header-duplication fix genuinely worked, but
+a new symptom appeared: page 1 ended with a large empty gap after the
+items table, and Terms+MD both landed on page 2 anyway despite
+page 1 visibly having more than enough room left. Root cause: wrapping
+Terms+MD in a `break-inside: avoid` container told WeasyPrint to treat
+them as one atomic unit — lay out the whole thing, and if it doesn't
+fit in the remaining space, move the *entire* group to the next page
+rather than split it. In practice WeasyPrint judged the combined block
+"wouldn't fit" even when the real remaining space was visibly larger
+than what the group needed, wasting most of page 1. Fixed by removing
+the wrapper entirely and replacing it with a lighter, targeted CSS
+Fragmentation hint on the actual break opportunity: `break-after: avoid`
+on `.terms` paired with `break-before: avoid` on `.md-block` — a request
+to avoid breaking there, not a hard atomic-unit constraint on an
+ancestor. `.md-block` keeps its own `break-inside: avoid` so it still
+can't split apart internally.
+
+Also found and fixed along the way (`b6280a5`): item rows were
+duplicating their own description text — `item_name` already falls back
+to `item.description` for manual (non-catalog) line items, but
+`description` then unconditionally fell back to `item.description`
+again too, printing the same text twice per row (bold name, then the
+identical text again in regular weight below it). That silently doubled
+affected rows' height, working directly against the pagination fix.
+Fixed by only treating `item.description` as a genuinely separate
+description when it differs from `item_name`.
+
+### Tests
+
+`services/document-service/tests/test_quotation_pdf_layout.py` (new):
+calls `generate_quotation_pdf` directly with lightweight fake objects
+(no DB/Docker needed — same pattern as `test_delete_permission.py`) and
+inspects the real rendered PDF bytes with `pypdf`. Covers: a short (2
+item) and normal (10 item) quotation keep MD correctly positioned and
+never orphaned; a long (80 item) quotation genuinely paginates to
+multiple pages without ever landing MD alone on a page (checked via a
+content-length threshold — a page carrying only MD + the running footer
+runs well under 160 characters, so this catches orphaning regardless of
+which specific content ends up sharing the page, rather than requiring
+the literal "Terms and Conditions" string to co-occur, which is no
+longer a hard guarantee under the softer break hints); the
+SUPPLIER/END USER header and QUOTATION title appear exactly once across
+the whole document at every tested length; existing PDF content
+(company, customer, items, custom terms text) still renders correctly;
+a quotation with no director selected has no MD block and still
+renders. Added `pypdf` to `requirements-dev.txt` for this.
+
+### Actual results (real GitHub Actions CI, `mcp__github__get_job_logs`
+with `return_content: true`)
+
+Commit `6aa04e1`'s `document-service` job initially failed one test
+(`test_normal_quotation_keeps_md_correctly_positioned`) — real pytest
+output: `AssertionError: a 10-item quotation should still fit on one
+page, got 2`, with the actual extracted page-2 text showing Terms and
+the MD block correctly grouped together (not an orphan) — the
+pagination fix itself was working, the test's hardcoded "must be 1
+page" assumption was simply wrong for that much content. Fixed in
+`b6280a5` (which also fixed the item-description duplication above) by
+asserting the real invariant instead of a fixed page count.
+
+Final run, commit `f51a173` (run `34559190797`), `document-service`
+job — real pytest output:
+```
+tests/test_quotation_pdf_layout.py::test_short_quotation_keeps_md_on_page_1 PASSED
+tests/test_quotation_pdf_layout.py::test_normal_quotation_keeps_md_correctly_positioned PASSED
+tests/test_quotation_pdf_layout.py::test_long_quotation_paginates_cleanly_md_not_orphaned_alone PASSED
+tests/test_quotation_pdf_layout.py::test_header_and_parties_are_never_duplicated_onto_a_later_page PASSED
+tests/test_quotation_pdf_layout.py::test_no_md_only_page_across_a_range_of_lengths PASSED
+tests/test_quotation_pdf_layout.py::test_pdf_export_still_renders_expected_content PASSED
+tests/test_quotation_pdf_layout.py::test_quotation_without_director_has_no_md_block_and_still_renders PASSED
+====================== 84 passed, 2489 warnings in 8.39s =======================
+```
+That same run's `infra-integration` job failed, but in a step
+completely unrelated to this task (step 23, the Delete permission
+acceptance step from Task 15) — see Task 15's own "Actual results" for
+that separate root cause and fix (`14e1b04`), which brought the same
+run's successor to fully green across all five jobs.
+
+### Recommendations / concerns
+
+1. The same `item_name`/`description` duplication pattern found in
+   `export_pdf.py` likely exists in `export_quotation.py` (the XLSX
+   export) too — it has near-identical fallback logic. Not fixed here
+   (out of scope for the reported PDF bug), but worth the same fix if
+   XLSX row height/duplication is ever reported.
+2. CSS Fragmentation "avoid" hints (`break-before`/`break-after`/
+   `break-inside: avoid`) are requests, not guarantees — WeasyPrint will
+   still break where content genuinely has no room. The test suite
+   checks the invariant that matters (MD never lands alone) rather than
+   asserting exact page counts, since page boundaries are a function of
+   font metrics this fix doesn't control.
+3. This task surfaced, twice, that a layout fix pushed to a real
+   deployment is the only way some WeasyPrint fragmentation behavior
+   differences actually show up — this sandbox has no way to run
+   WeasyPrint locally (no network access for `pip install`), so both
+   root causes here were only confirmed via real CI and the user's own
+   real-server screenshots, not local rendering.
+
+### Commits (branch `security/auth-hardening`)
+
+- `6aa04e1` — move header out of the running margin box into in-flow
+  content; drop `@page` top margin from `13cm` to `1.5cm`; group
+  Terms+MD with `break-inside: avoid` (superseded by `f51a173`, see
+  below); add `test_quotation_pdf_layout.py`.
+- `b6280a5` — fix item rows duplicating their own description text;
+  relax the normal-quotation test to check the real invariant instead
+  of a hardcoded page count.
+- `f51a173` — replace the `break-inside: avoid` Terms+MD wrapper (found
+  to waste page-1 space) with `break-after`/`break-before: avoid` on
+  the actual break point between them; relax orphan-check assertions to
+  a content-length threshold instead of requiring literal co-located
+  text.
+
+### Verification
+
+Real GitHub Actions CI, `mcp__github__get_job_logs` with
+`return_content: true`. Final green run: commit `f51a173`, run
+`34559190797`, `document-service` job — `84 passed` (all 7
+`test_quotation_pdf_layout.py` tests), quoted above.
