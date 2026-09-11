@@ -34,14 +34,27 @@ across two pages (e.g. "Price Validity" through "Delivery: DDP" staying
 on page 1, "Warranty..." continuing alone on page 2) — never intended,
 and never tested for directly until now.
 
-Settled on the simplest approach that actually holds up: each of .terms
-and .md-block only protects itself with its own break-inside: avoid (so
-neither can be split apart internally), with no break hint pointing at
-its neighbor. Ordinary document flow then places them wherever room
-allows — together on page 1 whenever there's space (the common case,
-now that the @page top margin is a realistic 1.5cm instead of root
-cause #1's guessed 13cm), or MD following directly after Terms at the
-top of page 2 only when a page 1 genuinely doesn't have room for both.
+Root cause #4 (found via real CI, not just real-world testing this
+time — three follow-up attempts after #3's fix, each removing the
+break-after/break-before pairing in a different way: independent
+break-inside:avoid on both blocks, no break rules on .md-block at all,
+and a completely different box model for .md-block): all three
+reproduced the EXACT same MD-orphaned-alone failure, meaning the
+pairing itself was never the problem — root cause #3's actual defect
+was solely .terms' missing break-inside: avoid (which caused the
+mid-sentence split). The break-after/break-before pairing was
+incorrectly removed instead of just adding break-inside: avoid
+alongside it. Fixed by restoring the pairing (.terms gets
+break-inside: avoid AND break-after: avoid; .md-block gets
+break-before: avoid) — the one combination that had never actually
+been tried, since #3's fix always removed the pairing before #4's
+follow-ups could test it together with .terms' break-inside: avoid.
+
+This is why every one of these fixes is verified against real
+WeasyPrint output via CI before being reported as working — the
+symptom (MD landing alone) looks identical whether the cause is a
+missing break rule, a wrong pairing, or an unrelated box-model quirk,
+and only real rendered output distinguishes between them.
 
 No live Postgres or Docker needed — generate_quotation_pdf is called
 directly with lightweight fake objects (same pattern as

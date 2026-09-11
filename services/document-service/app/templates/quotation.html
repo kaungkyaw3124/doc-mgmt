@@ -65,32 +65,38 @@
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
-  /* Several earlier approaches all backfired (see git history) trying to
-     keep Terms and the MD signature block together: a shared
-     break-inside:avoid wrapper, break-after/break-before:avoid pairing,
-     and independent break-inside:avoid on both blocks all made
-     WeasyPrint push MD to a fresh page even when the current page
-     clearly had room to spare. The last of those ruled out break rules
-     as the cause entirely: real CI showed MD still jumping to a new
-     page with NO break-related CSS on it at all.
-     .terms keeps break-inside: avoid — real testing confirmed that one
-     is necessary (without it, the Terms paragraph itself split
-     mid-sentence across pages). */
-  .terms { break-inside: avoid; page-break-inside: avoid; }
+  /* Real CI evidence across several earlier attempts (see git history)
+     finally isolated the two things that are each independently
+     necessary, and the one thing that was a red herring:
+       - .terms needs break-inside: avoid. Without it, real testing
+         showed the Terms paragraph itself splitting mid-sentence across
+         pages (confirmed by test_terms_text_never_splits_mid_paragraph_
+         across_pages).
+       - .terms needs break-after: avoid, PAIRED WITH .md-block's
+         break-before: avoid, to actually keep MD attached to Terms.
+         This pairing was removed after the mid-sentence-split defect
+         above was observed, on the theory that the pairing itself was
+         causing an over-conservative "leave a gap, break early" bug —
+         but three different follow-up attempts (independent
+         break-inside:avoid on both blocks, no break rules on .md-block
+         at all, and a completely different box model for .md-block)
+         all reproduced the exact same MD-orphaned-alone failure in real
+         CI, with .terms' break-inside:avoid as the only constant across
+         all of them. That rules the pairing itself back IN as
+         necessary: the real defect in the version that had it was
+         .terms' missing break-inside:avoid (fixed above), not the
+         pairing. This combination — both fixes together — had never
+         actually been tried until now. */
+  .terms { break-inside: avoid; page-break-inside: avoid; break-after: avoid; page-break-after: avoid; }
 
   /* .md-block previously used `width: 200px; margin-left: auto` (a
      shrink-to-fit block, auto-margined into place) to right-align
-     itself — the prime remaining suspect once break rules were ruled
-     out, since that's the one structurally unusual thing about this
-     box compared to every other block in the document (.terms, .header,
-     table rows) that behaves normally under pagination. Replaced with
-     the far more ordinary text-align: right + inline-block pattern:
-     .md-block is now a full-width, plain block (nothing unusual for the
-     fragmentation engine to mis-measure), and .md-block-inner is an
-     inline-level box carrying the actual width/centering — the same
-     technique used everywhere else text needs to sit at a fixed width
-     without being a block of its own. */
-  .md-block { margin-top: 40px; text-align: right; }
+     itself. Kept the text-align: right + inline-block replacement
+     (.md-block-inner) from that attempt regardless — it's the more
+     ordinary CSS pattern even though the box model turned out not to be
+     the actual cause of the orphaning. break-before: avoid pairs with
+     .terms' break-after: avoid above. */
+  .md-block { margin-top: 40px; text-align: right; break-before: avoid; page-break-before: avoid; }
   .md-block-inner { display: inline-block; width: 200px; text-align: center; }
   .md-seal { width: 130px; height: 130px; }
   .md-name { font-weight: bold; margin-top: 6px; }
