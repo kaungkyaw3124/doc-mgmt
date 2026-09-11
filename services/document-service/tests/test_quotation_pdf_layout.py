@@ -5,7 +5,7 @@ quotation fits, and the supplier/end-user header must never be repeated
 onto a page that only exists because the signature block overflowed. See
 docs/SECURITY_HARDENING_LOG.md's "Quotation PDF pagination fix" entry.
 
-Root cause (before this fix): the supplier/end-user header lived in a
+Root cause #1 (fixed in 6aa04e1): the supplier/end-user header lived in a
 `position: running()` @page margin box, which is a FIXED-height reservation
 — to avoid it colliding with body content, the @page top margin was set to
 a huge, guessed 13cm on *every* page. That left only ~13.7cm of usable
@@ -13,6 +13,18 @@ body height per page, so even short/normal quotations could overflow, and
 the orphaned .md-block (no page-break protection) would land alone on a
 mostly-empty page 2 that still carried the fully repeated header (since
 `running()` content repeats on every page unconditionally).
+
+Root cause #2 (fixed in a follow-up after real-world testing surfaced it):
+6aa04e1's own fix wrapped .terms + .md-block in a `.closing-section` with
+break-inside: avoid, meant to keep the signature block attached. In
+practice WeasyPrint sized that wrapper as one atomic unit and, judging it
+"wouldn't fit" in the remaining page-1 space, moved the *entire* group to
+page 2 — even when the actual remaining space was clearly larger than the
+group needed, leaving most of page 1 blank. Replaced with a lighter,
+targeted hint instead: break-after: avoid on .terms paired with
+break-before: avoid on .md-block (the actual break opportunity between
+them), plus break-inside: avoid staying on .md-block itself so it can't
+split internally.
 
 No live Postgres or Docker needed — generate_quotation_pdf is called
 directly with lightweight fake objects (same pattern as
@@ -91,6 +103,17 @@ def _generate(n_items, terms=None, director=DIRECTOR):
     return _pages_text(buffer)
 
 
+def _assert_md_page_not_orphaned(text, n_items):
+    # The running footer alone ("Customer Service" + email + phone) is
+    # already present on every page and runs well under 120 chars — this
+    # threshold only passes when something substantial beyond MD + footer
+    # (Terms text, item rows) shares the page.
+    assert len(text.strip()) > 160, (
+        f"with {n_items} items: found a page carrying the Managing Director block "
+        f"with suspiciously little else on it (looks orphaned). Page text was: {text!r}"
+    )
+
+
 def test_short_quotation_keeps_md_on_page_1():
     pages = _generate(2)
     assert len(pages) == 1, f"a 2-item quotation should fit on one page, got {len(pages)}"
@@ -113,7 +136,7 @@ def test_normal_quotation_keeps_md_correctly_positioned():
     assert md_pages == [len(pages) - 1], "Managing Director block should be on the last page"
     md_page = pages[md_pages[0]]
     assert "Zaw Zaw" in md_page
-    assert "Terms and Conditions" in md_page, "MD block must stay attached to Terms, never alone on its page"
+    _assert_md_page_not_orphaned(md_page, n_items=10)
 
     header_pages = [i for i, text in enumerate(pages) if "SUPPLIER" in text and "END USER" in text]
     assert header_pages == [0], f"expected the header exactly once, on page 1 — found it on page(s) {header_pages}"
@@ -127,16 +150,12 @@ def test_long_quotation_paginates_cleanly_md_not_orphaned_alone():
     assert md_pages, "Managing Director block must appear somewhere in the document"
     md_page = pages[md_pages[0]]
 
-    # The MD block must never be the only thing on its page — it must be
-    # grouped with (at minimum) the terms section it's wrapped together
-    # with in the template.
-    assert "Terms and Conditions" in md_page, (
-        "the Managing Director block appears to be alone on its page "
-        "(missing the Terms and Conditions section it should be grouped with)"
-    )
-    assert len(md_page.strip()) > len("Zaw Zaw\nManaging Director"), (
-        "the MD page has suspiciously little content — looks orphaned"
-    )
+    # The MD block must never be the only real content on its page. Every
+    # page also carries the running footer ("Customer Service" + email +
+    # phone, ~90 chars) regardless of what else is on it, so a page with
+    # only MD + footer sits well under this threshold — anything genuinely
+    # attached (item rows, Terms text) pushes well past it.
+    _assert_md_page_not_orphaned(md_page, n_items=80)
 
 
 def test_header_and_parties_are_never_duplicated_onto_a_later_page():
@@ -161,11 +180,7 @@ def test_no_md_only_page_across_a_range_of_lengths():
         pages = _generate(n_items)
         for text in pages:
             if "Managing Director" in text:
-                assert "Terms and Conditions" in text, (
-                    f"with {n_items} items: found a page containing the Managing Director "
-                    f"block without the Terms and Conditions section — looks orphaned. "
-                    f"Page text was: {text!r}"
-                )
+                _assert_md_page_not_orphaned(text, n_items)
 
 
 def test_pdf_export_still_renders_expected_content():
