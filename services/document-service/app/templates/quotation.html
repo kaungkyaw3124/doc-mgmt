@@ -63,27 +63,28 @@
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
-  /* Two earlier approaches both backfired (see git history): wrapping
+  /* Three earlier approaches all backfired (see git history): wrapping
      Terms+MD in a shared break-inside:avoid container made WeasyPrint
      move the whole group to the next page even when real remaining
      space clearly exceeded what it needed; pairing break-after:avoid
      here with break-before:avoid on .md-block caused the same
-     over-conservative "bail early, leave a gap" behavior — apparently
-     from the engine looking ahead to whether the *next* element would
-     also fit before deciding this one does. On top of that, .terms had
-     no break-inside protection at all, so the Terms paragraph itself
-     was being split mid-sentence across pages.
-     Settled on the simplest thing that actually works reliably: each
-     block only protects itself from being split apart internally, with
-     no break hint pointing at its neighbor. Terms (a few short lines)
-     and the MD block both comfortably fit standalone, so ordinary flow
-     places them wherever room allows — page 1 together whenever there's
-     space (the common case now that the @page margin is a realistic
-     1.5cm instead of the old guessed 13cm), or MD following directly
-     after Terms at the top of page 2 only when genuinely out of room. */
+     over-conservative "bail early, leave a gap" behavior; giving BOTH
+     .terms and .md-block their own independent break-inside: avoid
+     reproduced it again — real CI showed .md-block jumping to a fresh
+     page even when it was empty of real content and page 1 clearly had
+     room to spare, meaning WeasyPrint was treating the two adjacent
+     break-inside:avoid siblings as one joined run, not two independent
+     decisions.
+     .terms keeps break-inside: avoid — real testing confirmed that one
+     is necessary (without it, the Terms paragraph itself split
+     mid-sentence across pages). .md-block does NOT get break-inside:
+     avoid: it's short (a signature name/title, optionally a seal image)
+     and, immediately following Terms in ordinary flow with nothing else
+     asking the engine to treat the pair specially, lands wherever room
+     allows without triggering the sibling-run behavior above. */
   .terms { break-inside: avoid; page-break-inside: avoid; }
 
-  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; }
   .md-seal { width: 130px; height: 130px; }
   .md-name { font-weight: bold; margin-top: 6px; }
   .md-title { font-size: 9pt; color: #555; }
