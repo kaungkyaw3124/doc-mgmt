@@ -83,16 +83,37 @@ def get_user_access_level(db: Session, user: models.User, service_name: str) -> 
 def get_user_allowed_project_ids(db: Session, user: models.User):
     """
     Returns "ALL" (no restriction) or a list of project_id strings.
-    Restrictions are opt-in: if the user has no UserProjectAccess rows at
-    all, they see every project's documents (same as before this feature
-    existed). Project access is granted directly to the user (see
-    UserProjectAccess) — not via their roles, which now only carry service
-    permissions.
+
+    Unrestricted ("ALL") visibility is reserved for superusers. Everyone
+    else is scoped to their group(s): a user with explicit UserProjectAccess
+    grants sees exactly those projects; otherwise they fall back to the
+    union of their (active) groups' GroupProjectAccess pools. A user in no
+    active group, or whose group(s) have no pool entries, sees no projects
+    (an empty list, surfaced as the "NONE" header downstream) rather than
+    everything — a project must be explicitly granted to a group or user
+    before it's visible, so e.g. an Editor in one group can never see
+    another group's data just by having no grants configured.
     """
     if user.is_superuser:
         return "ALL"
 
     grants = db.query(models.UserProjectAccess).filter_by(user_id=user.id).all()
-    if not grants:
-        return "ALL"
-    return [str(g.project_id) for g in grants]
+    if grants:
+        return [str(g.project_id) for g in grants]
+
+    group_ids = [
+        m.group_id
+        for m in db.query(models.UserGroup)
+        .join(models.Group, models.Group.id == models.UserGroup.group_id)
+        .filter(models.UserGroup.user_id == user.id, models.Group.is_active == True)  # noqa: E712
+        .all()
+    ]
+    if not group_ids:
+        return []
+
+    pool_grants = (
+        db.query(models.GroupProjectAccess)
+        .filter(models.GroupProjectAccess.group_id.in_(group_ids))
+        .all()
+    )
+    return sorted({str(g.project_id) for g in pool_grants})

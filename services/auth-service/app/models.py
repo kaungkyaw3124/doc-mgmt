@@ -91,8 +91,12 @@ class RoleProjectAccess(Base):
     project_id is a plain UUID reference into document-service's own Project
     table (a different service/database) — not an enforced foreign key here,
     same loose-coupling pattern as RoleAccess.service_name being a plain string.
-    If a role has NO rows here at all, its users see documents from every
-    project (unrestricted) — restrictions are opt-in, not a new default lockdown.
+
+    NOTE: not currently read at authorization time (see
+    get_user_allowed_project_ids, which derives defaults from
+    GroupProjectAccess/UserProjectAccess instead) — kept for future
+    role-level grants, but a role having no rows here does NOT grant its
+    users unrestricted project visibility.
     """
     __tablename__ = "role_project_access"
     __table_args__ = (UniqueConstraint("role_id", "project_id", name="uq_role_project"),)
@@ -129,8 +133,9 @@ class UserProjectAccess(Base):
     service permissions (documents/products/search/etc.); project access
     is granted directly to a user, still drawn from their group's pool
     (see GroupProjectAccess) unless the granter is a superuser.
-    If a user has NO rows here at all, they see every project (unrestricted)
-    — same opt-in-restriction philosophy as before.
+    If a user has NO rows here at all, they fall back to their group(s)'
+    GroupProjectAccess pool (see get_user_allowed_project_ids) rather than
+    seeing every project — unrestricted ("ALL") visibility is superuser-only.
     """
     __tablename__ = "user_project_access"
     __table_args__ = (UniqueConstraint("user_id", "project_id", name="uq_user_project"),)
