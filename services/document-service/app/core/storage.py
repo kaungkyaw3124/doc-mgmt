@@ -14,10 +14,18 @@ s3_client = boto3.client(
 )
 
 # Separate client used ONLY for generating presigned URLs, pointed at the
-# publicly-reachable endpoint (e.g. localhost:9000) rather than the internal
-# Docker network hostname (e.g. minio:9000). Browsers/host machines can't
-# resolve Docker service names, so URLs meant to be opened outside the
-# Docker network must be signed against a host they can actually reach.
+# publicly-reachable endpoint rather than the internal Docker network
+# hostname (e.g. minio:9000). Browsers/host machines can't resolve Docker
+# service names, so URLs meant to be opened outside the Docker network
+# must be signed against a host they can actually reach.
+#
+# That host must be MINIO_PUBLIC_ENDPOINT=<host>:8080 — Nginx's published
+# port, which proxies /documents/ and /products/ through to MinIO (see
+# infra/nginx/nginx.conf.template) — NOT MinIO's own :9000, which is
+# never published to the host at all (infra/docker-compose.yml only
+# `expose`s it between containers). Setting this to port 9000 produces
+# presigned URLs the browser can never actually reach
+# (ERR_CONNECTION_REFUSED) — see docs/SECURITY_HARDENING_LOG.md.
 _public_s3_client = boto3.client(
     "s3",
     endpoint_url=f"{_protocol}://{settings.minio_public_endpoint}",
