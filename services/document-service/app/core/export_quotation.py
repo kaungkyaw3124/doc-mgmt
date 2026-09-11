@@ -234,12 +234,51 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                 row += 1
     last_item_row = row - 1
 
+    # Tax is a single rate applied uniformly to every line item (the
+    # document-level "Tax rate %" field in web/js/app.js) — read off the
+    # first item, same as the app's own document-detail view
+    # (`doc.items[0].tax_rate`). Only show the Subtotal/Tax breakdown when
+    # there actually is tax, same as the PDF export.
+    tax_rate_value = 0.0
+    if items_with_product and items_with_product[0][0].tax_rate is not None:
+        tax_rate_value = float(items_with_product[0][0].tax_rate)
+    subtotal_formula = ("=" + "+".join(f"F{r}" for r in main_item_rows)) if main_item_rows else 0
+
+    if tax_rate_value > 0:
+        ws.merge_cells(f"A{row}:E{row}")
+        ws[f"A{row}"] = "Subtotal:"
+        ws[f"A{row}"].font = Font(name="Arial", bold=True)
+        ws[f"A{row}"].alignment = Alignment(horizontal="right")
+        subtotal_cell = ws.cell(row=row, column=6)
+        subtotal_cell.value = subtotal_formula
+        subtotal_cell.font = Font(name="Arial", bold=True)
+        subtotal_cell.number_format = "#,##0.00"
+        subtotal_cell.border = BORDER
+        subtotal_row = row
+        row += 1
+
+        ws.merge_cells(f"A{row}:E{row}")
+        ws[f"A{row}"] = f"Tax ({tax_rate_value:g}%):"
+        ws[f"A{row}"].font = Font(name="Arial", bold=True)
+        ws[f"A{row}"].alignment = Alignment(horizontal="right")
+        tax_cell = ws.cell(row=row, column=6)
+        tax_cell.value = f"=F{subtotal_row}*{tax_rate_value}/100"
+        tax_cell.font = Font(name="Arial", bold=True)
+        tax_cell.number_format = "#,##0.00"
+        tax_cell.border = BORDER
+        tax_row = row
+        row += 1
+
+        total_formula = f"=F{subtotal_row}+F{tax_row}"
+    else:
+        total_formula = subtotal_formula
+
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "Total:"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     ws[f"A{row}"].alignment = Alignment(horizontal="right")
     total_cell = ws.cell(row=row, column=6)
-    total_cell.value = ("=" + "+".join(f"F{r}" for r in main_item_rows)) if main_item_rows else 0
+    total_cell.value = total_formula
     total_cell.font = Font(name="Arial", bold=True)
     total_cell.number_format = "#,##0.00"
     total_cell.border = BORDER

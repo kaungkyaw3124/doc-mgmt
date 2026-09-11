@@ -57,6 +57,8 @@
   table.items td.num { text-align: right; }
   table.items tr { break-inside: avoid; page-break-inside: avoid; }
   .group-header { font-style: italic; font-weight: bold; background: #fafafa; }
+  .subtotal-row td { border-top: none; }
+  .subtotal-row:first-of-type td { border-top: 1px solid #999; }
   .total-row td { font-weight: bold; border-top: 2px solid #333; }
   tr.sub-item td { font-size: 8.5pt; }
   tr.sub-item td.sub-label { text-align: right; }
@@ -166,6 +168,18 @@
       </tr>
       {% endfor %}
       {% endfor %}
+      {% if has_tax %}
+      <tr class="subtotal-row">
+        <td colspan="5" style="text-align:right;">Subtotal:</td>
+        <td class="num">{{ subtotal }}</td>
+        <td></td>
+      </tr>
+      <tr class="subtotal-row">
+        <td colspan="5" style="text-align:right;">Tax ({{ tax_rate }}%):</td>
+        <td class="num">{{ tax_total }}</td>
+        <td></td>
+      </tr>
+      {% endif %}
       <tr class="total-row">
         <td colspan="5" style="text-align:right;">Total:</td>
         <td class="num">{{ total }}</td>

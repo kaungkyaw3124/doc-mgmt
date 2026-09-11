@@ -79,16 +79,19 @@ DIRECTOR = {
 }
 
 
-def _document(terms=None):
+def _document(terms=None, subtotal=None, tax_total=None, total=None):
     return SimpleNamespace(
         issue_date=date(2026, 1, 1),
         currency="USD",
         doc_number="QT-0001",
         terms_and_conditions=terms,
+        subtotal=subtotal,
+        tax_total=tax_total,
+        total=total,
     )
 
 
-def _line_item(name, qty=1, price=100, remark=""):
+def _line_item(name, qty=1, price=100, remark="", tax_rate=None):
     return SimpleNamespace(
         description=name,
         quantity=qty,
@@ -96,11 +99,8 @@ def _line_item(name, qty=1, price=100, remark=""):
         unit="Nos",
         remark=remark,
         product_id=None,
+        tax_rate=tax_rate,
     )
-
-
-def _items(n):
-    return [(_line_item(f"Item {i}"), None, []) for i in range(1, n + 1)]
 
 
 def _pages_text(pdf_bytes):
@@ -108,11 +108,12 @@ def _pages_text(pdf_bytes):
     return [page.extract_text() or "" for page in reader.pages]
 
 
-def _generate(n_items, terms=None, director=DIRECTOR):
+def _generate(n_items, terms=None, director=DIRECTOR, tax_rate=None, subtotal=None, tax_total=None, total=None):
+    items = [(_line_item(f"Item {i}", tax_rate=tax_rate), None, []) for i in range(1, n_items + 1)]
     buffer = generate_quotation_pdf(
-        _document(terms=terms),
+        _document(terms=terms, subtotal=subtotal, tax_total=tax_total, total=total),
         CUSTOMER,
-        _items(n_items),
+        items,
         company=COMPANY,
         director=director,
     )
@@ -241,3 +242,40 @@ def test_terms_text_never_splits_mid_paragraph_across_pages():
                 f"first line is on — the paragraph looks like it split across pages. "
                 f"Page text was: {page_text!r}"
             )
+
+
+def test_pdf_shows_tax_breakdown_when_document_has_tax():
+    """Regression: the PDF's Total row used to be a plain sum of each
+    line's quantity * unit_price, completely ignoring tax — a document
+    created with a tax rate showed no trace of it in the exported PDF.
+    generate_quotation_pdf must now render Subtotal/Tax/Total using the
+    document's own stored (and authoritative) subtotal/tax_total/total,
+    not a value it recomputes itself."""
+    pages = _generate(3, tax_rate=10, subtotal=300, tax_total=30, total=330)
+    full_text = "\n".join(pages)
+    assert "Subtotal:" in full_text
+    assert "Tax (10%):" in full_text
+    assert "330.00" in full_text, "the grand total (subtotal + tax) must appear in the PDF"
+    assert "30.00" in full_text, "the tax amount itself must appear in the PDF"
+
+
+def test_pdf_omits_tax_breakdown_when_document_has_no_tax():
+    """A document with no tax (the common case) should show a plain
+    Total, not a zero-tax breakdown that implies tax was considered and
+    happened to be nothing."""
+    pages = _generate(3, tax_rate=0, subtotal=300, tax_total=0, total=300)
+    full_text = "\n".join(pages)
+    assert "Subtotal:" not in full_text
+    assert "Tax (" not in full_text
+    assert "300.00" in full_text
+
+
+def test_pdf_tax_breakdown_falls_back_when_document_predates_tax_total():
+    """A document saved before tax_total existed on the model (subtotal/
+    tax_total/total all None) must still render a sensible Total —
+    falling back to the sum of its line items — rather than crashing or
+    showing a blank/garbage total."""
+    pages = _generate(3)  # no subtotal/tax_total/total, no tax_rate — all defaults
+    full_text = "\n".join(pages)
+    assert "Subtotal:" not in full_text
+    assert "300.00" in full_text, "3 items at 100 each should still total 300.00"
