@@ -63,25 +63,27 @@
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
-  /* Softer hint than break-inside: avoid on the .closing-section wrapper
-     (removed — see git history): wrapping Terms+MD as one atomic
-     break-inside:avoid unit made WeasyPrint size that unit conservatively
-     and, when it judged the combined block "wouldn't fit", move the
-     *entire* group to the next page even when the actual remaining
-     space on the current page was clearly larger than the group needed
-     — leaving most of page 1 blank for no reason. break-after: avoid
-     here is a request, not a hard constraint: keep Terms and whatever
-     follows it together when there's room, but let genuinely long Terms
-     text wrap across a page boundary like any other flowing content
-     instead of dragging a same-size gap into existence to avoid it. */
-  .terms { break-after: avoid; page-break-after: avoid; }
+  /* Two earlier approaches both backfired (see git history): wrapping
+     Terms+MD in a shared break-inside:avoid container made WeasyPrint
+     move the whole group to the next page even when real remaining
+     space clearly exceeded what it needed; pairing break-after:avoid
+     here with break-before:avoid on .md-block caused the same
+     over-conservative "bail early, leave a gap" behavior — apparently
+     from the engine looking ahead to whether the *next* element would
+     also fit before deciding this one does. On top of that, .terms had
+     no break-inside protection at all, so the Terms paragraph itself
+     was being split mid-sentence across pages.
+     Settled on the simplest thing that actually works reliably: each
+     block only protects itself from being split apart internally, with
+     no break hint pointing at its neighbor. Terms (a few short lines)
+     and the MD block both comfortably fit standalone, so ordinary flow
+     places them wherever room allows — page 1 together whenever there's
+     space (the common case now that the @page margin is a realistic
+     1.5cm instead of the old guessed 13cm), or MD following directly
+     after Terms at the top of page 2 only when genuinely out of room. */
+  .terms { break-inside: avoid; page-break-inside: avoid; }
 
-  /* break-before: avoid pairs with .terms' break-after: avoid — the pair
-     is the actual break opportunity to discourage, not the group as a
-     whole; break-inside: avoid on the block itself stops the MD block
-     from being split apart internally if it ever lands right at a page
-     boundary. */
-  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; break-inside: avoid; page-break-inside: avoid; break-before: avoid; page-break-before: avoid; }
+  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; break-inside: avoid; page-break-inside: avoid; }
   .md-seal { width: 130px; height: 130px; }
   .md-name { font-weight: bold; margin-top: 6px; }
   .md-title { font-size: 9pt; color: #555; }

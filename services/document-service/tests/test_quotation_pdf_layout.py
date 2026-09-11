@@ -14,17 +14,34 @@ the orphaned .md-block (no page-break protection) would land alone on a
 mostly-empty page 2 that still carried the fully repeated header (since
 `running()` content repeats on every page unconditionally).
 
-Root cause #2 (fixed in a follow-up after real-world testing surfaced it):
+Root cause #2 (found via real-world testing after root cause #1 shipped):
 6aa04e1's own fix wrapped .terms + .md-block in a `.closing-section` with
 break-inside: avoid, meant to keep the signature block attached. In
 practice WeasyPrint sized that wrapper as one atomic unit and, judging it
 "wouldn't fit" in the remaining page-1 space, moved the *entire* group to
 page 2 — even when the actual remaining space was clearly larger than the
-group needed, leaving most of page 1 blank. Replaced with a lighter,
-targeted hint instead: break-after: avoid on .terms paired with
-break-before: avoid on .md-block (the actual break opportunity between
-them), plus break-inside: avoid staying on .md-block itself so it can't
-split internally.
+group needed, leaving most of page 1 blank.
+
+Root cause #3 (found via a second round of real-world testing, after
+root cause #2's own fix shipped): that fix replaced the wrapper with
+break-after: avoid on .terms paired with break-before: avoid on
+.md-block. This produced the SAME class of bug again — a large unused
+gap on page 1 before Terms+MD — apparently from the engine needing to
+look ahead and satisfy both hints together before committing to a
+break point. It also left .terms without any break-inside protection at
+all, so the Terms paragraph itself was observed splitting mid-sentence
+across two pages (e.g. "Price Validity" through "Delivery: DDP" staying
+on page 1, "Warranty..." continuing alone on page 2) — never intended,
+and never tested for directly until now.
+
+Settled on the simplest approach that actually holds up: each of .terms
+and .md-block only protects itself with its own break-inside: avoid (so
+neither can be split apart internally), with no break hint pointing at
+its neighbor. Ordinary document flow then places them wherever room
+allows — together on page 1 whenever there's space (the common case,
+now that the @page top margin is a realistic 1.5cm instead of root
+cause #1's guessed 13cm), or MD following directly after Terms at the
+top of page 2 only when a page 1 genuinely doesn't have room for both.
 
 No live Postgres or Docker needed — generate_quotation_pdf is called
 directly with lightweight fake objects (same pattern as
@@ -200,3 +217,27 @@ def test_quotation_without_director_has_no_md_block_and_still_renders():
     full_text = "\n".join(pages)
     assert "Managing Director" not in full_text
     assert "Terms and Conditions" in full_text
+
+
+def test_terms_text_never_splits_mid_paragraph_across_pages():
+    """Root cause #3: without break-inside: avoid on .terms itself, a
+    multi-line Terms paragraph could be sliced apart mid-sentence by the
+    pagination engine — the early lines staying on one page, the rest
+    continuing alone on the next. Every line must land on the same page
+    as every other line, regardless of how many items or how much
+    surrounding content there is."""
+    terms = "\n".join(f"Term line {i} of the agreement." for i in range(1, 9))
+    for n_items in (1, 10, 40):
+        pages = _generate(n_items, terms=terms)
+        terms_pages = [i for i, text in enumerate(pages) if "Term line 1 of the agreement." in text]
+        assert len(terms_pages) == 1, (
+            f"with {n_items} items: Terms text should start on exactly one page, "
+            f"found its first line on page(s) {terms_pages}"
+        )
+        page_text = pages[terms_pages[0]]
+        for i in range(1, 9):
+            assert f"Term line {i} of the agreement." in page_text, (
+                f"with {n_items} items: Terms line {i} is missing from the page its "
+                f"first line is on — the paragraph looks like it split across pages. "
+                f"Page text was: {page_text!r}"
+            )
