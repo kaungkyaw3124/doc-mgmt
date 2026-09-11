@@ -1401,30 +1401,42 @@ jobs:
           editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
           viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
 
-          # --- Two Editors: one with Delete explicitly granted, one
-          # without — same role name, proving Delete is not implied by
-          # Editor by default (the safe/intended default after this task).
+          # --- Two Editors: one with Delete, one without. RBAC here is
+          # role-based, not per-user — granting documents-delete to the
+          # shared "Editor" role would hand it to EVERY user on that
+          # role, including the one meant to prove Delete is NOT implied
+          # by Editor by default. So editor_del gets its own dedicated
+          # role (Editor's own documents:edit access, plus
+          # documents-delete); editor_nodel stays on the plain,
+          # never-touched-by-this-step "Editor" role.
+          editor_delete_role_id=$(curl -s -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Editor+Delete_$suffix\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          docs_grant_code=$(curl -s -o /tmp/grant_docs.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_delete_role_id/access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"service_name":"documents","access_level":"edit"}')
+          echo "grant documents:edit to the dedicated Editor+Delete role -> $docs_grant_code"
+          [ "$docs_grant_code" = "201" ] || { echo "FAIL: could not grant documents:edit (got $docs_grant_code)"; cat /tmp/grant_docs.json; fail=1; }
+
+          grant_code=$(curl -s -o /tmp/grant_delete.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_delete_role_id/access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"service_name":"documents-delete"}')
+          echo "grant documents-delete to the dedicated Editor+Delete role -> $grant_code"
+          [ "$grant_code" = "201" ] || { echo "FAIL: could not grant documents-delete (got $grant_code)"; cat /tmp/grant_delete.json; fail=1; }
+
           curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
-            -H 'Content-Type: application/json' -d "{\"username\":\"editor_del_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_del_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_delete_role_id\"}"
           curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
             -H 'Content-Type: application/json' -d "{\"username\":\"editor_nodel_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
           curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
             -H 'Content-Type: application/json' -d "{\"username\":\"viewer_del_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}"
-
-          grant_code=$(curl -s -o /tmp/grant_delete.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/access" "${admin_auth[@]}" \
-            -H 'Content-Type: application/json' -d '{"service_name":"documents-delete"}')
-          echo "grant documents-delete to the Editor role -> $grant_code"
-          [ "$grant_code" = "201" ] || { echo "FAIL: could not grant documents-delete (got $grant_code)"; cat /tmp/grant_delete.json; fail=1; }
 
           editor_del_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
             -H 'Content-Type: application/json' -d "{\"username\":\"editor_del_$suffix\",\"password\":\"correct horse battery staple\"}" \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
           editor_del_auth=(-H "Authorization: Bearer $editor_del_token")
 
-          # editor_nodel was created (and its role assigned) BEFORE the
-          # grant above — logging in now still reflects "no delete" since
-          # the grant lives on the shared role, re-evaluated fresh on
-          # every /verify call, not cached at creation time.
+          # editor_nodel is on the plain "Editor" role, which this step
+          # never grants documents-delete to — it must read as False.
           editor_nodel_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
             -H 'Content-Type: application/json' -d "{\"username\":\"editor_nodel_$suffix\",\"password\":\"correct horse battery staple\"}" \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
