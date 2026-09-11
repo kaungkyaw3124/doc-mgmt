@@ -76,6 +76,22 @@ http {
 
     server {
         listen 80;
+        # HTTPS listener, same locations as the plain-HTTP one below —
+        # generate-self-signed-cert.sh (run by docker-entrypoint.sh
+        # before this config is even rendered) guarantees these two
+        # files exist by the time Nginx starts. A self-signed cert is
+        # expected here: this app has no public DNS name to get a real
+        # (Let's Encrypt) certificate for on a private VM — see that
+        # script's own comments for what SERVER_NAME controls and why
+        # browsers still show a one-time trust prompt regardless. Kept
+        # alongside plain HTTP (not a redirect) so existing dev/CI usage
+        # of the :80 origin is completely unaffected — this is additive.
+        listen 443 ssl;
+        ssl_certificate /etc/nginx/certs/fullchain.pem;
+        ssl_certificate_key /etc/nginx/certs/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
 
         # Serve the demo web UI as static files at the root
         root /usr/share/nginx/html;

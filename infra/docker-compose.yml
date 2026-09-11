@@ -123,24 +123,43 @@ services:
       # check — same "development" default/meaning as every other
       # service's ENVIRONMENT setting in this project.
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      # Host/IP clients actually use to reach this deployment — becomes
+      # the self-signed HTTPS certificate's Subject Alternative Name
+      # (see infra/nginx/generate-self-signed-cert.sh). A private VM's
+      # IP is the normal case here; set this in infra/.env to match it,
+      # or a real hostname wouldn't need a mismatch warning either way.
+      SERVER_NAME: ${SERVER_NAME:-localhost}
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./nginx/cors.conf:/etc/nginx/cors.conf:ro
       - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
       - ./nginx/docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - ./nginx/validate-cors-config.sh:/validate-cors-config.sh:ro
+      - ./nginx/generate-self-signed-cert.sh:/generate-self-signed-cert.sh:ro
       - ../web:/usr/share/nginx/html:ro
+      # Persists the generated self-signed cert/key across container
+      # restarts — without this, every restart would regenerate them
+      # (generate-self-signed-cert.sh is only idempotent against files
+      # that actually still exist) and re-trigger every browser's
+      # one-time "new certificate" trust prompt for no reason.
+      - ./data/nginx-certs:/etc/nginx/certs
     # Render the template (substituting ONLY $INTERNAL_SHARED_SECRET and
     # $CORS_ALLOWED_ORIGIN — see the comment at the top of
     # nginx.conf.template for why the variable list passed to envsubst
     # must stay this explicit) into the real config, then start Nginx —
     # see infra/nginx/docker-entrypoint.sh (also runs the Task 7
-    # production CORS-config fail-fast check before rendering).
+    # production CORS-config fail-fast check, and generates a
+    # self-signed HTTPS cert if one doesn't already exist, before
+    # rendering).
     entrypoint:
       - /bin/sh
       - /docker-entrypoint.sh
     ports:
       - "8080:80"
+      # HTTPS — see infra/nginx/nginx.conf.template's `listen 443 ssl`.
+      # Kept alongside :8080 (not a redirect), so existing dev/CI usage
+      # of the plain-HTTP origin is unaffected.
+      - "8443:443"
     depends_on:
       - document-service
       - catalogue-service

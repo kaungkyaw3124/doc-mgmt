@@ -7,6 +7,7 @@ set -eu
 
 SCRIPT_DIR="$(dirname "$0")"
 "$SCRIPT_DIR/validate-cors-config.sh"
+"$SCRIPT_DIR/generate-self-signed-cert.sh"
 
 # envsubst is invoked with an explicit variable list, so it does NOT
 # touch Nginx's own $variables ($host, $uri, $upstream_http_..., etc.) in
