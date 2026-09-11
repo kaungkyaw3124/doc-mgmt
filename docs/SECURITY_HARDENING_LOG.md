@@ -4214,7 +4214,24 @@ alone on whatever page the overflow produced, which — because the
 header was a `running()` element — still carried the fully repeated
 header even when that page held nothing else of substance.
 
-### Implementation (in two passes — the second found by real-world testing)
+### Implementation (five passes — most of them found only by real
+deployment/CI evidence, not by reasoning about the CSS in advance)
+
+**Process note, stated plainly**: passes 3 and 4 below (`aafdf41`,
+`3f972ae`) were reported to the user as fixing the problem based on
+plausible-sounding reasoning about WeasyPrint's fragmentation engine,
+**without first confirming their own CI runs actually passed**. Both
+runs had, in fact, failed identically to the one before them — this was
+only discovered later, while investigating an unrelated bug (Task 17),
+when the same failure showed up again and a check of the CI history
+revealed neither previous "fix" had ever gone green. The user's own
+real-server test in between happened to pass anyway, because their
+specific document (3 items, short terms) didn't hit the edge case the
+automated tests exercise (8-10 items) — that was luck, not
+verification. Recorded here because the whole point of this branch's
+practice — real CI evidence before reporting anything fixed — exists
+precisely to prevent this, and skipping it here delayed reaching the
+actual root cause by two extra round-trips.
 
 **Pass 1 (`6aa04e1`)**: moved the header out of the running margin box
 into normal in-flow body content — it renders once, sized to what it
@@ -4228,19 +4245,53 @@ Terms as one unit.
 and sent screenshots — the header-duplication fix genuinely worked, but
 a new symptom appeared: page 1 ended with a large empty gap after the
 items table, and Terms+MD both landed on page 2 anyway despite
-page 1 visibly having more than enough room left. Root cause: wrapping
-Terms+MD in a `break-inside: avoid` container told WeasyPrint to treat
-them as one atomic unit — lay out the whole thing, and if it doesn't
-fit in the remaining space, move the *entire* group to the next page
-rather than split it. In practice WeasyPrint judged the combined block
-"wouldn't fit" even when the real remaining space was visibly larger
-than what the group needed, wasting most of page 1. Fixed by removing
-the wrapper entirely and replacing it with a lighter, targeted CSS
-Fragmentation hint on the actual break opportunity: `break-after: avoid`
-on `.terms` paired with `break-before: avoid` on `.md-block` — a request
-to avoid breaking there, not a hard atomic-unit constraint on an
-ancestor. `.md-block` keeps its own `break-inside: avoid` so it still
-can't split apart internally.
+page 1 visibly having more than enough room left. Diagnosed (at the
+time) as: wrapping Terms+MD in a `break-inside: avoid` container told
+WeasyPrint to treat them as one atomic unit — lay out the whole thing,
+and if it doesn't fit in the remaining space, move the *entire* group
+to the next page rather than split it, wasting most of page 1. Fixed
+by removing the wrapper entirely and replacing it with `break-after:
+avoid` on `.terms` paired with `break-before: avoid` on `.md-block`.
+
+**Pass 3 (`8041250`)**: a second real-server screenshot showed a
+different defect — the Terms paragraph itself splitting mid-sentence
+across two pages ("Price Validity" through "Delivery: DDP" on page 1,
+"Warranty..."/"hello" alone on page 2). Root cause: `.terms` had no
+`break-inside: avoid` at that point, so nothing stopped the paragraph
+splitting internally. Fixed by adding `break-inside: avoid` to
+`.terms` — but the break-after/break-before pairing from pass 2 was
+also removed at the same time, on the theory that it was independently
+responsible for pass 2's "wasted gap" symptom. **This second part of
+the diagnosis was wrong**, established only three passes later (pass
+5).
+
+**Pass 4 (`aafdf41`, then a second attempt inside `3f972ae`)**: with
+the pairing gone, real CI showed MD landing alone on its page again, at
+just 8-10 items, even with an MD block carrying no seal image and
+clear room on the page. Two different theories were tried and both
+reproduced the identical failure: adjacent `break-inside: avoid`
+siblings being treated as one joined run (fixed by removing
+`break-inside: avoid` from `.md-block` — no change in outcome), and
+`.md-block`'s `width: 200px; margin-left: auto` box model being
+mis-measured by the fragmentation engine (fixed by replacing it with a
+`text-align: right` + `inline-block` pattern — again no change in
+outcome). **Neither of these was reported to the user as confirmed by
+CI** — both should have been checked and were not; see the process note
+above.
+
+**Pass 5 (`1fed2ee`)**: investigating a fresh, identical failure while
+working on Task 17 led to actually diffing every attempt since pass 2
+against its real CI result. The pattern: every version that had
+`.terms`' `break-inside: avoid` *without* the break-after/before
+pairing failed identically (MD orphaned); the one version that had the
+pairing (pass 2) never actually had `.terms`' `break-inside: avoid` at
+all, so its real defect was the mid-sentence split, not the pairing.
+**The combination of both fixes together had never actually been
+tried.** Restored `break-after: avoid` on `.terms` (alongside its
+`break-inside: avoid`) and `break-before: avoid` on `.md-block`
+(keeping pass 4's `text-align: right`/`inline-block` box model, since
+it's a more ordinary pattern even though it wasn't the actual cause).
+This is the version confirmed genuinely green — see Actual results.
 
 Also found and fixed along the way (`b6280a5`): item rows were
 duplicating their own description text — `item_name` already falls back
@@ -4285,8 +4336,31 @@ page" assumption was simply wrong for that much content. Fixed in
 `b6280a5` (which also fixed the item-description duplication above) by
 asserting the real invariant instead of a fixed page count.
 
-Final run, commit `f51a173` (run `34559190797`), `document-service`
-job — real pytest output:
+Pass 2's run, commit `f51a173` (run `34559190797`), `document-service`
+job: `84 passed` (7 tests at the time) — but this run's green result
+reflected pass 2's break-after/break-before pairing without `.terms`'
+`break-inside: avoid` yet, so it did NOT cover the mid-sentence-split
+defect pass 3 later found and fixed for real.
+
+Passes 3 and 4 (`8041250`, `aafdf41`, `3f972ae`) were each reported as
+fixing the problem without confirming their own CI run — see the
+process note above. Checked retroactively while working on Task 17:
+all three of their `document-service` job runs (`34560179450`,
+`34560558679`, `34560888019`) show `conclusion: failure`, with the
+identical real pytest failure in `test_normal_quotation_keeps_md_
+correctly_positioned` and `test_no_md_only_page_across_a_range_of_
+lengths` each time:
+```
+AssertionError: with 10 items: found a page carrying the Managing Director block with suspiciously little else on it (looks orphaned). Page text was: 'Zaw Zaw\nManaging Director\nCustomer Service\nEmail: sales@acme.example\nPhone: +95 1 234 5678'
+assert 90 > 160
+```
+
+Final green run, pass 5, commit `1fed2ee` (run `34561589992`) — all
+five jobs `conclusion: success`; `document-service` job real pytest
+output, every test in `test_quotation_pdf_layout.py` (11 tests, 8
+pagination + 3 from Task 17) and `test_quotation_xlsx_tax.py` (2
+tests) genuinely passing, including the two that had failed identically
+across the three prior commits:
 ```
 tests/test_quotation_pdf_layout.py::test_short_quotation_keeps_md_on_page_1 PASSED
 tests/test_quotation_pdf_layout.py::test_normal_quotation_keeps_md_correctly_positioned PASSED
@@ -4295,52 +4369,187 @@ tests/test_quotation_pdf_layout.py::test_header_and_parties_are_never_duplicated
 tests/test_quotation_pdf_layout.py::test_no_md_only_page_across_a_range_of_lengths PASSED
 tests/test_quotation_pdf_layout.py::test_pdf_export_still_renders_expected_content PASSED
 tests/test_quotation_pdf_layout.py::test_quotation_without_director_has_no_md_block_and_still_renders PASSED
-====================== 84 passed, 2489 warnings in 8.39s =======================
+tests/test_quotation_pdf_layout.py::test_terms_text_never_splits_mid_paragraph_across_pages PASSED
+tests/test_quotation_pdf_layout.py::test_pdf_shows_tax_breakdown_when_document_has_tax PASSED
+tests/test_quotation_pdf_layout.py::test_pdf_omits_tax_breakdown_when_document_has_no_tax PASSED
+tests/test_quotation_pdf_layout.py::test_pdf_tax_breakdown_falls_back_when_document_predates_tax_total PASSED
+tests/test_quotation_xlsx_tax.py::test_xlsx_shows_tax_breakdown_when_items_have_tax PASSED
+tests/test_quotation_xlsx_tax.py::test_xlsx_omits_tax_breakdown_when_items_have_no_tax PASSED
+====================== 90 passed, 3173 warnings in 10.98s =======================
 ```
-That same run's `infra-integration` job failed, but in a step
-completely unrelated to this task (step 23, the Delete permission
-acceptance step from Task 15) — see Task 15's own "Actual results" for
-that separate root cause and fix (`14e1b04`), which brought the same
-run's successor to fully green across all five jobs.
 
 ### Recommendations / concerns
 
-1. The same `item_name`/`description` duplication pattern found in
-   `export_pdf.py` likely exists in `export_quotation.py` (the XLSX
-   export) too — it has near-identical fallback logic. Not fixed here
-   (out of scope for the reported PDF bug), but worth the same fix if
-   XLSX row height/duplication is ever reported.
+1. The same `item_name`/`description` duplication pattern originally
+   found in `export_pdf.py` also existed in `export_quotation.py` (the
+   XLSX export) — confirmed and left unfixed in this task (out of scope
+   for the reported PDF bug at the time); still unfixed as of Task 17,
+   which touched `export_quotation.py` for tax but didn't address this.
+   Worth fixing if XLSX row height/duplication is ever reported.
 2. CSS Fragmentation "avoid" hints (`break-before`/`break-after`/
    `break-inside: avoid`) are requests, not guarantees — WeasyPrint will
    still break where content genuinely has no room. The test suite
    checks the invariant that matters (MD never lands alone) rather than
    asserting exact page counts, since page boundaries are a function of
    font metrics this fix doesn't control.
-3. This task surfaced, twice, that a layout fix pushed to a real
-   deployment is the only way some WeasyPrint fragmentation behavior
-   differences actually show up — this sandbox has no way to run
-   WeasyPrint locally (no network access for `pip install`), so both
-   root causes here were only confirmed via real CI and the user's own
-   real-server screenshots, not local rendering.
+3. This task needed a layout fix pushed to a real deployment, more than
+   once, before some WeasyPrint fragmentation behaviors actually showed
+   up — this sandbox has no way to run WeasyPrint locally (no network
+   access for `pip install`), so every root cause here was only
+   confirmable via real CI and the user's own real-server screenshots,
+   never local rendering.
+4. **The actual process failure in this task** (see the process note
+   under Implementation) was not the difficulty of the bug — it was
+   reporting two intermediate fixes (`aafdf41`, `3f972ae`) as working
+   without checking their own CI runs first, which this branch's
+   standing practice exists specifically to prevent. Both runs had
+   failed identically to the one before them; that would have been
+   caught immediately by the same `mcp__github__get_job_logs` check
+   this task otherwise used consistently. The fix for the fix is
+   procedural, not technical: never report a change as working, and
+   never let a favorable real-world data point (the user's short
+   document passing) substitute for checking the CI run that specific
+   commit actually produced.
 
 ### Commits (branch `security/auth-hardening`)
 
 - `6aa04e1` — move header out of the running margin box into in-flow
   content; drop `@page` top margin from `13cm` to `1.5cm`; group
-  Terms+MD with `break-inside: avoid` (superseded by `f51a173`, see
-  below); add `test_quotation_pdf_layout.py`.
+  Terms+MD with `break-inside: avoid` (superseded by `f51a173`); add
+  `test_quotation_pdf_layout.py`.
 - `b6280a5` — fix item rows duplicating their own description text;
   relax the normal-quotation test to check the real invariant instead
   of a hardcoded page count.
 - `f51a173` — replace the `break-inside: avoid` Terms+MD wrapper (found
   to waste page-1 space) with `break-after`/`break-before: avoid` on
-  the actual break point between them; relax orphan-check assertions to
-  a content-length threshold instead of requiring literal co-located
-  text.
+  the actual break point between them (superseded by `8041250`); relax
+  orphan-check assertions to a content-length threshold.
+- `8041250` — add `break-inside: avoid` to `.terms` (fixes real
+  mid-sentence paragraph splitting); remove the break-after/before
+  pairing from `f51a173` on an incorrect theory (see process note) —
+  this is what actually reintroduced MD orphaning, not fixed until
+  `1fed2ee`. Add `test_terms_text_never_splits_mid_paragraph_across_pages`.
+- `aafdf41` — remove `break-inside: avoid` from `.md-block` (adjacent-
+  siblings theory); reported as fixing the problem without confirming
+  CI, which had failed identically. No functional improvement.
+- `3f972ae` — replace `.md-block`'s box model (`margin-left: auto` →
+  `text-align: right` + `inline-block`) (box-model theory); reported as
+  fixing the problem without confirming CI, which had failed
+  identically. No functional improvement to the orphaning bug, though
+  the box model itself is kept (more ordinary CSS).
+- `1fed2ee` — restore `break-after: avoid` (`.terms`) / `break-before:
+  avoid` (`.md-block`) alongside `.terms`' `break-inside: avoid` — the
+  combination that was never actually tried together. This is the
+  version confirmed genuinely green via real CI.
 
 ### Verification
 
 Real GitHub Actions CI, `mcp__github__get_job_logs` with
-`return_content: true`. Final green run: commit `f51a173`, run
-`34559190797`, `document-service` job — `84 passed` (all 7
-`test_quotation_pdf_layout.py` tests), quoted above.
+`return_content: true`. Final green run: commit `1fed2ee`, run
+`34561589992` — all five jobs `conclusion: success`; `document-service`
+job — `90 passed` (all 13 tests across `test_quotation_pdf_layout.py`
+and `test_quotation_xlsx_tax.py`), quoted above. Intermediate commits
+`aafdf41` and `3f972ae` were reported as working without this
+verification step — see Recommendations #4.
+
+
+## Task 17 — Quotation Exports (PDF + XLSX) Never Showed Tax
+
+### Task
+
+A document created with a tax rate had no trace of that tax anywhere
+in either exported file (PDF or XLSX) — the Total shown was always the
+pre-tax subtotal. Not a security vulnerability, recorded here as this
+branch's running change log.
+
+### Inspection
+
+`web/js/app.js` has a document-level "Tax rate %" field, applied
+uniformly to every line item at creation/update time —
+`_process_items` in `services/document-service/app/routers/
+documents.py` already computes and stores `doc.subtotal`, `doc.
+tax_total`, and `doc.total` correctly (always in sync with the current
+items, on both create and the full-update `PATCH` endpoint), and the
+app's own document-detail view already displays them correctly.
+
+Neither `app/core/export_pdf.py` nor `app/core/export_quotation.py`
+referenced `tax_rate`/`tax_total` anywhere — both computed their Total
+purely by summing each line's `quantity * unit_price`, silently
+dropping tax from every exported file while the app itself had it
+right the whole time.
+
+### Implementation
+
+Both exports now render a Subtotal / Tax (X%) / Total breakdown, using
+the document's own stored `subtotal`/`tax_total`/`total` (authoritative
+— not recomputed independently by the export code, avoiding any risk
+of the export disagreeing with what the app shows), shown only when
+the document actually has tax (a tax-free document keeps its plain
+Total, unchanged). Tax rate for display is read from the first line
+item (`items_with_product[0][0].tax_rate`), matching how the app's own
+document-detail view labels it (`doc.items[0].tax_rate`) — tax being a
+single rate applied uniformly, not per-item.
+
+`export_pdf.py`: falls back to the PDF's own recomputed subtotal (and
+zero tax) when `document.subtotal`/`tax_total`/`total` are `None` —
+covers a document saved before these columns existed.
+
+`export_quotation.py` (XLSX): Subtotal/Tax/Total are live formulas
+referencing each other (`Tax = Subtotal * rate/100`, `Total = Subtotal
++ Tax`), matching the existing Total row's already-live-formula
+behavior (a sum of the item Amount cells) — editing a line item's
+qty/price in Excel still recalculates the whole breakdown, not just a
+value frozen at export time.
+
+### Tests
+
+`services/document-service/tests/test_quotation_pdf_layout.py`: three
+new tests — a document with tax shows the Subtotal/Tax(X%)/Total
+breakdown and the correct grand total; a document without tax shows
+neither breakdown line, just a plain Total (never implies "tax was
+considered and was zero" for the common tax-free case); a document
+predating `tax_total` (all three fields `None`) falls back to a
+correct sum-of-items total instead of crashing or showing garbage.
+
+`services/document-service/tests/test_quotation_xlsx_tax.py` (new
+file): same three scenarios for the XLSX export, additionally asserting
+the actual formula strings (not just final values) — confirms Tax and
+Total are genuinely live formulas referencing the right cells, not
+static numbers that would go stale if edited in Excel.
+
+### Actual results (real GitHub Actions CI, `mcp__github__get_job_logs`
+with `return_content: true`)
+
+Commit `afa9836`'s `document-service` job: all 5 new tax tests passed
+cleanly (`test_pdf_shows_tax_breakdown_when_document_has_tax`,
+`test_pdf_omits_tax_breakdown_when_document_has_no_tax`,
+`test_pdf_tax_breakdown_falls_back_when_document_predates_tax_total`,
+`test_xlsx_shows_tax_breakdown_when_items_have_tax`,
+`test_xlsx_omits_tax_breakdown_when_items_have_no_tax`) — the job's
+overall failure that run was the pre-existing, unrelated MD-orphaning
+pagination bug (Task 16, root cause #3/#4), not this fix.
+
+Final green run, commit `1fed2ee`, run `34561589992`,
+`document-service` job — `90 passed, 3173 warnings in 10.98s`,
+including all 5 tax tests (quoted in full under Task 16's "Actual
+results", since this task's fix and Task 16's final pagination fix
+landed in the same eventually-green CI run).
+
+### Recommendations / concerns
+
+The same `item_name`/`description` duplication bug fixed in
+`export_pdf.py` (Task 16) is still present in `export_quotation.py`
+(this task touched it for tax but didn't fix that separate issue) —
+see Task 16's Recommendations #1.
+
+### Commits (branch `security/auth-hardening`)
+
+- `afa9836` — add Subtotal/Tax/Total breakdown to both PDF and XLSX
+  quotation exports; new tests in both.
+
+### Verification
+
+Real GitHub Actions CI, `mcp__github__get_job_logs` with
+`return_content: true`. Tax tests confirmed passing on `afa9836`
+directly; full green confirmation (alongside Task 16's pagination fix)
+on commit `1fed2ee`, run `34561589992`.
