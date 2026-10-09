@@ -30,6 +30,8 @@ from app.core.export_pdf import generate_quotation_pdf
 from app.core.export_quotation import generate_quotation_xlsx
 
 PT = 96 / 72  # px per pt
+MM = 96 / 25.4  # px per mm
+SIDE_MARGIN_PX = 11 * MM  # left/right page margin (11mm)
 
 COMPANY = {
     "name": "Acme Supplier Co., Ltd.",
@@ -319,7 +321,7 @@ def test_logo_stays_left_and_seal_right_inside_margins_and_clear_of_heading(layo
     heading = _texts(result.pages[0], "QUOTATION")[0]
     supplier = _texts(result.pages[0], "SUPPLIER")[0]
     assert logo.position_x == pytest.approx(supplier.position_x, abs=1), "logo must stay on the left content edge"
-    assert seal.position_x + seal.width <= 793.7 - 2 * 96 / 2.54 + 1, "seal must stay inside the right margin"
+    assert seal.position_x + seal.width <= 793.7 - SIDE_MARGIN_PX + 1, "seal must stay inside the right margin"
     assert logo.position_y + logo.height <= heading.position_y, "logo overlaps the heading"
     assert logo.position_y == pytest.approx(seal.position_y, abs=0.5), "logo and seal must share a top edge"
 
@@ -384,7 +386,7 @@ def test_long_footer_values_wrap_instead_of_being_clipped(layout):
     company = dict(COMPANY, support_email="very.long.customer.service.mailbox.name.for.testing@a-really-long-company-domain-name.example.com",
                    contact_no="+95 1 234 5678, +95 9 111 222 333, +95 9 444 555 666, +95 9 777 888 999")
     result = layout(company=company, n_items=40)
-    page_right = 793.7 - 2 * 96 / 2.54
+    page_right = 793.7 - SIDE_MARGIN_PX
     for n, page in enumerate(result.pages, 1):
         lines = [b for b in page if getattr(b, "text", None) and b.position_y > 900]
         assert lines
@@ -404,3 +406,57 @@ def test_long_unbreakable_supplier_values_wrap_inside_their_column(layout):
     for needle in ("xxxxx", "Chief-Executive", "Acme"):
         for b in [b for b in _texts(p, needle) if b.position_y < 600]:  # parties block, not the footer
             assert b.position_x + b.width <= end_user_x, f"'{b.text[:20]}' spills into the END USER column"
+
+
+# ---------------------------------------------------------------------------
+# Follow-up — left/right page margins 20mm -> 11mm (usable width 170 -> 188mm)
+# ---------------------------------------------------------------------------
+
+def _boxes_with_class(boxes, name):
+    out = []
+    for b in boxes:
+        el = getattr(b, "element", None)
+        if el is not None and hasattr(el, "get") and name in (el.get("class") or "").split():
+            out.append(b)
+    return out
+
+
+@pytest.mark.parametrize("n_items", [3, 40])
+def test_side_margins_are_11mm_and_content_uses_the_full_width(layout, n_items):
+    result = layout(n_items=n_items, logo_bytes=_png(), seal_bytes=_png())
+    for n, page in enumerate(result.pages, 1):
+        page_box = page[0]
+        assert page_box.margin_left == pytest.approx(11 * MM, abs=0.5), f"page {n} left margin"
+        assert page_box.margin_right == pytest.approx(11 * MM, abs=0.5), f"page {n} right margin"
+    first = result.pages[0]
+    table = _boxes_with_class(first, "items")[0]
+    assert table.position_x == pytest.approx(11 * MM, abs=0.5)
+    assert table.width == pytest.approx(188 * MM, abs=1), f"items table is {table.width / MM:.1f}mm wide, expected 188mm"
+
+
+def test_supplier_and_end_user_blocks_align_with_the_table_edges(layout):
+    first = layout(logo_bytes=_png(), seal_bytes=_png()).pages[0]
+    table = _boxes_with_class(first, "items")[0]
+    left_party, right_party = sorted(_boxes_with_class(first, "party"), key=lambda b: b.position_x)
+    assert left_party.position_x == pytest.approx(table.position_x, abs=0.5)
+    assert right_party.position_x + right_party.width == pytest.approx(table.position_x + table.width, abs=0.5)
+    logo, seal = sorted(_images(first), key=lambda i: i.position_x)[:2]
+    assert logo.position_x == pytest.approx(table.position_x, abs=0.5)
+    assert seal.position_x + seal.width == pytest.approx(table.position_x + table.width, abs=0.5), "seal must sit on the right table edge"
+
+
+def test_footer_and_terms_use_the_same_width_on_every_page(layout):
+    result = layout(n_items=40, director_seal_bytes=_png())
+    for n, page in enumerate(result.pages, 1):
+        footer = _boxes_with_class(page, "pdf-footer")
+        assert footer and footer[0].width == pytest.approx(188 * MM, abs=1), f"page {n} footer width"
+    terms = [b for p in result.pages for b in _boxes_with_class(p, "terms")][0]
+    assert terms.width == pytest.approx(188 * MM, abs=1)
+
+
+def test_nothing_overflows_the_wider_page(layout):
+    result = layout(n_items=12, logo_bytes=_png(), seal_bytes=_png())
+    for n, page in enumerate(result.pages, 1):
+        for b in page:
+            if getattr(b, "text", None):
+                assert SIDE_MARGIN_PX - 1 <= b.position_x and b.position_x + b.width <= 793.7 - SIDE_MARGIN_PX + 1, f"page {n}: '{b.text[:25]}' outside the 11mm margins"

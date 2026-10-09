@@ -17,7 +17,9 @@
        page 1, sized to whatever it actually needs — no guessing, no
        reserved dead space on every page, and it no longer repeats on later
        pages. */
-    margin: 1.2cm 2cm 3cm 2cm;
+    /* Left/right 11mm (was 20mm): usable width 188mm instead of 170mm. The
+       footer's width below must equal 210mm - 2*11mm. */
+    margin: 1.2cm 11mm 3cm 11mm;
     @bottom-center { content: element(pdfFooter); vertical-align: top; }
   }
   /* margin: 0 — the browser default 8px body margin was stacking on top of
@@ -35,7 +37,7 @@
      into the @page bottom margin box above — WeasyPrint then repeats
      it on every page automatically. Kept running (small, fixed height,
      genuinely meant to appear on every page). */
-  .pdf-footer { position: running(pdfFooter); width: 17cm; }
+  .pdf-footer { position: running(pdfFooter); width: 188mm; }
 
   .header-top {
     display: flex; justify-content: space-between; align-items: flex-start;
