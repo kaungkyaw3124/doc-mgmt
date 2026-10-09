@@ -122,11 +122,11 @@
 
   .footer h3 { font-size: 11pt; margin-bottom: 6px; }
   /* Customer Service footer: heading unchanged (11pt bold h3, inherited from
-     the UA h3 rule); only the Email / Phone lines shrink, 10.5pt -> 8.5pt.
+     the UA h3 rule); only the Email / Phone lines shrink, 10.5pt -> 7pt.
      overflow-wrap lets an unusually long address wrap inside the 17cm footer
      instead of running off the page edge. */
   .pdf-footer h3 { font-size: 11pt; margin-bottom: 6px; }
-  .pdf-footer .footer-line { font-size: 8.5pt; overflow-wrap: anywhere; }
+  .pdf-footer .footer-line { font-size: 7pt; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -144,8 +144,9 @@
         <h3>SUPPLIER</h3>
         <table>
           <tr><td class="label">Name</td><td>{{ company.name if company else "—" }}</td></tr>
-          {# Position of the MD selected on this document (CompanyDirector.position). Omitted — not a placeholder — when no MD is selected or the MD has no position. #}
-          {% if director and director.position %}<tr><td class="label">Position</td><td>{{ director.position }}</td></tr>{% endif %}
+          {# Position: the selected MD's own position (CompanyDirector.position) if set, otherwise the company's "Signer position" (Company.position). Row omitted — no placeholder — when neither exists. #}
+          {% set supplier_position = (director.position if director and director.position else None) or (company.position if company and company.position else None) %}
+          {% if supplier_position %}<tr><td class="label">Position</td><td>{{ supplier_position }}</td></tr>{% endif %}
           <tr><td class="label">Address</td><td>{{ company.address if company else "" }}</td></tr>
           <tr><td class="label">Contact No</td><td>{{ company.contact_no if company else "" }}</td></tr>
           <tr><td class="label">Email</td><td>{{ company.support_email if company else "" }}</td></tr>

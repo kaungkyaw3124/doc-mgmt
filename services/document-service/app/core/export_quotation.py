@@ -144,8 +144,10 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     supplier_rows = []
     # The selected MD's own position (CompanyDirector.position); omitted when
     # no MD is selected or the MD has none (e.g. created before the column).
-    if director and director.get("position"):
-        supplier_rows.append(("Position", _safe_str(director["position"])))
+    # Falls back to the company's "Signer position" when the MD has none.
+    supplier_position = (director or {}).get("position") or (company or {}).get("position")
+    if supplier_position:
+        supplier_rows.append(("Position", _safe_str(supplier_position)))
     supplier_rows += [
         ("Address", _safe_str(company.get("address")) if company else ""),
         ("Contact No", _safe_str(company.get("contact_no")) if company else ""),

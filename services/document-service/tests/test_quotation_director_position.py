@@ -20,7 +20,7 @@ from app.core.export_pdf import generate_quotation_pdf
 from app.core.export_quotation import generate_quotation_xlsx
 from app.routers import documents as documents_router
 
-COMPANY = {"name": "Acme Supplier Co., Ltd.", "position": "Director", "address": "No. 1 Sample Road",
+COMPANY = {"name": "Acme Supplier Co., Ltd.", "position": None, "address": "No. 1 Sample Road",
            "contact_no": "+95 1 234 5678", "support_email": "sales@acme.example"}
 CUSTOMER = {"id": str(uuid.uuid4()), "name": "Beta Customer", "billing_address": {"line1": "Street 9"}}
 
@@ -89,6 +89,27 @@ def test_pdf_position_is_escaped():
 def test_signature_title_uses_position_and_falls_back_for_legacy_directors():
     assert "Head of Sales" in _pdf_text(_director(position="Head of Sales")).split("Date")[-1]
     assert "Managing Director" in _pdf_text(_director())  # legacy: unchanged output
+
+
+def _pdf_text_company(company, director):
+    pdf = generate_quotation_pdf(_doc(), CUSTOMER, [(_item(), None, [])], company=company, director=director)
+    return "\n".join(p.extract_text() for p in PdfReader(BytesIO(pdf.getvalue())).pages)
+
+
+def test_pdf_falls_back_to_company_signer_position():
+    company = dict(COMPANY, position="Director")
+    # MD without a position, and no MD at all -> company's Signer position
+    for d in (_director(), None):
+        assert "Director" in _supplier_block(_pdf_text_company(company, d))
+    # an MD's own position wins over the company's
+    block = _supplier_block(_pdf_text_company(company, _director(position="Founder")))
+    assert "Founder" in block and "Director" not in block.replace("Managing Director", "")
+
+
+def test_xlsx_falls_back_to_company_signer_position():
+    wb = load_workbook(generate_quotation_xlsx(_doc(), CUSTOMER, [(_item(), None, [])], company=dict(COMPANY, position="Director"), director=None))
+    values = [c.value for row in wb.active.iter_rows() for c in row]
+    assert "Position" in values and "Director" in values
 
 
 # ---- XLSX -----------------------------------------------------------------

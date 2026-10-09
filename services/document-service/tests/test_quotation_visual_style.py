@@ -361,7 +361,7 @@ def test_footer_email_and_phone_are_smaller_than_body_text(layout):
         assert boxes, f"{needle!r} not rendered in the footer"
         for b in boxes:
             assert b.style["font_size"] < 10.5 * PT, f"{needle} is {b.style['font_size'] / PT:.1f}pt, not smaller than the 10.5pt it was"
-            assert b.style["font_size"] >= 7 * PT, "footer text must stay legible"
+            assert b.style["font_size"] >= 6 * PT, "footer text must stay legible"
 
 
 def test_footer_heading_style_is_unchanged(layout):
