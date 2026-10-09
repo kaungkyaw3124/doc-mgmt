@@ -782,6 +782,7 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
                 "address": director_row.address,
                 "contact_no": director_row.contact_no,
                 "email": director_row.email,
+                "position": director_row.position,  # the selected MD's own title; None for legacy directors
             }
             if director_row.seal_object_key:
                 try:

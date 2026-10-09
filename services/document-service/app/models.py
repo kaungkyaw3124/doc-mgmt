@@ -56,6 +56,7 @@ class CompanyDirector(Base):
     address = Column(Text)
     contact_no = Column(String(50))
     email = Column(String(255))
+    position = Column(String(100))  # this MD's title (e.g. "Managing Director") — shown in the quotation's Supplier block when the director is selected on a document; NULL for directors created before this column existed
     seal_object_key = Column(String(500))
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

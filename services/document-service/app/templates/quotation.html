@@ -17,10 +17,13 @@
        page 1, sized to whatever it actually needs — no guessing, no
        reserved dead space on every page, and it no longer repeats on later
        pages. */
-    margin: 1.5cm 2cm 3cm 2cm;
+    margin: 1.2cm 2cm 3cm 2cm;
     @bottom-center { content: element(pdfFooter); vertical-align: top; }
   }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #1a1a1a; }
+  /* margin: 0 — the browser default 8px body margin was stacking on top of
+     the @page margin, adding an unintended extra 8px at the top (and on each
+     side) of every page. The @page margin is now the only page margin. */
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #1a1a1a; }
 
   /* Normal in-flow block (not `position: running()`): it renders once, at
      the top of page 1, and is never repeated on later pages — this is what
@@ -36,17 +39,32 @@
 
   .header-top {
     display: flex; justify-content: space-between; align-items: flex-start;
-    margin-bottom: 26px; min-height: 100px;
+    margin-bottom: 10px;
+    /* No min-height: it reserved 100px of blank space above the heading even
+       when the company has no logo/seal. The row is as tall as its images. */
   }
-  .logo { max-width: 130px; max-height: 130px; }
-  .seal { max-width: 130px; max-height: 130px; }
-  .title { font-size: 22pt; font-weight: bold; margin-bottom: 8px; }
-  .date-line { margin-bottom: 14px; }
-  .parties { display: flex; justify-content: space-between; margin-bottom: 18px; }
+  .header-top img { display: block; }  /* no inline-baseline gap under the image */
+  /* Header logo and company seal: 120px (was 130px). max-width/max-height
+     (not fixed width+height) so any logo shrinks proportionally — aspect
+     ratio is preserved. The MD's signature seal (.md-seal) is a separate
+     element and keeps its size. */
+  .logo { max-width: 120px; max-height: 120px; }
+  .seal { max-width: 120px; max-height: 120px; }
+  /* Document heading: 16pt bold dark red (#c00000, same red the XLSX export
+     uses). Was 22pt near-black, which read as oversized next to the 10.5pt
+     body. Scoped to .title — used only by the QUOTATION heading; the
+     SUPPLIER / END USER / Terms / Customer Service headings are h3 and have
+     their own rules, so they are unaffected. */
+  .title { font-size: 16pt; font-weight: bold; color: #c00000; margin-bottom: 4px; }
+  .date-line { margin-bottom: 10px; }
+  .parties { display: flex; justify-content: space-between; margin-bottom: 12px; }
   .party { width: 48%; }
-  .party h3 { font-size: 11pt; margin: 0 0 6px; border-bottom: 1px solid #999; padding-bottom: 3px; }
-  .party table { width: 100%; font-size: 10pt; }
-  .party td { padding: 2px 0; vertical-align: top; }
+  .party h3 { font-size: 11pt; margin: 0 0 4px; border-bottom: 1px solid #999; padding-bottom: 3px; }
+  /* table-layout: fixed + overflow-wrap: a single long unbreakable value (an
+     email, a long Position) used to widen the auto-layout table past its 48%
+     column and overprint the neighbouring END USER block; now it wraps. */
+  .party table { width: 100%; font-size: 10pt; table-layout: fixed; }
+  .party td { padding: 2px 0; vertical-align: top; overflow-wrap: anywhere; }
   .party td.label { width: 90px; color: #555; }
 
   table.items { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
@@ -103,6 +121,12 @@
   .md-title { font-size: 9pt; color: #555; }
 
   .footer h3 { font-size: 11pt; margin-bottom: 6px; }
+  /* Customer Service footer: heading unchanged (11pt bold h3, inherited from
+     the UA h3 rule); only the Email / Phone lines shrink, 10.5pt -> 8.5pt.
+     overflow-wrap lets an unusually long address wrap inside the 17cm footer
+     instead of running off the page edge. */
+  .pdf-footer h3 { font-size: 11pt; margin-bottom: 6px; }
+  .pdf-footer .footer-line { font-size: 8.5pt; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -120,6 +144,8 @@
         <h3>SUPPLIER</h3>
         <table>
           <tr><td class="label">Name</td><td>{{ company.name if company else "—" }}</td></tr>
+          {# Position of the MD selected on this document (CompanyDirector.position). Omitted — not a placeholder — when no MD is selected or the MD has no position. #}
+          {% if director and director.position %}<tr><td class="label">Position</td><td>{{ director.position }}</td></tr>{% endif %}
           <tr><td class="label">Address</td><td>{{ company.address if company else "" }}</td></tr>
           <tr><td class="label">Contact No</td><td>{{ company.contact_no if company else "" }}</td></tr>
           <tr><td class="label">Email</td><td>{{ company.support_email if company else "" }}</td></tr>
@@ -139,8 +165,8 @@
 
   <div class="pdf-footer">
     <h3>Customer Service</h3>
-    <div>Email: {{ company.support_email if company else "" }}</div>
-    <div>Phone: {{ company.contact_no if company else "" }}</div>
+    <div class="footer-line">Email: {{ company.support_email if company else "" }}</div>
+    <div class="footer-line">Phone: {{ company.contact_no if company else "" }}</div>
   </div>
 
   <table class="items">
@@ -204,7 +230,7 @@
     <div class="md-block-inner">
       {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
       <div class="md-name">{{ director.name }}</div>
-      <div class="md-title">Managing Director</div>
+      <div class="md-title">{{ director.position or "Managing Director" }}</div>
     </div>
   </div>
   {% endif %}

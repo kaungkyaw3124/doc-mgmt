@@ -69,6 +69,7 @@ class CompanyDirectorCreate(BaseModel):
     address: Optional[str] = None
     contact_no: Optional[str] = None
     email: Optional[str] = None
+    position: Optional[str] = None
 
 
 class CompanyDirectorUpdate(BaseModel):
@@ -76,6 +77,7 @@ class CompanyDirectorUpdate(BaseModel):
     address: Optional[str] = None
     contact_no: Optional[str] = None
     email: Optional[str] = None
+    position: Optional[str] = None
 
 
 class CompanyDirectorOut(BaseModel):
@@ -86,6 +88,7 @@ class CompanyDirectorOut(BaseModel):
     address: Optional[str]
     contact_no: Optional[str]
     email: Optional[str]
+    position: Optional[str] = None  # None for directors created before the column existed
     seal_object_key: Optional[str]
     sort_order: int
     created_at: datetime

@@ -1161,6 +1161,10 @@ function buildDirectorRow(director) {
         <input type="text" class="director-name" placeholder="Managing Director's name" value="${director ? escapeHtml(director.name) : ''}">
       </div>
       <div style="min-width:180px;">
+        <label>Position</label>
+        <input type="text" class="director-position" maxlength="100" placeholder="Managing Director" value="${director ? escapeHtml(director.position || '') : ''}">
+      </div>
+      <div style="min-width:180px;">
         <label>Address</label>
         <input type="text" class="director-address" placeholder="Mayangon, Yangon" value="${director ? escapeHtml(director.address || '') : ''}">
       </div>
@@ -1316,6 +1320,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       const address = row.querySelector('.director-address').value.trim() || null;
       const contact_no = row.querySelector('.director-contact').value.trim() || null;
       const email = row.querySelector('.director-email').value.trim() || null;
+      const position = row.querySelector('.director-position').value.trim() || null;
       const sealFile = row.querySelector('.director-seal-file').files[0];
       let directorId = row.dataset.directorId;
 
@@ -1323,7 +1328,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         if (!name) continue; // a genuinely blank unused row — skip silently
         const created = await apiFetch('/companies/' + company.id + '/directors', {
           method: 'POST',
-          body: JSON.stringify({ name, address, contact_no, email })
+          body: JSON.stringify({ name, address, contact_no, email, position })
         });
         if (!created) {
           showBanner('company-modal-banner', 'Company saved, but one MD row failed to save.');
@@ -1334,7 +1339,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       } else if (name) {
         await apiFetch('/companies/' + company.id + '/directors/' + directorId, {
           method: 'PATCH',
-          body: JSON.stringify({ name, address, contact_no, email })
+          body: JSON.stringify({ name, address, contact_no, email, position })
         });
       }
 

@@ -103,8 +103,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     if logo_bytes and logo_mime != "image/svg+xml":
         try:
             img = XLImage(BytesIO(logo_bytes))
-            img.width = 100
-            img.height = 100
+            img.width = 90
+            img.height = 90
             ws.add_image(img, f"A{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
@@ -112,8 +112,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     if seal_bytes and seal_mime != "image/svg+xml":
         try:
             seal_img = XLImage(BytesIO(seal_bytes))
-            seal_img.width = 100
-            seal_img.height = 100
+            seal_img.width = 90
+            seal_img.height = 90
             ws.add_image(seal_img, f"F{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
@@ -123,7 +123,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
 
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "QUOTATION"
-    ws[f"A{row}"].font = Font(name="Arial", size=18, bold=True)
+    # Same heading treatment as the PDF (quotation.html .title): 16pt bold
+    # dark red, down from 18pt black.
+    ws[f"A{row}"].font = Font(name="Arial", size=16, bold=True, color="C00000")
     row += 2
 
     ws[f"A{row}"] = "Date:"
@@ -139,7 +141,12 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"E{row}"].font = Font(name="Arial", bold=True)
     row += 1
 
-    supplier_rows = [
+    supplier_rows = []
+    # The selected MD's own position (CompanyDirector.position); omitted when
+    # no MD is selected or the MD has none (e.g. created before the column).
+    if director and director.get("position"):
+        supplier_rows.append(("Position", _safe_str(director["position"])))
+    supplier_rows += [
         ("Address", _safe_str(company.get("address")) if company else ""),
         ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
         ("Email", _safe_str(company.get("support_email")) if company else ""),
@@ -320,7 +327,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         ws[f"F{row}"].alignment = Alignment(horizontal="center")
         row += 1
         ws.merge_cells(f"F{row}:G{row}")
-        ws[f"F{row}"] = "Managing Director"
+        ws[f"F{row}"] = _safe_str(director.get("position")) or "Managing Director"
         ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
         ws[f"F{row}"].alignment = Alignment(horizontal="center")
         row = max(row, seal_row + 7) + 1
