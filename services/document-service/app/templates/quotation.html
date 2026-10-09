@@ -50,12 +50,12 @@
      element and keeps its size. */
   .logo { max-width: 120px; max-height: 120px; }
   .seal { max-width: 120px; max-height: 120px; }
-  /* Document heading: 16pt bold dark red (#c00000, same red the XLSX export
+  /* Document heading: same size as the Date line below it (inherits the 10.5pt body size), bold dark red (#c00000, same red the XLSX export
      uses). Was 22pt near-black, which read as oversized next to the 10.5pt
      body. Scoped to .title — used only by the QUOTATION heading; the
      SUPPLIER / END USER / Terms / Customer Service headings are h3 and have
      their own rules, so they are unaffected. */
-  .title { font-size: 16pt; font-weight: bold; color: #c00000; margin-bottom: 4px; }
+  .title { font-size: 10.5pt; font-weight: bold; color: #c00000; margin-bottom: 4px; }
   .date-line { margin-bottom: 10px; }
   .parties { display: flex; justify-content: space-between; margin-bottom: 12px; }
   .party { width: 48%; }

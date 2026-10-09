@@ -123,9 +123,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
 
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "QUOTATION"
-    # Same heading treatment as the PDF (quotation.html .title): 16pt bold
-    # dark red, down from 18pt black.
-    ws[f"A{row}"].font = Font(name="Arial", size=16, bold=True, color="C00000")
+    # Same heading treatment as the PDF (quotation.html .title): same size as the Date line
+    # (11pt), bold dark red, down from 18pt black.
+    ws[f"A{row}"].font = Font(name="Arial", size=11, bold=True, color="C00000")
     row += 2
 
     ws[f"A{row}"] = "Date:"

@@ -154,13 +154,12 @@ def test_heading_is_red(layout):
     )
 
 
-def test_heading_is_smaller_than_before_but_still_a_heading(layout):
-    size = _heading(layout()).style["font_size"]
-    assert size < OLD_HEADING_PX, f"heading must be smaller than the old 22pt, got {size / PT:.1f}pt"
-    # A normal document-heading size: clearly distinguishable from the 10.5pt
-    # body (>= 1.3x) but not oversized (<= 20pt).
-    assert size >= BODY_PX * 1.3, f"heading ({size / PT:.1f}pt) is no longer clearly bigger than body text"
-    assert size <= 20 * PT, f"heading ({size / PT:.1f}pt) is still oversized"
+def test_heading_is_same_size_as_the_date_line(layout):
+    result = layout()
+    size = _heading(result).style["font_size"]
+    date_size = _texts(result.pages[0], "Date:")[0].style["font_size"]
+    assert size == pytest.approx(date_size, abs=0.01), f"heading {size / PT:.1f}pt != date {date_size / PT:.1f}pt"
+    assert size < OLD_HEADING_PX
 
 
 def test_heading_stays_bold_and_left_aligned_above_the_date(layout):
@@ -194,7 +193,8 @@ def test_xlsx_heading_is_red_and_smaller_too():
     assert len(cells) == 1
     font = cells[0].font
     assert font.color is not None and font.color.rgb.endswith("C00000"), "XLSX heading must be red"
-    assert font.sz < 18, "XLSX heading must be smaller than the old 18pt"
+    date_font = next(c for row in wb.active.iter_rows() for c in row if c.value == "Date:").font
+    assert font.sz == (date_font.sz or 11), "XLSX heading must match the Date line size"
     assert font.b
 
 
