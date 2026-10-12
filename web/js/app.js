@@ -3057,7 +3057,7 @@ function renderAllUsersTable(users) {
     <tr>
       <td>${escapeHtml(u.username)}</td>
       <td>${u.groups && u.groups.length ? escapeHtml(u.groups.join(', ')) : '—'}</td>
-      <td>${u.is_superuser ? 'Superuser' : (u.roles && u.roles.length ? escapeHtml(u.roles.join(', ')) : '<span style="color:var(--text-dim);">— no role —</span>')}</td>
+      <td>${u.is_superuser ? '<span class="stamp stamp-admin">Admin</span>' : (u.roles && u.roles.length ? escapeHtml(u.roles.join(', ')) : '<span style="color:var(--text-dim);">— no role —</span>')}</td>
       <td>
         ${u.is_superuser
           ? '<span class="stamp stamp-paid" style="font-size:10px;">active</span>'
@@ -3249,10 +3249,24 @@ async function loadCreateUserRolePicker() {
 
 document.getElementById('create-user-group').addEventListener('change', loadCreateUserRolePicker);
 
+function updateCreateUserTypeVisibility() {
+  const isAdmin = document.getElementById('create-user-type-admin').checked;
+  document.getElementById('create-user-group-role-wrap').style.display = isAdmin ? 'none' : 'block';
+}
+document.getElementById('create-user-type-group').addEventListener('change', updateCreateUserTypeVisibility);
+document.getElementById('create-user-type-admin').addEventListener('change', updateCreateUserTypeVisibility);
+
 document.getElementById('open-create-user-btn').addEventListener('click', async () => {
   showBanner('create-user-banner', '');
   document.getElementById('create-user-username').value = '';
   document.getElementById('create-user-password').value = '';
+  // Only a superuser can create another admin — a group admin managing
+  // their own group never sees this option, matching POST /auth/users
+  // being superuser-only server-side (see admin.py's CreateUserInGroupRequest,
+  // which has no is_superuser field at all).
+  document.getElementById('create-user-type-admin-wrap').style.display = currentUserIsSuperuser ? 'flex' : 'none';
+  document.getElementById('create-user-type-group').checked = true;
+  updateCreateUserTypeVisibility();
   const groupSelect = document.getElementById('create-user-group');
   groupSelect.innerHTML = '';
   try {
@@ -3280,18 +3294,30 @@ document.getElementById('create-user-close').addEventListener('click', () => {
 document.getElementById('create-user-submit-btn').addEventListener('click', async () => {
   const username = document.getElementById('create-user-username').value.trim();
   const password = document.getElementById('create-user-password').value;
-  const groupId = document.getElementById('create-user-group').value;
-  const roleId = document.getElementById('create-user-role').value;
+  const isAdmin = document.getElementById('create-user-type-admin').checked;
   showBanner('create-user-banner', '');
-  if (!username || !password || !groupId) {
-    showBanner('create-user-banner', 'Username, password, and group are required.');
+  if (!username || !password) {
+    showBanner('create-user-banner', 'Username and password are required.');
     return;
   }
   try {
     document.getElementById('create-user-submit-btn').disabled = true;
-    const payload = { username, password };
-    if (roleId) payload.role_id = roleId;
-    await apiFetch('/admin/groups/' + groupId + '/users', { method: 'POST', body: JSON.stringify(payload) });
+    if (isAdmin) {
+      // Superuser-only endpoint — a bare account with no group/role, since
+      // an admin bypasses group scoping entirely (see services/auth-service/
+      // app/routers/auth.py's create_user).
+      await apiFetch('/auth/users', { method: 'POST', body: JSON.stringify({ username, password, is_superuser: true }) });
+    } else {
+      const groupId = document.getElementById('create-user-group').value;
+      const roleId = document.getElementById('create-user-role').value;
+      if (!groupId) {
+        showBanner('create-user-banner', 'Group is required for a group member.');
+        return;
+      }
+      const payload = { username, password };
+      if (roleId) payload.role_id = roleId;
+      await apiFetch('/admin/groups/' + groupId + '/users', { method: 'POST', body: JSON.stringify(payload) });
+    }
     document.getElementById('create-user-modal').classList.remove('active');
     loadAllUsers();
   } catch (err) {
