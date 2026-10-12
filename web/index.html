@@ -991,22 +991,17 @@
     <h3>Create User</h3>
     <div id="create-user-banner"></div>
 
-    <div class="checkbox-list" id="create-user-type-row">
-      <label><input type="radio" name="create-user-type" id="create-user-type-group" value="group" checked> Group member</label>
-      <label id="create-user-type-admin-wrap" style="display:none;"><input type="radio" name="create-user-type" id="create-user-type-admin" value="admin"> Admin</label>
-    </div>
-    <p id="create-user-type-hint" style="font-size:12px; color:var(--text-dim); margin:-6px 0 16px;">A group member only sees their own group's data. An admin sees and manages everything, across every group.</p>
-
     <label for="create-user-username">Username</label>
     <input type="text" id="create-user-username" placeholder="username">
     <label for="create-user-password">Password</label>
     <input type="text" id="create-user-password" placeholder="temporary password">
-    <div id="create-user-group-role-wrap">
-      <label for="create-user-group">Group</label>
-      <select id="create-user-group"></select>
+    <label for="create-user-group">Group</label>
+    <select id="create-user-group"></select>
+    <div id="create-user-role-wrap">
       <label for="create-user-role">Role</label>
       <select id="create-user-role"></select>
     </div>
+    <p id="create-user-admin-hint" style="display:none; font-size:12px; color:var(--text-dim); margin:-10px 0 14px;">An admin isn't in a group and doesn't need a role — they already see and manage everything.</p>
     <p style="font-size:12px; color:var(--text-dim); margin:4px 0 14px;">Created users are approved and active immediately — no self-registration wait.</p>
     <button class="btn-primary" id="create-user-submit-btn">Create user</button>
   </div>
@@ -1025,34 +1020,41 @@
     <input type="text" id="edit-user-password" placeholder="new password">
     <button class="btn-primary" id="edit-user-save-btn">Save changes</button>
 
-    <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Current groups</label>
-    <div id="edit-user-groups-list" style="margin-bottom:14px;"></div>
-
-    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Add to a group</label>
-    <div class="form-row">
-      <div>
-        <select id="edit-user-add-group" style="margin-bottom:0;">
-          <option value="">— choose a group —</option>
-        </select>
-      </div>
-      <div><button type="button" class="btn-secondary" id="edit-user-add-group-btn" style="padding:10px 14px;">Add</button></div>
+    <div id="edit-user-admin-only-row" style="display:none; margin-top:16px;">
+      <p style="font-size:12px; color:var(--text-dim); margin:0 0 10px;">Admins aren't in a group and don't need permissions — they already see and manage everything.</p>
+      <button type="button" class="btn-secondary" id="edit-user-toggle-active-btn" style="color:var(--danger); border-color:var(--danger);">Deactivate account</button>
     </div>
 
-    <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Current roles</label>
-    <div id="edit-user-roles-list" style="margin-bottom:14px;"></div>
+    <div id="edit-user-group-sections">
+      <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Current groups</label>
+      <div id="edit-user-groups-list" style="margin-bottom:14px;"></div>
 
-    <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Add a role</label>
-    <div class="form-row">
-      <div>
-        <select id="edit-user-add-role" style="margin-bottom:0;">
-          <option value="">— choose a role —</option>
-        </select>
+      <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Add to a group</label>
+      <div class="form-row">
+        <div>
+          <select id="edit-user-add-group" style="margin-bottom:0;">
+            <option value="">— choose a group —</option>
+          </select>
+        </div>
+        <div><button type="button" class="btn-secondary" id="edit-user-add-group-btn" style="padding:10px 14px;">Add</button></div>
       </div>
-      <div><button type="button" class="btn-secondary" id="edit-user-add-role-btn" style="padding:10px 14px;">Add</button></div>
-    </div>
 
-    <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Project access (leave all unchecked = see every project)</label>
-    <div class="checkbox-list" id="edit-user-project-checkboxes"></div>
+      <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Current roles</label>
+      <div id="edit-user-roles-list" style="margin-bottom:14px;"></div>
+
+      <label style="font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Add a role</label>
+      <div class="form-row">
+        <div>
+          <select id="edit-user-add-role" style="margin-bottom:0;">
+            <option value="">— choose a role —</option>
+          </select>
+        </div>
+        <div><button type="button" class="btn-secondary" id="edit-user-add-role-btn" style="padding:10px 14px;">Add</button></div>
+      </div>
+
+      <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Project access (leave all unchecked = see every project)</label>
+      <div class="checkbox-list" id="edit-user-project-checkboxes"></div>
+    </div>
   </div>
 </div>
 
