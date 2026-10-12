@@ -220,11 +220,11 @@ def seed_test_user(group_id):
     if status == 409:
         _, roles = call("GET", f"/admin/groups/{group_id}/roles")
         role = next(r for r in roles if r["name"] == "Editor")
-    call("POST", f"/roles/{role['id']}/access", {"service_name": "documents", "access_level": "edit"})
-    call("POST", f"/roles/{role['id']}/access", {"service_name": "products", "access_level": "edit"})
+    call("POST", f"/admin/roles/{role['id']}/access", {"service_name": "documents", "access_level": "edit"})
+    call("POST", f"/admin/roles/{role['id']}/access", {"service_name": "products", "access_level": "edit"})
 
     print(f"  assigning Editor role to '{TEST_USERNAME}'...")
-    call("POST", f"/roles/{role['id']}/assign", {"username": TEST_USERNAME}, expect=(201, 409))
+    call("POST", f"/admin/roles/{role['id']}/assign", {"username": TEST_USERNAME}, expect=(201, 409))
     print("  OK")
 
 

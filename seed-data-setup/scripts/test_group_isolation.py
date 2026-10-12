@@ -116,7 +116,7 @@ def main():
     role_id = role["id"]
     call(
         "POST",
-        f"/roles/{role_id}/access",
+        f"/admin/roles/{role_id}/access",
         {"service_name": "documents", "access_level": "edit"},
         token=admin_token,
     )
@@ -125,7 +125,7 @@ def main():
     print(f"\nAssigning Editor role to '{TEST_USERNAME}'...")
     call(
         "POST",
-        f"/roles/{role_id}/assign",
+        f"/admin/roles/{role_id}/assign",
         {"username": TEST_USERNAME},
         token=admin_token,
         expect=(201, 409),
