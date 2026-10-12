@@ -231,9 +231,12 @@
   {% if director %}
   <div class="md-block">
     <div class="md-block-inner">
-      {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
+      {% if director_seal_data_uri %}
+      <img class="md-seal" src="{{ director_seal_data_uri }}">
+      {% else %}
       <div class="md-name">{{ director.name }}</div>
       <div class="md-title">{{ director.position or "Managing Director" }}</div>
+      {% endif %}
     </div>
   </div>
   {% endif %}

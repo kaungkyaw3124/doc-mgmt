@@ -304,34 +304,36 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         row += 1
     row += 1
 
+    # Name/position used to be printed under the seal image too, but the
+    # seal itself already carries the director's name and title — showing
+    # both was redundant, so the seal now stands alone whenever one was
+    # actually placed. Name/position text is kept ONLY as a fallback for
+    # a director with no seal uploaded yet, so the signature area is
+    # never left completely blank.
     if director:
         seal_row = row
+        seal_placed = False
         if director_seal_bytes and director_seal_mime != "image/svg+xml":
             try:
                 md_seal_img = XLImage(BytesIO(director_seal_bytes))
                 md_seal_img.width = 100
                 md_seal_img.height = 100
-                # Anchored at G, not F: the name/title below is centered
-                # across the merged F:G span, and column F alone (16
-                # units wide) is roughly as wide as this image itself —
-                # anchoring at F left-aligns the image within F, well
-                # left of the F:G merge's visual center. G's left edge
-                # sits close to where that center actually falls, so
-                # anchoring there lines the seal up with the name/title
-                # underneath it instead of drifting left of them.
                 ws.add_image(md_seal_img, f"G{row}")
-                row += 6  # leave room for the image before writing the name below it
+                row += 6  # leave room for the image
+                seal_placed = True
             except Exception:
                 pass  # bad/unsupported image format shouldn't block the whole export
-        ws.merge_cells(f"F{row}:G{row}")
-        ws[f"F{row}"] = _safe_str(director.get("name", ""))
-        ws[f"F{row}"].font = Font(name="Arial", bold=True)
-        ws[f"F{row}"].alignment = Alignment(horizontal="center")
-        row += 1
-        ws.merge_cells(f"F{row}:G{row}")
-        ws[f"F{row}"] = _safe_str(director.get("position")) or "Managing Director"
-        ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
-        ws[f"F{row}"].alignment = Alignment(horizontal="center")
+        if not seal_placed:
+            ws.merge_cells(f"F{row}:G{row}")
+            ws[f"F{row}"] = _safe_str(director.get("name", ""))
+            ws[f"F{row}"].font = Font(name="Arial", bold=True)
+            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            row += 1
+            ws.merge_cells(f"F{row}:G{row}")
+            ws[f"F{row}"] = _safe_str(director.get("position")) or "Managing Director"
+            ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
+            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            row += 1
         row = max(row, seal_row + 7) + 1
 
     ws[f"A{row}"] = "Customer Service"
