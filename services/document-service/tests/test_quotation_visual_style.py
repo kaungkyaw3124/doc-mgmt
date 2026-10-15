@@ -370,7 +370,15 @@ def test_footer_heading_style_is_unchanged(layout):
     for b in _footer_boxes(layout(), "Customer Service"):
         assert b.style["font_size"] == pytest.approx(11 * PT, abs=0.01)
         assert b.style["font_weight"] >= 700
-        assert b.style["color"][:3] == pytest.approx((0x1A / 255,) * 3, abs=0.01)
+
+
+def test_footer_is_greyed_out_but_readable(layout):
+    result = layout()
+    for needle, grey in (("Customer Service", 0x66), ("Email: sales@acme.example", 0x77), ("Phone: +95 1 234 5678", 0x77)):
+        for b in _footer_boxes(result, needle):
+            assert b.style["color"][:3] == pytest.approx((grey / 255,) * 3, abs=0.01), f"{needle} should be grey #{grey:02x}"
+    body = _texts(result.pages[0], "Sample Road")[0]
+    assert body.style["color"][:3] == pytest.approx((0x1A / 255,) * 3, abs=0.01), "body text must stay dark"
 
 
 def test_footer_repeats_on_every_page_and_is_inside_the_page(layout):
