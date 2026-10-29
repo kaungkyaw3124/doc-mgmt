@@ -24,6 +24,8 @@ def index_document(doc) -> None:
         project_budget_year = doc.project.budget_year if doc.project else None
 
         search_text_parts = [doc.doc_number, doc.doc_type] + product_names
+        # One-time customer: searchable by the typed name/organization.
+        search_text_parts += [v for v in (doc.end_user_name, doc.end_user_organization) if v]
         if project_name:
             search_text_parts.append(project_name)
 
@@ -32,6 +34,8 @@ def index_document(doc) -> None:
             "doc_type": doc.doc_type,
             "doc_number": doc.doc_number,
             "customer_id": str(doc.customer_id) if doc.customer_id else None,
+            "end_user_name": doc.end_user_name,
+            "end_user_organization": doc.end_user_organization,
             "project_id": project_id,
             "project_name": project_name,
             "project_budget_year": project_budget_year,

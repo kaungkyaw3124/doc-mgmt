@@ -46,8 +46,11 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
     customer_address = ""
     customer_dict = None
     if customer:
-        customer_dict = {"id": str(customer["id"]), "name": customer["name"]}
-        if customer.get("billing_address"):
+        customer_dict = {"id": str(customer["id"]), "name": customer["name"],
+                         "organization": customer.get("organization") or customer["name"]}
+        if customer.get("address"):  # one-time customer: typed as one block
+            customer_address = customer["address"]
+        elif customer.get("billing_address"):
             customer_address = ", ".join(str(v) for v in customer["billing_address"].values())
 
     categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}

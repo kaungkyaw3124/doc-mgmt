@@ -165,7 +165,7 @@ class _FakeDB:
 
 def _gather(director_row):
     doc = SimpleNamespace(id=uuid.uuid4(), customer_id=None, company_id=None, director_id=director_row and uuid.uuid4(),
-                          items=[], project_id=None)
+                          items=[], project_id=None, end_user_name=None)
     db = _FakeDB({models.Document: doc, models.CompanyDirector: director_row})
     return documents_router._gather_export_data(doc.id, db)
 

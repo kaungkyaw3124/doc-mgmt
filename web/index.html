@@ -250,6 +250,8 @@
 
   /* ---------- Table ---------- */
   table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--hairline); border-radius: 4px; overflow: hidden; }
+  /* 11 columns since the Customer column: tighter side padding keeps the documents table inside ~1280px screens */
+  #view-documents th, #view-documents td { padding-left: 11px; padding-right: 11px; }
   th {
     text-align: left;
     font-size: 12px;
@@ -637,12 +639,12 @@
 
       <table>
         <thead>
-          <tr><th>Number</th><th>Type</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th></tr>
+          <tr><th>Number</th><th>Type</th><th>Customer</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th></tr>
         </thead>
         <tbody id="documents-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="10"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -1230,11 +1232,31 @@
       <div class="form-row">
         <div>
           <label for="doc-customer">Customer</label>
-          <input type="text" id="doc-customer" list="customer-datalist" placeholder="Type a customer name…" autocomplete="off">
+          <div class="checkbox-list" id="doc-customer-mode-row">
+            <label><input type="radio" name="doc-customer-mode" id="doc-customer-mode-saved" value="saved" checked> Saved customer</label>
+            <label><input type="radio" name="doc-customer-mode" id="doc-customer-mode-manual" value="manual"> Enter manually</label>
+          </div>
           <datalist id="customer-datalist"></datalist>
           <datalist id="product-datalist"></datalist>
-          <div class="hint" id="doc-customer-hint" style="display:none;">No matching customer — this document will be created without one.</div>
-          <button type="button" class="link-btn-inline" id="doc-new-customer-btn" style="margin-top:4px;">+ New customer</button>
+          <div id="doc-customer-saved-wrap">
+            <input type="text" id="doc-customer" list="customer-datalist" placeholder="Type a customer name…" autocomplete="off">
+            <div class="hint" id="doc-customer-hint" style="display:none;">No matching customer — this document will be created without one.</div>
+            <button type="button" class="link-btn-inline" id="doc-new-customer-btn" style="margin-top:4px;">+ New customer</button>
+          </div>
+          <!-- One-time customer: stored on this document only, never added to the Customers list. -->
+          <div id="doc-customer-manual-wrap" style="display:none;">
+            <label for="doc-end-user-name">Customer Name *</label>
+            <input type="text" id="doc-end-user-name" autocomplete="off">
+            <label for="doc-end-user-organization">Organization</label>
+            <input type="text" id="doc-end-user-organization" autocomplete="off">
+            <label for="doc-end-user-address">Address</label>
+            <textarea id="doc-end-user-address" rows="2"></textarea>
+            <label for="doc-end-user-phone">Phone</label>
+            <input type="text" id="doc-end-user-phone" inputmode="tel" autocomplete="off">
+            <label for="doc-end-user-email">Email</label>
+            <input type="text" id="doc-end-user-email" inputmode="email" autocomplete="off">
+            <div class="hint">Used for this document only — not saved to Customers.</div>
+          </div>
         </div>
         <div>
           <label for="doc-currency">Currency</label>

@@ -210,7 +210,7 @@
         <table>
           <tr><td class="label">Customer Name</td><td>{{ customer.name if customer else "—" }}</td></tr>
           <tr><td class="label">Quotation ID</td><td>{{ doc_number }}</td></tr>
-          <tr><td class="label">Organization</td><td>{{ customer.name if customer else "—" }}</td></tr>
+          <tr><td class="label">Organization</td><td>{{ customer.organization if customer else "—" }}</td></tr>
           <tr><td class="label">Address</td><td>{{ customer_address }}</td></tr>
         </table>
       </div>

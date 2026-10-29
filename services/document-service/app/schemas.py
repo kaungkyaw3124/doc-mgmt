@@ -147,6 +147,13 @@ class DocumentCreate(BaseModel):
     due_date: Optional[date] = None
     doc_metadata: Optional[dict] = None
     terms_and_conditions: Optional[str] = None
+    # One-time customer for this document only (never saved as a Customer);
+    # mutually exclusive with customer_id — see documents._manual_end_user.
+    end_user_name: Optional[str] = None
+    end_user_organization: Optional[str] = None
+    end_user_address: Optional[str] = None
+    end_user_phone: Optional[str] = None
+    end_user_email: Optional[str] = None
     items: list[DocumentItemIn] = []
 
 
@@ -157,6 +164,13 @@ class DocumentUpdate(BaseModel):
     director_id: Optional[uuid.UUID] = None
     currency: Optional[str] = None  # omit to leave the document's existing currency unchanged
     terms_and_conditions: Optional[str] = None
+    # One-time customer for this document only (never saved as a Customer);
+    # mutually exclusive with customer_id — see documents._manual_end_user.
+    end_user_name: Optional[str] = None
+    end_user_organization: Optional[str] = None
+    end_user_address: Optional[str] = None
+    end_user_phone: Optional[str] = None
+    end_user_email: Optional[str] = None
     items: list[DocumentItemIn] = []
 
 
@@ -169,6 +183,11 @@ class DocumentOut(BaseModel):
     project_id: Optional[uuid.UUID]
     company_id: Optional[uuid.UUID]
     director_id: Optional[uuid.UUID]
+    end_user_name: Optional[str] = None
+    end_user_organization: Optional[str] = None
+    end_user_address: Optional[str] = None
+    end_user_phone: Optional[str] = None
+    end_user_email: Optional[str] = None
     status: str
     currency: str
     subtotal: Optional[Decimal]

@@ -89,6 +89,13 @@ class Document(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), index=True)  # which company issues this document — chosen per-document, no more single "primary" company
     director_id = Column(UUID(as_uuid=True), ForeignKey("company_directors.id"), index=True)  # which MD's name/seal to show on this document
+    # One-time customer typed on this document only — never a Customer row.
+    # A document has either customer_id or end_user_name, never both.
+    end_user_name = Column(String(255))
+    end_user_organization = Column(String(255))
+    end_user_address = Column(Text)
+    end_user_phone = Column(String(50))  # stored only, not printed
+    end_user_email = Column(String(255))  # stored only, not printed
     status = Column(String(20), nullable=False, default="draft", index=True)
     currency = Column(String(3), default="USD")
     subtotal = Column(Numeric(12, 2))

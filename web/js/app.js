@@ -45,6 +45,12 @@ function skeletonRows(colspan) {
 function stampClass(value) {
   return 'stamp stamp-' + String(value || '').toLowerCase();
 }
+// Saved customer's name, or the one-time customer typed on the document.
+function docCustomerName(doc) {
+  const customer = cachedCustomers.find(c => c.id === doc.customer_id);
+  return customer ? customer.name : (doc.end_user_name || '—');
+}
+
 function projectLabel(projectId) {
   if (!projectId) return '—';
   const project = cachedProjects.find(p => p.id === projectId);
@@ -281,6 +287,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
 document.getElementById('toggle-doc-form').addEventListener('click', () => {
   editingDocumentId = null;
   document.getElementById('doc-form').reset();
+  setDocCustomerMode('saved');
   document.getElementById('doc-customer-hint').style.display = 'none';
   document.getElementById('doc-form-title').textContent = 'New document';
   document.getElementById('doc-form-submit-btn').textContent = 'Create document';
@@ -422,6 +429,20 @@ function updateDocumentTotals() {
 }
 document.getElementById('doc-currency').addEventListener('change', updateDocumentTotals);
 
+// Customer: a saved customer (customer_id) or a one-time customer typed for
+// this document only (end_user_* fields, never added to Customers).
+const DOC_END_USER_FIELDS = ['name', 'organization', 'address', 'phone', 'email'];
+function setDocCustomerMode(mode) {
+  document.getElementById('doc-customer-mode-' + mode).checked = true;
+  document.getElementById('doc-customer-saved-wrap').style.display = mode === 'saved' ? '' : 'none';
+  document.getElementById('doc-customer-manual-wrap').style.display = mode === 'manual' ? '' : 'none';
+}
+function docCustomerMode() {
+  return document.getElementById('doc-customer-mode-manual').checked ? 'manual' : 'saved';
+}
+document.querySelectorAll('input[name="doc-customer-mode"]').forEach(r =>
+  r.addEventListener('change', () => setDocCustomerMode(r.value)));
+
 document.getElementById('doc-customer').addEventListener('input', (e) => {
   const hint = document.getElementById('doc-customer-hint');
   const typed = e.target.value.trim();
@@ -493,11 +514,21 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     showBanner('doc-modal-banner', 'Add at least one line item: either pick a product, or fill in description + quantity + price.');
     return;
   }
+  const manualCustomer = docCustomerMode() === 'manual';
+  if (manualCustomer && !document.getElementById('doc-end-user-name').value.trim()) {
+    showBanner('doc-modal-banner', 'Enter the customer name, or switch to "Saved customer".');
+    return;
+  }
+  const endUser = {};
+  DOC_END_USER_FIELDS.forEach(f => {
+    endUser['end_user_' + f] = manualCustomer ? (document.getElementById('doc-end-user-' + f).value.trim() || null) : null;
+  });
   try {
     const submitBtn = document.getElementById('doc-form-submit-btn');
     submitBtn.disabled = true;
     const commonPayload = {
-      customer_id: resolveCustomerIdFromInput(),
+      customer_id: manualCustomer ? null : resolveCustomerIdFromInput(),
+      ...endUser,
       project_id: resolveDocProjectIdFromInput(),
       company_id: resolveDocCompanyIdFromInput(),
       director_id: document.getElementById('doc-director').value || null,
@@ -518,6 +549,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       });
     }
     document.getElementById('doc-form').reset();
+    setDocCustomerMode('saved');
     document.getElementById('doc-customer-hint').style.display = 'none';
     document.getElementById('line-items').innerHTML = '';
     addLineItem();
@@ -549,6 +581,10 @@ function startEditDocument(doc) {
   const customer = cachedCustomers.find(c => c.id === doc.customer_id);
   document.getElementById('doc-customer').value = customer ? customer.name : '';
   document.getElementById('doc-customer-hint').style.display = 'none';
+  DOC_END_USER_FIELDS.forEach(f => {
+    document.getElementById('doc-end-user-' + f).value = doc['end_user_' + f] || '';
+  });
+  setDocCustomerMode(doc.end_user_name ? 'manual' : 'saved');
 
   document.getElementById('doc-currency').value = doc.currency || 'USD';
   const docProject = cachedProjects.find(p => p.id === doc.project_id);
@@ -650,7 +686,7 @@ async function loadDocuments() {
     applyFilterAndSort('documents');
   } catch (err) {
     if (isStaleLoad('documents', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -682,7 +718,6 @@ async function openViewDocumentModal(doc) {
 }
 
 function renderDocumentDetailContent(doc, subItemsByProductId) {
-  const customer = cachedCustomers.find(c => c.id === doc.customer_id);
   const project = cachedProjects.find(p => p.id === doc.project_id);
 
   let catalogueNumber = 0; // matches the Catalogue zip export's numbering — only product-based items count
@@ -726,7 +761,7 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
       <div><strong>Status:</strong> <span class="${stampClass(doc.status)}">${escapeHtml(doc.status)}</span></div>
     </div>
     <div class="form-row">
-      <div><strong>Customer:</strong> ${customer ? escapeHtml(customer.name) : '—'}</div>
+      <div><strong>Customer:</strong> ${escapeHtml(docCustomerName(doc))}</div>
       <div><strong>Project:</strong> ${project ? escapeHtml(project.name) : '—'}</div>
     </div>
     <div class="form-row">
@@ -754,7 +789,7 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
 function renderDocumentsTable(docs) {
   const tbody = document.getElementById('documents-tbody');
   if (!docs.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No documents match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No documents match.</td></tr>';
     return;
   }
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
@@ -762,6 +797,7 @@ function renderDocumentsTable(docs) {
     <tr>
       <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button></td>
       <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
+      <td>${escapeHtml(docCustomerName(d))}</td>
       <td>${projectLabel(d.project_id)}</td>
       <td><span class="${stampClass(d.status)}">${escapeHtml(d.status)}</span></td>
       <td class="mono">${fmtMoney(d.total)} ${escapeHtml(d.currency || '')}</td>
@@ -1619,6 +1655,7 @@ async function loadCustomers() {
     cachedCustomers = customers;
     refreshCustomerPicker();
     applyFilterAndSort('customers');
+    if (cachedDocuments.length) applyFilterAndSort('documents');  // the list shows customer names; it may have rendered first
   } catch (err) {
     if (isStaleLoad('customers', mySeq)) return;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;

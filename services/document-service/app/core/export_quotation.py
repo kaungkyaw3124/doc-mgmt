@@ -170,12 +170,15 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ]
     customer_name = _safe_str(customer["name"]) if customer else "—"
     customer_address = ""
-    if customer and customer.get("billing_address"):
+    if customer and customer.get("address"):  # one-time customer: typed as one block
+        customer_address = _safe_str(customer["address"])
+    elif customer and customer.get("billing_address"):
         customer_address = _safe_str(", ".join(str(v) for v in customer["billing_address"].values()))
+    customer_org = _safe_str(customer.get("organization") or customer["name"]) if customer else "—"
     end_user_rows = [
         ("Customer Name", customer_name),
         ("Quotation ID", document.doc_number),
-        ("Organization", customer_name),
+        ("Organization", customer_org),
         ("Address", customer_address),
     ]
 

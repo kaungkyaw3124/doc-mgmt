@@ -126,6 +126,24 @@ def _process_items(items_payload, db: Session):
     return line_items, subtotal, tax_total
 
 
+END_USER_FIELDS = ("end_user_name", "end_user_organization", "end_user_address", "end_user_phone", "end_user_email")
+
+
+def _manual_end_user(payload) -> dict:
+    """
+    The one-time (manually typed) customer fields to store on the document,
+    trimmed. A blank name means "no manual customer", and then the other
+    four are dropped too (they would print under nobody). Sending a saved
+    customer_id as well is rejected rather than guessing which one wins.
+    """
+    values = {f: (getattr(payload, f) or "").strip() or None for f in END_USER_FIELDS}
+    if not values["end_user_name"]:
+        return dict.fromkeys(END_USER_FIELDS)
+    if payload.customer_id:
+        raise HTTPException(status_code=422, detail="send either customer_id (saved customer) or end_user_name (one-time customer), not both")
+    return values
+
+
 def _generate_doc_number(db: Session, company_id: uuid.UUID | None = None) -> str:
     """
     e.g. SS-20260723/001 — {chosen company's short_name}-{YYYYMMDD}/{3-digit
@@ -171,6 +189,8 @@ def create_document(
     if payload.currency not in VALID_CURRENCIES:
         raise HTTPException(status_code=422, detail=f"currency must be one of {sorted(VALID_CURRENCIES)}")
 
+    end_user = _manual_end_user(payload)
+
     if payload.customer_id:
         customer = db.query(models.Customer).filter_by(id=payload.customer_id).first()
         if not customer:
@@ -205,6 +225,7 @@ def create_document(
         due_date=payload.due_date,
         doc_metadata=payload.doc_metadata,
         terms_and_conditions=payload.terms_and_conditions,
+        **end_user,
     )
 
     line_items, subtotal, tax_total = _process_items(payload.items, db)
@@ -522,6 +543,8 @@ def update_document(
     if payload.currency is not None and payload.currency not in VALID_CURRENCIES:
         raise HTTPException(status_code=422, detail=f"currency must be one of {sorted(VALID_CURRENCIES)}")
 
+    end_user = _manual_end_user(payload)
+
     if payload.customer_id:
         customer = db.query(models.Customer).filter_by(id=payload.customer_id).first()
         if not customer:
@@ -546,7 +569,11 @@ def update_document(
 
     line_items, subtotal, tax_total = _process_items(payload.items, db)
 
+    # Full edit: switching to a saved customer clears the manual fields
+    # (end_user is all None), and switching to manual leaves customer_id None.
     doc.customer_id = payload.customer_id
+    for field, value in end_user.items():
+        setattr(doc, field, value)
     doc.project_id = payload.project_id
     doc.company_id = payload.company_id
     doc.director_id = payload.director_id
@@ -731,6 +758,15 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
                 "name": customer_row.name,
                 "billing_address": customer_row.billing_address,
             }
+    elif doc.end_user_name:
+        # One-time customer typed on the document: same dict shape the exports
+        # use, plus organization/address (saved customers have neither key).
+        customer = {
+            "id": None,
+            "name": doc.end_user_name,
+            "organization": doc.end_user_organization,
+            "address": doc.end_user_address,
+        }
 
     items_with_product = []
     for item in doc.items:

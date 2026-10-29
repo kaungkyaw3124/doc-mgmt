@@ -3,7 +3,7 @@ import io
 
 from pypdf import PdfReader
 
-from conftest import unique
+from conftest import poll, unique
 
 
 def test_quotation_lifecycle(admin, customer, quotation):
@@ -72,3 +72,38 @@ def test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md(admi
         if doc_id:
             admin.delete(f"/documents/{doc_id}")
         admin.delete(f"/companies/{company_id}")
+
+
+def test_quotation_with_one_time_manual_customer(admin):
+    """Loop iteration 7: a customer typed on the document only. It prints in
+    the PDF's END USER block, is never added to /customers, and the document
+    is searchable by the typed name."""
+    name = unique("Manual Buyer")  # unique token so search can't match an older run
+    doc = admin.post("/documents", json={
+        "doc_type": "quotation", "currency": "USD", "customer_id": None,
+        "end_user_name": name, "end_user_organization": "Smoke Manual Org",
+        "end_user_address": "No. 7, Smoke Street, Yangon", "end_user_phone": "09-000", "end_user_email": "m@x.example",
+        "items": [{"description": unique("test-item"), "quantity": "1", "unit_price": "5.00"}]})
+    assert doc.status_code == 201, doc.text
+    doc_id = doc.json()["id"]
+    try:
+        assert doc.json()["customer_id"] is None and doc.json()["end_user_name"] == name
+
+        pdf = admin.get(f"/documents/{doc_id}/export/quotation-pdf")
+        assert pdf.status_code == 200, pdf.text[:300]
+        end_user = PdfReader(io.BytesIO(pdf.content)).pages[0].extract_text().split("END USER", 1)[1]
+        assert name in end_user
+        assert "Organization Smoke Manual Org" in end_user
+        assert "Address No. 7, Smoke Street, Yangon" in end_user
+
+        customers = admin.get("/customers")
+        assert customers.status_code == 200, customers.text
+        assert name not in {c["name"] for c in customers.json()}
+
+        def _found():
+            r = admin.get("/search", params={"q": name, "index": "documents"})
+            assert r.status_code == 200, r.text
+            return [h for h in r.json().get("documents", []) if h.get("id") == doc_id]
+        assert poll(_found), f"document not searchable by the manual customer name {name!r} within 10s"
+    finally:
+        admin.delete(f"/documents/{doc_id}")
