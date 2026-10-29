@@ -1,7 +1,7 @@
 """
-Loop iterations 3 and 4 — quotation page margins: 0.5in (12.7mm) on all
-four sides (iteration 3 had a 0.3in / 7.6mm top; iteration 4 moved it back
-to 0.5in). "Bottom" is measured to the footer's last line
+Loop iterations 3–5 — quotation page margins: top 0.3in (7.6mm), left /
+right / bottom 0.5in (12.7mm). (The top was 7.6mm in iteration 3, 12.7mm in
+iteration 4, and 7.6mm again from iteration 5.) "Bottom" is measured to the footer's last line
 (the Customer Service footer lives in the @page bottom margin box), and
 content must start right at the top margin on every page, with no hidden
 extra gaps (UA h3 margins, an empty logo row, body margin).
@@ -28,7 +28,7 @@ from tests.test_quotation_visual_style import (  # noqa: F401  (layout is a fixt
     layout,
 )
 
-TOP = 12.7 * MM
+TOP = 7.6 * MM
 SIDE = 12.7 * MM
 BOTTOM = 12.7 * MM
 
@@ -65,7 +65,7 @@ def test_left_and_right_content_edges_are_12_7mm_on_every_page(layout):
         )
 
 
-def test_logo_starts_at_12_7mm_from_the_top_on_every_page(layout):
+def test_logo_starts_at_7_6mm_from_the_top_on_every_page(layout):
     result = layout(**_with_logo())
     for n, boxes in enumerate(result.pages, 1):
         _, body, _ = _split_page(boxes)
@@ -91,7 +91,7 @@ def test_footer_ends_12_7mm_from_the_bottom_and_nothing_overlaps_it(layout):
         )
 
 
-def test_without_logo_the_title_starts_at_12_7mm(layout):
+def test_without_logo_the_title_starts_at_7_6mm(layout):
     result = layout(n_items=40)
     for n, boxes in enumerate(result.pages, 1):
         _, body, _ = _split_page(boxes)
@@ -110,6 +110,6 @@ def test_xlsx_page_margins_match_the_pdf():
     ws = load_workbook(generate_quotation_xlsx(_document(), CUSTOMER, [(_line_item(1), None, [])],
                                                company=COMPANY, director=DIRECTOR)).active
     m = ws.page_margins
-    assert (m.top, m.left, m.right, m.bottom) == (0.5, 0.5, 0.5, 0.5)
+    assert (m.top, m.left, m.right, m.bottom) == (0.3, 0.5, 0.5, 0.5)
     assert m.header <= 0.2 and m.footer <= 0.2, "Excel's header/footer must sit inside the page margins"
     assert ws.print_title_rows, "print titles from iteration 2 must be kept"

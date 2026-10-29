@@ -16,11 +16,12 @@
        header now repeats on every page as the <thead> of the outer
        table.page-layout (see below), whose height comes from the real
        content — nothing to guess, no reserved dead space. */
-    /* Page margins asked for by the user: 0.5in (12.7mm) on all four
-       sides (the top was 0.3in / 7.6mm in loop iteration 3; the user moved
-       it back to 0.5in in iteration 4). Usable width 210mm - 2*12.7mm = 184.6mm; the
+    /* Page margins asked for by the user: top 0.3in (7.6mm), left/right/
+       bottom 0.5in (12.7mm). (Top history: 7.6mm in loop iteration 3,
+       12.7mm in iteration 4, back to 7.6mm in iteration 5 after the user
+       checked a real PDF.) Usable width 210mm - 2*12.7mm = 184.6mm; the
        footer's width below must equal that.
-       Top: content starts right at 12.7mm — body has no margin and the
+       Top: content starts right at 7.6mm — body has no margin and the
        header has no margin above its first element (logo/seal row, or the
        QUOTATION title when there are no images).
        Bottom: the footer sits at the TOP of this bottom margin box
@@ -34,7 +35,7 @@
        (it silently fell back to its 75px default). If the footer's font
        sizes or lines change, re-measure (tests/test_page_margins.py
        checks the 12.7mm). */
-    margin: 12.7mm 12.7mm 24.14mm 12.7mm;
+    margin: 7.6mm 12.7mm 24.14mm 12.7mm;
     @bottom-center { content: element(pdfFooter); vertical-align: top; }
   }
   /* margin: 0 — the browser default 8px body margin was stacking on top of
@@ -173,7 +174,7 @@
   <table class="page-layout">
   <thead><tr><td>
   <div class="pdf-header">
-    {# Row only rendered when there is an image: an empty row still carried its 10px margin-bottom, a hidden gap that pushed QUOTATION below the 12.7mm top margin. #}
+    {# Row only rendered when there is an image: an empty row still carried its 10px margin-bottom, a hidden gap that pushed QUOTATION below the 7.6mm top margin. #}
     {% if logo_data_uri or seal_data_uri %}
     <div class="header-top">
       <div>{% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
