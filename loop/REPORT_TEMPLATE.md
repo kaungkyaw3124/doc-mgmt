@@ -3,6 +3,7 @@
 ## 1. Summary
 - **Status**: DONE | BLOCKED | NEEDS_DECISION
 - **Goal**: <copied from PLAN.md>
+- **Ponytail plugin active**: yes / no (check `/plugin` or whether `/ponytail-help` exists in this session)
 - **Branch / commit**: `loop/iter-<N>-...` @ `<short sha>`
 - **One-paragraph summary**: what was built/changed and whether it works.
 
