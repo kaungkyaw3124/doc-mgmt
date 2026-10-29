@@ -182,7 +182,10 @@ def test_other_headings_and_body_text_are_not_affected_by_the_heading_change(lay
         box = _texts(result.pages[0] + (result.pages[1] if len(result.pages) > 1 else []), needle)[0]
         assert box.style["font_size"] == pytest.approx(11 * PT, abs=0.01), f"{needle} heading size changed"
         assert box.style["color"][:3] == pytest.approx((0x1A / 255,) * 3, abs=0.01), f"{needle} heading colour changed"
-    body = _texts(result.pages[0], "Sample Road")[0]
+    # The END USER address, not the company's: since the Supplier rows show
+    # the selected MD's details, the company address is no longer on the page
+    # when the MD has an address of their own (DIRECTOR's "N/A").
+    body = _texts(result.pages[0], "Customer Street")[0]
     assert body.style["font_size"] == pytest.approx(10 * PT, abs=0.01)
     assert body.style["color"][:3] == pytest.approx((0x1A / 255,) * 3, abs=0.01)
 
@@ -265,8 +268,10 @@ def test_items_table_starts_close_below_the_parties_block(layout):
 
 
 def test_long_wrapped_address_still_does_not_overlap_the_table(layout):
-    company = dict(COMPANY, address="Building 12, Floor 7, Room 704, Very Long Road Name, Kamayut Township, Yangon Region, Myanmar " * 2)
-    result = layout(company=company, logo_bytes=_png(), seal_bytes=_png())
+    # On the director: the Supplier Address row shows the selected MD's
+    # address (the company's is only the fallback).
+    director = dict(DIRECTOR, address="Building 12, Floor 7, Room 704, Very Long Road Name, Kamayut Township, Yangon Region, Myanmar " * 2)
+    result = layout(director=director, logo_bytes=_png(), seal_bytes=_png())
     p = result.pages[0]
     addr = _texts(p, "Very Long Road")
     bottom = max(b.position_y + b.height for b in addr)
@@ -377,7 +382,7 @@ def test_footer_is_greyed_out_but_readable(layout):
     for needle, grey in (("Customer Service", 0x66), ("Email: sales@acme.example", 0x77), ("Phone: +95 1 234 5678", 0x77)):
         for b in _footer_boxes(result, needle):
             assert b.style["color"][:3] == pytest.approx((grey / 255,) * 3, abs=0.01), f"{needle} should be grey #{grey:02x}"
-    body = _texts(result.pages[0], "Sample Road")[0]
+    body = _texts(result.pages[0], "Customer Street")[0]  # END USER address; see test_other_headings_...
     assert body.style["color"][:3] == pytest.approx((0x1A / 255,) * 3, abs=0.01), "body text must stay dark"
 
 

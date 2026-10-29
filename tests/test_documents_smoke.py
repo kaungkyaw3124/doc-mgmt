@@ -1,4 +1,9 @@
 """customer -> quotation -> read back -> PDF/XLSX export -> soft delete -> trash."""
+import io
+
+from pypdf import PdfReader
+
+from conftest import unique
 
 
 def test_quotation_lifecycle(admin, customer, quotation):
@@ -31,3 +36,39 @@ def test_quotation_lifecycle(admin, customer, quotation):
     active = admin.get("/documents")
     assert active.status_code == 200, active.text
     assert doc_id not in {d["id"] for d in active.json()}
+
+
+def test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md(admin, customer):
+    """Loop iteration 1: the PDF's SUPPLIER heading carries the company name
+    and the rows below it describe the MD picked on the document
+    (director_id) — checked end to end through the gateway."""
+    company_name = unique("Smoke Supplier Co")
+    md_name = unique("U Smoke MD")
+    company = admin.post("/companies", json={"name": company_name, "short_name": unique("SM")[:12],
+                                             "address": "Company Road", "contact_no": "01-000"})
+    assert company.status_code == 201, company.text
+    company_id = company.json()["id"]
+    doc_id = None
+    try:
+        director = admin.post(f"/companies/{company_id}/directors", json={
+            "name": md_name, "position": "Managing Director",
+            "address": "BUILDING NO.4", "contact_no": "09-988733966"})
+        assert director.status_code == 201, director.text
+
+        doc = admin.post("/documents", json={
+            "doc_type": "quotation", "customer_id": customer["id"], "currency": "USD",
+            "company_id": company_id, "director_id": director.json()["id"],
+            "items": [{"description": unique("test-item"), "quantity": "1", "unit_price": "5.00"}]})
+        assert doc.status_code == 201, doc.text
+        doc_id = doc.json()["id"]
+
+        pdf = admin.get(f"/documents/{doc_id}/export/quotation-pdf")
+        assert pdf.status_code == 200, pdf.text[:300]
+        text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(pdf.content)).pages)
+        assert f"SUPPLIER: {company_name}" in text
+        assert md_name in text.split("SUPPLIER", 1)[1].split("END USER", 1)[0]
+    finally:
+        # Documents first: a company still referenced by one can't be purged.
+        if doc_id:
+            admin.delete(f"/documents/{doc_id}")
+        admin.delete(f"/companies/{company_id}")

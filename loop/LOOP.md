@@ -31,8 +31,9 @@ and writes the next `PLAN.md`.
    touching code — `docs/coding-standards.md` always applies.
 2. If a previous `loop/report.md` exists, move it to
    `loop/history/report-iter-<N>.md` (N = the iteration number inside it).
-3. Branch: work directly on `security/auth-hardening` (the working line;
-   it gets merged into `main` by the user). `git pull` first.
+3. Branch: work on whichever branch the session opened on (`dev` or
+   `security/auth-hardening` — they are kept identical). `git pull` first.
+   Do not create new branches.
 4. Run the full verification once **before changing anything** and record
    the baseline result (what passes/fails already). This stops you from
    "fixing" things that were already broken or blaming yourself for them.
@@ -77,9 +78,8 @@ Stop and write the report when **one** of these is true:
 ### 5. Finish
 1. Write `loop/report.md` from `loop/REPORT_TEMPLATE.md`. Be factual:
    paste real command output (trimmed), not summaries like "tests pass".
-2. Commit on the iteration branch with message
-   `loop iter <N>: <short summary> [<STATUS>]` and push
-   `security/auth-hardening`. Never merge into `main` — the user does that.
+2. Commit with message `loop iter <N>: <short summary> [<STATUS>]` and push
+   the current branch. Never merge into `main` — the user does that.
 3. Leave the Docker stack in a clean state
    (`docker compose -f infra/docker-compose.yml down` unless the plan says
    keep it running).

@@ -110,7 +110,7 @@ def test_selected_directors_position_reaches_pdf_and_excel_in_the_right_place(cl
     pos = next(r for r in rows if r[0] == "Position")
     assert pos[1] == "MD"
     labels = [r[0] for r in rows]
-    assert labels.index("SUPPLIER") < labels.index("Position") < labels.index("Address")
+    assert labels.index("SUPPLIER: Aungaung") < labels.index("Position") < labels.index("Address")  # company name now on the heading
     assert "Position" not in [r[0] for r in _xlsx_rows(client, _quotation(client, cid, plain))]
 
 

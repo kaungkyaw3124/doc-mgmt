@@ -12,7 +12,8 @@
 #            `docker compose -f infra/docker-compose.yml logs <service>`.
 #
 # Env overrides: BASE_URL (default http://localhost:8080/api),
-# HEALTH_TIMEOUT (seconds, default 180), PYTHON (default python3).
+# HEALTH_TIMEOUT (seconds, default 180), PYTHON (default python3),
+# MINIO_IMAGE (default: a pinned pgsty/minio build, see below).
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,6 +23,11 @@ export BASE_URL="${BASE_URL:-$GATEWAY/api}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 PYTHON="${PYTHON:-python3}"
 VENV="$REPO_ROOT/.venv-tests"
+# minio/minio no longer exists on Docker Hub, so a clean machine can't pull
+# the compose file's default. pgsty/minio is a rebuild of the same server
+# (same entrypoint, same `server /data` command); pinned so test runs are
+# reproducible. Override MINIO_IMAGE to test against another build.
+export MINIO_IMAGE="${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}"
 
 KEEP=0
 for arg in "$@"; do

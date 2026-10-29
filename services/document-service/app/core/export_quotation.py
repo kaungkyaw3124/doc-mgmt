@@ -69,13 +69,18 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     """
     items_with_product: list of (LineItem, product_dict_or_None, sub_items_list) tuples.
     company: dict with keys name/position/address/contact_no/support_email,
-              or None if no company profile has been set up yet. position
-              is NOT shown in the Supplier block (kept for signer/signature
-              use elsewhere) — Supplier shows name/address/contact_no/email.
-    director: dict with keys name/address/contact_no/email — the selected
-              Managing Director, shown separately (their own signature
-              block), not mixed into the company's own Supplier info.
-              None if no director was chosen on this document.
+              or None if no company profile has been set up yet. Its name
+              goes on the Supplier heading line ("SUPPLIER: <name>"); its
+              position/address/contact_no are only fallbacks for the
+              director's own, and support_email appears only in the
+              Customer Service footer.
+    director: dict with keys name/address/contact_no/email/position — the
+              selected Managing Director. The Supplier block's rows
+              (Name / Position / Address / Contact No) describe this MD,
+              each falling back to the company's value when the MD's is
+              empty; it also drives the signature block at the bottom.
+              None if no director was chosen on this document (Name then
+              shows "—").
     logo_bytes / seal_bytes: raw image bytes to embed, or None. SVGs are
     skipped here (not embedded) — openpyxl's image support goes through
     PIL, which can't rasterize SVG; the PDF export handles SVG logos fine
@@ -133,25 +138,31 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"B{row}"] = document.issue_date.isoformat() if document.issue_date else date.today().isoformat()
     row += 2
 
-    company_name = _safe_str(company["name"]) if company else "—"
-    ws[f"A{row}"] = "SUPPLIER"
+    # Same layout as the PDF (quotation.html): the company is named on the
+    # heading line, and the rows below describe the MD selected on this
+    # document — each MD field falling back to the company's own value when
+    # the MD has none. No Email row: the company's support email is already
+    # in the Customer Service footer. The whole heading is one string in A
+    # (B left empty) so it reads as a single line and overflows rightwards.
+    company_info = company or {}
+    director_info = director or {}
+    company_name = company_info.get("name")
+    ws[f"A{row}"] = _safe_str(f"SUPPLIER: {company_name}") if company_name else "SUPPLIER"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
-    ws[f"B{row}"] = company_name
     ws[f"E{row}"] = "END USER"
     ws[f"E{row}"].font = Font(name="Arial", bold=True)
     row += 1
 
-    supplier_rows = []
+    supplier_rows = [("Name", _safe_str(director_info.get("name")) or "—")]
     # The selected MD's own position (CompanyDirector.position); omitted when
     # no MD is selected or the MD has none (e.g. created before the column).
     # Falls back to the company's "Signer position" when the MD has none.
-    supplier_position = (director or {}).get("position") or (company or {}).get("position")
+    supplier_position = director_info.get("position") or company_info.get("position")
     if supplier_position:
         supplier_rows.append(("Position", _safe_str(supplier_position)))
     supplier_rows += [
-        ("Address", _safe_str(company.get("address")) if company else ""),
-        ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
-        ("Email", _safe_str(company.get("support_email")) if company else ""),
+        ("Address", _safe_str(director_info.get("address") or company_info.get("address") or "")),
+        ("Contact No", _safe_str(director_info.get("contact_no") or company_info.get("contact_no") or "")),
     ]
     customer_name = _safe_str(customer["name"]) if customer else "—"
     customer_address = ""
@@ -345,7 +356,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"A{row}"] = "Phone:"
     # support_phone was removed from Company — contact_no is the closest
     # remaining company-level phone number for this generic footer block
-    # (the Supplier block above also shows it; this isn't the director's).
+    # (the Supplier block above shows the director's own number, falling
+    # back to this one only when the director has none).
     ws[f"B{row}"] = _safe_str(company.get("contact_no", "")) if company else ""
 
     buffer = BytesIO()
