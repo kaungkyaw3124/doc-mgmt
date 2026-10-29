@@ -679,6 +679,8 @@
         </div>
       </div>
 
+      <!-- a link, not a header button: one more button wraps the header toolbar at ~1280px -->
+      <div style="text-align:right; margin-bottom:8px;"><button type="button" class="link-btn-inline" id="open-product-duplicates-btn">Possible duplicates</button></div>
       <div id="products-banner"></div>
 
       <div class="filter-bar">
@@ -1548,6 +1550,30 @@ Warranty: 2 years from the date of delivery</textarea>
 </div>
 
 <!-- ============ BULK IMPORT PRODUCTS MODAL ============ -->
+<div class="modal-overlay" id="product-dup-warning-modal">
+  <div class="modal-box">
+    <h3>Similar products already exist</h3>
+    <p style="font-size:13px; color:var(--text-dim);">Use one of these instead, or create the new product anyway.</p>
+    <table>
+      <thead><tr><th>Item Number</th><th>Name</th><th>Description</th><th></th></tr></thead>
+      <tbody id="product-dup-warning-tbody"></tbody>
+    </table>
+    <div style="margin-top:16px; text-align:right;">
+      <button type="button" class="btn-secondary" id="product-dup-warning-cancel" style="margin-right:8px;">Cancel</button>
+      <button type="button" class="btn-primary" id="product-dup-warning-create">Create anyway</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="product-duplicates-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="product-duplicates-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+    <h3>Products — possible duplicates</h3>
+    <div id="product-duplicates-banner"></div>
+    <div id="product-duplicates-content"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="bulk-import-modal">
   <div class="modal-box modal-box-wide">
     <button class="link-btn-inline modal-close" id="bulk-import-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>

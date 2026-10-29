@@ -19,6 +19,7 @@ from app.core.db import get_db
 from app.core.search_client import index_product, remove_product_from_index
 from app.core.storage import upload_file, get_presigned_url, download_file_bytes
 from app.core.document_client import get_visible_product_ids
+from app.core import duplicates as dup
 from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app import models, schemas
 
@@ -138,6 +139,21 @@ def _extract_archive_entries(filename: str | None, file_bytes: bytes):
     return _extract_zip_entries(file_bytes)
 
 
+def _raise_if_exact_duplicate(db: Session, name, description, x_allowed_projects: str | None, exclude_id=None):
+    """409 if another active product has the same normalized name AND
+    description. The block is catalogue-wide, but the existing product's
+    details are only included when the caller is allowed to see it."""
+    existing = dup.find_exact(db, name, description, exclude_id)
+    if existing is None:
+        return
+    visible_ids = get_visible_product_ids(x_allowed_projects)
+    shown = visible_ids is None or str(existing.id) in visible_ids
+    raise HTTPException(status_code=409, detail={
+        "message": "This item already exists",
+        "existing": {"id": str(existing.id), "sku": existing.sku, "name": existing.name} if shown else None,
+    })
+
+
 def _generate_sku(db: Session, category_name: str | None) -> str:
     """
     e.g. COM-0001 for a product in the "Computer" category — using that
@@ -167,9 +183,11 @@ def _generate_sku(db: Session, category_name: str | None) -> str:
 def create_product(
     payload: schemas.ProductCreate,
     db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     _require_edit_access(x_access_level)
+    _raise_if_exact_duplicate(db, payload.name, payload.description, x_allowed_projects)
     sku = payload.sku or _generate_sku(db, payload.category)
 
     existing = db.query(models.Product).filter_by(sku=sku).first()
@@ -208,6 +226,31 @@ def list_products(
         query = query.filter(models.Product.id.in_(visible_ids))
 
     return _attach_sub_item_counts(db, query.order_by(models.Product.created_at.desc()).all())
+
+
+@router.get("/duplicate-check")
+def duplicate_check(
+    name: str = "",
+    description: str | None = None,
+    exclude_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    """Exact / same-name / similar active products for a name+description
+    about to be saved (the product form calls this before submitting)."""
+    products = dup.active_products(db, exclude_id, get_visible_product_ids(x_allowed_projects))
+    return {kind: [dup.brief(p) for p in matches] for kind, matches in dup.check(products, name, description).items()}
+
+
+@router.get("/duplicates")
+def list_duplicates(
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    """Groups of possible duplicates across the active catalogue, for the
+    "Possible duplicates" review page."""
+    products = dup.active_products(db, visible_ids=get_visible_product_ids(x_allowed_projects))
+    return {kind: [[dup.brief(p) for p in g] for g in gs] for kind, gs in dup.groups(products).items()}
 
 
 @router.get("/bulk-import-template")
@@ -259,6 +302,13 @@ def bulk_import_products(
     "2" to the second, and so on. A blank/skipped row still "uses up"
     its number, so numbering always matches the row's position in the
     sheet, not the count of products actually created.
+
+    Duplicates: a row that is an exact duplicate (same normalized name and
+    description) of an active product, or of an earlier row in this file,
+    is skipped and listed in `skipped`; it still uses up its number like a
+    blank row. A row that only shares a name with a product is created, with
+    a {row, name, reason} entry in `warnings` (next to the existing
+    plain-text warnings).
     """
     _require_edit_access(x_access_level)
     try:
@@ -304,7 +354,17 @@ def bulk_import_products(
             if stem.isdigit():
                 files_by_position[int(stem)] = (basename, data)
 
+    # Normalized (name, description) -> existing sku, and normalized name ->
+    # sku, both kept up to date as rows are created, so later rows in the
+    # same file are checked against earlier ones too.
+    existing = dup.active_products(db)
+    sku_by_key = {dup.key(p.name, p.description): p.sku for p in existing}
+    sku_by_name = {dup.norm(p.name): p.sku for p in existing}
+    row_by_key = {}
+
     created = []
+    skipped = []
+    name_warnings = []
     for position, row in enumerate(rows[1:], start=1):
         name = cell(row, name_idx)
         if not name:
@@ -325,12 +385,24 @@ def bulk_import_products(
         description = cell(row, description_idx)
         description = str(description).strip() if description else None
 
+        row_key = dup.key(name, description)
+        if row_key in sku_by_key:
+            reason = f"duplicate of row {row_by_key[row_key]}" if row_key in row_by_key else "already exists"
+            skipped.append({"row": position, "name": name, "reason": reason, "existing_sku": sku_by_key[row_key]})
+            continue  # still "uses up" this position number, like a blank row
+        if row_key[0] in sku_by_name:
+            name_warnings.append({"row": position, "name": name, "reason": f"same name as {sku_by_name[row_key[0]]}"})
+
         sku = _generate_sku(db, category)
         product = models.Product(sku=sku, name=name, category=category, unit_price=price, description=description)
         db.add(product)
         db.commit()
         db.refresh(product)
         index_product(product)
+
+        sku_by_key[row_key] = sku
+        sku_by_name.setdefault(row_key[0], sku)
+        row_by_key[row_key] = position
 
         entry = {"sku": sku, "name": name, "row": position, "has_file": False}
 
@@ -349,7 +421,7 @@ def bulk_import_products(
         leftover = ", ".join(str(k) for k in sorted(files_by_position.keys()))
         warnings.append(f"{len(files_by_position)} catalogue file(s) didn't match any spreadsheet row (numbers: {leftover})")
 
-    return {"created": created, "warnings": warnings}
+    return {"created": created, "skipped": skipped, "warnings": warnings + name_warnings}
 
 
 @router.get("/trash", response_model=list[schemas.ProductOut])
@@ -407,6 +479,7 @@ def restore_product(
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
     _check_product_visible(product, x_allowed_projects)
+    _raise_if_exact_duplicate(db, product.name, product.description, x_allowed_projects, exclude_id=product.id)
     product.is_deleted = False
     db.commit()
     db.refresh(product)
@@ -444,7 +517,15 @@ def update_product(
         raise HTTPException(status_code=404, detail="product not found")
     _check_product_visible(product, x_allowed_projects)
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    new_name = changes.get("name", product.name)
+    new_description = changes.get("description", product.description)
+    # Only when the text changes: products that were already duplicates
+    # must still accept price/category/file edits.
+    if (new_name, new_description) != (product.name, product.description):
+        _raise_if_exact_duplicate(db, new_name, new_description, x_allowed_projects, exclude_id=product.id)
+
+    for field, value in changes.items():
         setattr(product, field, value)
 
     db.commit()

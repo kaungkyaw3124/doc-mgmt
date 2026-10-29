@@ -71,6 +71,10 @@ function gotoProject(projectId) {
 
 function formatApiErrorDetail(detail) {
   if (typeof detail === 'string') return detail;
+  if (detail && detail.message) {
+    // duplicate-product 409: {message, existing: {id, sku, name} | null}
+    return detail.existing ? `${detail.message}: ${detail.existing.sku} ${detail.existing.name}` : detail.message;
+  }
   if (Array.isArray(detail)) {
     // FastAPI/Pydantic validation errors: [{type, loc: [...], msg, input}, ...]
     return detail.map(err => {
@@ -124,12 +128,16 @@ async function apiFetch(path, options = {}, _retriedAfterRefresh = false) {
   }
   if (!res.ok) {
     let detail = 'Something went wrong.';
+    let rawDetail = null;
     try {
       const body = await res.json();
+      rawDetail = body.detail;
       detail = formatApiErrorDetail(body.detail) || detail;
     } catch (e) {}
     if (res.status === 403) detail = "You don't have access to this. (" + detail + ")";
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.detail = rawDetail;  // e.g. the duplicate-product 409's {message, existing}
+    throw error;
   }
   if (res.status === 204) return null;
   return res.json();
@@ -2116,6 +2124,30 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     remark: document.getElementById('product-remark').value || null,
     unit_price: null // price isn't set at the catalog level anymore — entered per-document instead
   };
+  // Duplicate check, only when the name/description is new or changed (products
+  // that are already duplicates can still be edited). The server re-checks
+  // exact duplicates, so a failed check here just falls through to it.
+  const editingProduct = editingProductId && cachedProducts.find(p => p.id === editingProductId);
+  const textChanged = !editingProduct || editingProduct.name !== payload.name
+    || (editingProduct.description || null) !== payload.description;
+  if (textChanged && !productDupWarningAccepted) {
+    try {
+      const qs = new URLSearchParams({ name: payload.name, description: payload.description || '' });
+      if (editingProductId) qs.set('exclude_id', editingProductId);
+      const found = await apiFetch('/products/duplicate-check?' + qs);
+      if (found.exact.length) {
+        showProductExistsBanner(found.exact[0]);
+        return;
+      }
+      if (found.same_name.length || found.similar.length) {
+        openProductDupWarning([...found.same_name, ...found.similar]);
+        return;
+      }
+    } catch (err) {
+      // fall through to the save; the server still blocks exact duplicates
+    }
+  }
+  productDupWarningAccepted = false;
   try {
     document.getElementById('product-form-submit-btn').disabled = true;
     let product;
@@ -2179,11 +2211,115 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     pendingSubItems = [];
     loadProducts();
   } catch (err) {
-    showBanner('product-modal-banner', err.message);
+    if (err.detail && err.detail.existing) showProductExistsBanner(err.detail.existing);  // 409 race
+    else showBanner('product-modal-banner', err.message);
   } finally {
     document.getElementById('product-form-submit-btn').disabled = false;
   }
 });
+
+// ---------- duplicate products ----------
+let productDupWarningAccepted = false;  // set by "Create anyway" for the one resubmit
+
+async function openExistingProduct(productId) {
+  try {
+    const product = cachedProducts.find(p => p.id === productId) || await apiFetch('/products/' + productId);
+    openViewProductModal(product);
+  } catch (err) {
+    showBanner('product-modal-banner', err.message);
+  }
+}
+
+function showProductExistsBanner(existing) {
+  document.getElementById('product-modal-banner').innerHTML = `<div class="banner banner-error">This item already exists:
+    <button type="button" class="link-btn-inline" id="product-exists-link">${escapeHtml(existing.sku)} ${escapeHtml(existing.name)}</button></div>`;
+  document.getElementById('product-exists-link').addEventListener('click', () => openExistingProduct(existing.id));
+}
+
+function openProductDupWarning(matches) {
+  const tbody = document.getElementById('product-dup-warning-tbody');
+  tbody.innerHTML = matches.map(p => {
+    const desc = p.description || '';
+    return `
+    <tr>
+      <td class="mono">${escapeHtml(p.sku)}</td>
+      <td>${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(desc.length > 80 ? desc.slice(0, 80) + '…' : desc) || '—'}</td>
+      <td><button type="button" class="link-btn-inline" data-use-existing-id="${p.id}">Use existing</button></td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('[data-use-existing-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('product-dup-warning-modal').classList.remove('active');
+      document.getElementById('product-modal-close').click();
+      openExistingProduct(btn.dataset.useExistingId);
+    });
+  });
+  document.getElementById('product-dup-warning-modal').classList.add('active');
+}
+
+document.getElementById('product-dup-warning-cancel').addEventListener('click', () => {
+  document.getElementById('product-dup-warning-modal').classList.remove('active');
+});
+document.getElementById('product-dup-warning-create').addEventListener('click', () => {
+  document.getElementById('product-dup-warning-modal').classList.remove('active');
+  productDupWarningAccepted = true;
+  document.getElementById('product-form').requestSubmit();
+});
+
+document.getElementById('open-product-duplicates-btn').addEventListener('click', () => {
+  showBanner('product-duplicates-banner', '');
+  document.getElementById('product-duplicates-modal').classList.add('active');
+  loadProductDuplicates();
+});
+document.getElementById('product-duplicates-close').addEventListener('click', () => {
+  document.getElementById('product-duplicates-modal').classList.remove('active');
+});
+
+function renderDuplicateGroups(title, color, groups) {
+  const tables = groups.map(group => `
+    <table style="margin-bottom:12px;">
+      <thead><tr><th>Item Number</th><th>Name</th><th>Description</th><th>Category</th><th>Delete</th></tr></thead>
+      <tbody>${group.map(p => `
+        <tr>
+          <td class="mono">${escapeHtml(p.sku)}</td>
+          <td>${escapeHtml(p.name)}</td>
+          <td>${escapeHtml(p.description || '—')}</td>
+          <td>${escapeHtml(p.category || '—')}</td>
+          <td><button class="link-btn-inline" data-dup-trash-id="${p.id}" data-dup-trash-sku="${escapeHtml(p.sku)}" style="color:var(--danger);">Move to trash</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`).join('');
+  return `<h4 style="color:${color}; margin:16px 0 8px;">${title} (${groups.length})</h4>`
+    + (tables || '<p style="color:var(--text-dim); font-size:13px;">None found.</p>');
+}
+
+async function loadProductDuplicates() {
+  const content = document.getElementById('product-duplicates-content');
+  content.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Loading…</p>';
+  try {
+    const result = await apiFetch('/products/duplicates');
+    content.innerHTML = renderDuplicateGroups('Exact duplicates', 'var(--danger)', result.exact_groups)
+      + renderDuplicateGroups('Same name', 'inherit', result.same_name_groups);
+    content.querySelectorAll('[data-dup-trash-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Move "${btn.dataset.dupTrashSku}" to the recycle bin? You can restore it from there later.`)) return;
+        showBanner('product-duplicates-banner', '');
+        try {
+          await apiFetch('/products/' + btn.dataset.dupTrashId + '/trash', { method: 'PATCH' });
+          loadProductDuplicates();
+          loadProducts();
+        } catch (err) {
+          showBanner('product-duplicates-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    content.innerHTML = '';
+    showBanner('product-duplicates-banner', err.message);
+  }
+}
+
 
 function startEditProduct(product) {
   editingProductId = product.id;
@@ -2270,13 +2406,31 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
       </tr>
     `).join('');
 
+    const skipped = result.skipped || [];
+    const warningText = result.warnings.map(w => typeof w === 'string' ? escapeHtml(w)
+      : `Row ${w.row} (${escapeHtml(w.name)}): ${escapeHtml(w.reason)}`);
+    const skippedRows = skipped.map(item => `
+      <tr>
+        <td class="mono">${item.row}</td>
+        <td>${escapeHtml(item.name)}</td>
+        <td>${escapeHtml(item.reason)}</td>
+        <td class="mono">${escapeHtml(item.existing_sku)}</td>
+      </tr>
+    `).join('');
+
     resultsEl.innerHTML = `
-      <p style="font-weight:600;">Created ${result.created.length} product${result.created.length === 1 ? '' : 's'}.</p>
+      <p style="font-weight:600;">Created ${result.created.length} product${result.created.length === 1 ? '' : 's'} · Skipped ${skipped.length} duplicate${skipped.length === 1 ? '' : 's'} · ${warningText.length} warning${warningText.length === 1 ? '' : 's'}</p>
       <table>
         <thead><tr><th>Row</th><th>Item Number</th><th>Name</th><th>File attached?</th></tr></thead>
         <tbody>${rows || '<tr class="empty-row"><td colspan="4">Nothing was created.</td></tr>'}</tbody>
       </table>
-      ${result.warnings.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${result.warnings.map(w => escapeHtml(w)).join('<br>')}</p>` : ''}
+      ${skipped.length ? `
+        <p style="font-weight:600; margin-top:12px;">Skipped (already in the catalogue)</p>
+        <table>
+          <thead><tr><th>Row</th><th>Name</th><th>Reason</th><th>Existing item</th></tr></thead>
+          <tbody>${skippedRows}</tbody>
+        </table>` : ''}
+      ${warningText.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${warningText.join('<br>')}</p>` : ''}
     `;
     loadProducts();
   } catch (err) {
