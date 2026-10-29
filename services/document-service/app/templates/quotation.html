@@ -6,8 +6,8 @@
   @page {
     size: A4;
     /* Only the footer is a repeating margin-box element (see .pdf-footer
-       below) — it's short and its height is predictable, so a fixed 3cm
-       reservation for it is safe. The header (logo/seal, title, date,
+       below) — it's short and its height is predictable, so a fixed
+       bottom-margin reservation for it is safe (see the math below). The header (logo/seal, title, date,
        supplier/end-user parties) used to live in a `running()` margin box
        too, which forced a huge, guessed top margin on *every* page to
        avoid the fixed-height margin box colliding with body content when a
@@ -16,9 +16,24 @@
        header now repeats on every page as the <thead> of the outer
        table.page-layout (see below), whose height comes from the real
        content — nothing to guess, no reserved dead space. */
-    /* Left/right 11mm (was 20mm): usable width 188mm instead of 170mm. The
-       footer's width below must equal 210mm - 2*11mm. */
-    margin: 1.2cm 11mm 3cm 11mm;
+    /* Page margins asked for by the user: top 0.3in (7.6mm), left/right/
+       bottom 0.5in (12.7mm). Usable width 210mm - 2*12.7mm = 184.6mm; the
+       footer's width below must equal that.
+       Top: content starts right at 7.6mm — body has no margin and the
+       header has no margin above its first element (logo/seal row, or the
+       QUOTATION title when there are no images).
+       Bottom: the footer sits at the TOP of this bottom margin box
+       (vertical-align: top), so for its last line to end 12.7mm above the
+       page edge the margin must be 12.7mm + the footer's own height:
+         h3 "Customer Service" 11pt   16.39px  (+6px margin-bottom, no margin-top)
+         2 x .footer-line 7pt         2 x 10.43px
+         = 43.24px (measured from WeasyPrint's box tree, Arial/Liberation Sans)
+       -> 12.7mm + 43.24px (= 11.44mm) = 24.14mm. Written out as a plain
+       length: WeasyPrint 62.3 drops an @page `margin` that uses calc()
+       (it silently fell back to its 75px default). If the footer's font
+       sizes or lines change, re-measure (tests/test_page_margins.py
+       checks the 12.7mm). */
+    margin: 7.6mm 12.7mm 24.14mm 12.7mm;
     @bottom-center { content: element(pdfFooter); vertical-align: top; }
   }
   /* margin: 0 — the browser default 8px body margin was stacking on top of
@@ -47,7 +62,7 @@
      into the @page bottom margin box above — WeasyPrint then repeats
      it on every page automatically. Kept running (small, fixed height,
      genuinely meant to appear on every page). */
-  .pdf-footer { position: running(pdfFooter); width: 188mm; }
+  .pdf-footer { position: running(pdfFooter); width: 184.6mm; }
 
   .header-top {
     display: flex; justify-content: space-between; align-items: flex-start;
@@ -137,9 +152,12 @@
   .footer h3 { font-size: 11pt; margin-bottom: 6px; }
   /* Customer Service footer: heading unchanged (11pt bold h3, inherited from
      the UA h3 rule); only the Email / Phone lines shrink, 10.5pt -> 7pt.
-     overflow-wrap lets an unusually long address wrap inside the 17cm footer
+     overflow-wrap lets an unusually long address wrap inside the 184.6mm footer
      instead of running off the page edge. */
-  .pdf-footer h3 { font-size: 11pt; margin-bottom: 6px; color: #666; }  /* greyed out: secondary info, not main content */
+  /* margin-top: 0 — the UA default h3 top margin (~14.7px) collapsed
+     through .pdf-footer into the margin box: a hidden gap that pushed the
+     footer down by an amount the @page bottom-margin math didn't count. */
+  .pdf-footer h3 { font-size: 11pt; margin-top: 0; margin-bottom: 6px; color: #666; }  /* greyed out: secondary info, not main content */
   .pdf-footer .footer-line { font-size: 7pt; color: #777; overflow-wrap: anywhere; }
 </style>
 </head>
@@ -154,10 +172,13 @@
   <table class="page-layout">
   <thead><tr><td>
   <div class="pdf-header">
+    {# Row only rendered when there is an image: an empty row still carried its 10px margin-bottom, a hidden gap that pushed QUOTATION below the 7.6mm top margin. #}
+    {% if logo_data_uri or seal_data_uri %}
     <div class="header-top">
       <div>{% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
       <div>{% if seal_data_uri %}<img class="seal" src="{{ seal_data_uri }}">{% endif %}</div>
     </div>
+    {% endif %}
     <div class="title">QUOTATION</div>
     <div class="date-line"><strong>Date:</strong> {{ issue_date }}</div>
 

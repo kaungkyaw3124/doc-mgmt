@@ -31,7 +31,8 @@ from app.core.export_quotation import generate_quotation_xlsx
 
 PT = 96 / 72  # px per pt
 MM = 96 / 25.4  # px per mm
-SIDE_MARGIN_PX = 11 * MM  # left/right page margin (11mm)
+SIDE_MARGIN_PX = 12.7 * MM  # left/right page margin (0.5in = 12.7mm; was 11mm)
+USABLE_WIDTH_MM = 210 - 2 * 12.7  # 184.6mm (was 188mm)
 
 COMPANY = {
     "name": "Acme Supplier Co., Ltd.",
@@ -212,7 +213,7 @@ def test_xlsx_heading_is_red_and_smaller_too():
 #   logo-row bottom -> heading 29, parties -> table 18, 100px min-height
 #   header row even with no logo.
 OLD_TOP_CONTENT_PX = 64.7
-MAX_TOP_CONTENT_PX = 50  # 1.2cm page margin (45.4px) + a little slack
+MAX_TOP_CONTENT_PX = 50  # was: 1.2cm page margin (45.4px) + slack; the page margin is now 7.6mm (28.7px)
 
 
 def _page_box(layout_result):
@@ -229,7 +230,8 @@ def test_top_of_first_page_has_no_stacked_margins(layout):
     top = _first_content_y(result)
     assert top < OLD_TOP_CONTENT_PX - 8, f"first content starts {top:.1f}px from the page edge, expected a smaller top margin"
     assert top <= MAX_TOP_CONTENT_PX
-    assert top >= 0.8 * 96 / 2.54, "top margin must not become so small that printers clip the logo"
+    # The user asked for a 0.3in (7.6mm) top margin (loop iteration 3); was a 0.8cm floor.
+    assert top >= 7.6 * MM - 0.5, "top margin must not shrink below the 7.6mm the user asked for"
 
 
 def test_gap_between_logo_row_and_heading_is_tight(layout):
@@ -425,7 +427,8 @@ def test_long_unbreakable_supplier_values_wrap_inside_their_column(layout):
 
 
 # ---------------------------------------------------------------------------
-# Follow-up — left/right page margins 20mm -> 11mm (usable width 170 -> 188mm)
+# Follow-up — left/right page margins 20mm -> 11mm (usable width 170 -> 188mm),
+# then 11mm -> 12.7mm / 0.5in (usable width 184.6mm) in loop iteration 3
 # ---------------------------------------------------------------------------
 
 def _boxes_with_class(boxes, name):
@@ -438,16 +441,16 @@ def _boxes_with_class(boxes, name):
 
 
 @pytest.mark.parametrize("n_items", [3, 40])
-def test_side_margins_are_11mm_and_content_uses_the_full_width(layout, n_items):
+def test_side_margins_are_12_7mm_and_content_uses_the_full_width(layout, n_items):
     result = layout(n_items=n_items, logo_bytes=_png(), seal_bytes=_png())
     for n, page in enumerate(result.pages, 1):
         page_box = page[0]
-        assert page_box.margin_left == pytest.approx(11 * MM, abs=0.5), f"page {n} left margin"
-        assert page_box.margin_right == pytest.approx(11 * MM, abs=0.5), f"page {n} right margin"
+        assert page_box.margin_left == pytest.approx(SIDE_MARGIN_PX, abs=0.5), f"page {n} left margin"
+        assert page_box.margin_right == pytest.approx(SIDE_MARGIN_PX, abs=0.5), f"page {n} right margin"
     first = result.pages[0]
     table = _boxes_with_class(first, "items")[0]
-    assert table.position_x == pytest.approx(11 * MM, abs=0.5)
-    assert table.width == pytest.approx(188 * MM, abs=1), f"items table is {table.width / MM:.1f}mm wide, expected 188mm"
+    assert table.position_x == pytest.approx(SIDE_MARGIN_PX, abs=0.5)
+    assert table.width == pytest.approx(USABLE_WIDTH_MM * MM, abs=1), f"items table is {table.width / MM:.1f}mm wide, expected {USABLE_WIDTH_MM}mm"
 
 
 def test_supplier_and_end_user_blocks_align_with_the_table_edges(layout):
@@ -465,9 +468,9 @@ def test_footer_and_terms_use_the_same_width_on_every_page(layout):
     result = layout(n_items=40, director_seal_bytes=_png())
     for n, page in enumerate(result.pages, 1):
         footer = _boxes_with_class(page, "pdf-footer")
-        assert footer and footer[0].width == pytest.approx(188 * MM, abs=1), f"page {n} footer width"
+        assert footer and footer[0].width == pytest.approx(USABLE_WIDTH_MM * MM, abs=1), f"page {n} footer width"
     terms = [b for p in result.pages for b in _boxes_with_class(p, "terms")][0]
-    assert terms.width == pytest.approx(188 * MM, abs=1)
+    assert terms.width == pytest.approx(USABLE_WIDTH_MM * MM, abs=1)
 
 
 def test_nothing_overflows_the_wider_page(layout):
@@ -475,4 +478,4 @@ def test_nothing_overflows_the_wider_page(layout):
     for n, page in enumerate(result.pages, 1):
         for b in page:
             if getattr(b, "text", None):
-                assert SIDE_MARGIN_PX - 1 <= b.position_x and b.position_x + b.width <= 793.7 - SIDE_MARGIN_PX + 1, f"page {n}: '{b.text[:25]}' outside the 11mm margins"
+                assert SIDE_MARGIN_PX - 1 <= b.position_x and b.position_x + b.width <= 793.7 - SIDE_MARGIN_PX + 1, f"page {n}: '{b.text[:25]}' outside the 12.7mm margins"

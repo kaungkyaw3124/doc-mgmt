@@ -5,6 +5,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.page import PageMargins
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
@@ -201,6 +202,11 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # every printed page. Excel's print titles repeat cell content only —
     # the floating logo/seal images still print on page 1 alone.
     ws.print_title_rows = f"1:{row}"
+    # Same page margins as the PDF (inches, openpyxl's unit): top 0.3,
+    # left/right/bottom 0.5. Excel's own header/footer areas sit inside
+    # those margins, so keep them smaller (0.2) or they would push the
+    # printed body further in than the user asked for.
+    ws.page_margins = PageMargins(top=0.3, left=0.5, right=0.5, bottom=0.5, header=0.2, footer=0.2)
     row += 1
 
     categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}
