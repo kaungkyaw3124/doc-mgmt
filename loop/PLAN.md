@@ -19,7 +19,7 @@ lines instead.
 - The MD block is `.md-block` (right-aligned) > `.md-block-inner` (inline-block,
   200px, `text-align: center`) > `.md-seal` (130px) or `.md-name` / `.md-title`.
 - Put the new line **inside** `.md-block-inner`, before the seal, so it inherits
-  the same center. Use the body font (Arial 10.5pt, normal weight, color
+  the same center. Use the body font (Arial 10.5pt, **bold**, color
   `#1a1a1a`) with a small gap (~6px) above the seal.
 - Show it only when the MD block is shown (a director is selected). No director →
   no MD block and no text (current behaviour).
@@ -30,12 +30,12 @@ lines instead.
 ## XLSX: `services/document-service/app/core/export_quotation.py` (around line 336)
 - Write `Regards,` in the row just above the seal / name, centered across
   the same columns the seal covers (the seal is anchored at `G{row}`, the
-  name/position fallback merges `F:G`). Arial, normal weight. Leave a blank row
+  name/position fallback merges `F:G`). Arial, **bold**. Leave a blank row
   between it and the seal if needed, so the image doesn't cover the text.
 
 ## Tests
 Add `services/document-service/tests/test_md_regards.py`:
-1. PDF with director + seal: `Regards,` appears exactly once, on the same
+1. PDF with director + seal: `Regards,` appears exactly once, in a bold font, on the same
    page as the seal, above the seal (its box bottom ≤ seal box top), and its
    horizontal center equals the seal's center ± 1 mm (WeasyPrint layout boxes,
    same style as `test_quotation_visual_style.py`).
@@ -43,7 +43,7 @@ Add `services/document-service/tests/test_md_regards.py`:
 3. PDF without director: `Regards,` does not appear.
 4. Page sweep (1, 3, 5, 8, 12, 20, 30, 80 items): text and seal always on the
    same page; the existing MD-orphan tests still pass.
-5. XLSX with seal: the `Regards,` cell is above the seal's anchor row and
+5. XLSX with seal: the `Regards,` cell is bold, above the seal's anchor row and
    in the seal's columns. XLSX without director: text absent.
 
 ## Acceptance checks
