@@ -61,7 +61,9 @@
   .date-line { margin-bottom: 10px; }
   .parties { display: flex; justify-content: space-between; margin-bottom: 12px; }
   .party { width: 48%; }
-  .party h3 { font-size: 11pt; margin: 0 0 4px; border-bottom: 1px solid #999; padding-bottom: 3px; }
+  /* overflow-wrap: the heading now carries the company name ("SUPPLIER: <name>"),
+     so an unusually long name must wrap inside the 48% column too. */
+  .party h3 { font-size: 11pt; margin: 0 0 4px; border-bottom: 1px solid #999; padding-bottom: 3px; overflow-wrap: anywhere; }
   /* table-layout: fixed + overflow-wrap: a single long unbreakable value (an
      email, a long Position) used to widen the auto-layout table past its 48%
      column and overprint the neighbouring END USER block; now it wraps. */
@@ -143,15 +145,15 @@
 
     <div class="parties">
       <div class="party">
-        <h3>SUPPLIER</h3>
+        {# The company is named on the heading line; the rows below describe the MD selected on this document (Document.director_id), so the reader sees who is quoting on the company's behalf. Each MD field falls back to the company's own value when the MD has none (e.g. a director added without address/contact). No Email row: the company's support email is already in the Customer Service footer. #}
+        <h3>SUPPLIER{% if company and company.name %}: {{ company.name }}{% endif %}</h3>
         <table>
-          <tr><td class="label">Name</td><td>{{ company.name if company else "—" }}</td></tr>
+          <tr><td class="label">Name</td><td>{{ director.name if director and director.name else "—" }}</td></tr>
           {# Position: the selected MD's own position (CompanyDirector.position) if set, otherwise the company's "Signer position" (Company.position). Row omitted — no placeholder — when neither exists. #}
           {% set supplier_position = (director.position if director and director.position else None) or (company.position if company and company.position else None) %}
           {% if supplier_position %}<tr><td class="label">Position</td><td>{{ supplier_position }}</td></tr>{% endif %}
-          <tr><td class="label">Address</td><td>{{ company.address if company else "" }}</td></tr>
-          <tr><td class="label">Contact No</td><td>{{ company.contact_no if company else "" }}</td></tr>
-          <tr><td class="label">Email</td><td>{{ company.support_email if company else "" }}</td></tr>
+          <tr><td class="label">Address</td><td>{{ (director.address if director and director.address else None) or (company.address if company and company.address else "") }}</td></tr>
+          <tr><td class="label">Contact No</td><td>{{ (director.contact_no if director and director.contact_no else None) or (company.contact_no if company and company.contact_no else "") }}</td></tr>
         </table>
       </div>
       <div class="party">

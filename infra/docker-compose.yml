@@ -18,7 +18,12 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio
+    # Overridable because upstream minio/minio has been removed from Docker
+    # Hub ("repository does not exist"), so a fresh machine can no longer
+    # pull it. scripts/verify.sh points this at a drop-in community build;
+    # the default is left unchanged so existing deployments (which have the
+    # image cached) are not switched to a different build silently.
+    image: ${MINIO_IMAGE:-minio/minio}
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
