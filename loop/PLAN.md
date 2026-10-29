@@ -2,99 +2,107 @@
 
 | Field | Value |
 |---|---|
-| Iteration | **7** |
-| Goal | When creating/editing a document, the user can **either pick a saved customer or type the customer info by hand (one-time, not saved to the Customers list)** |
+| Iteration | **8** |
+| Goal | Stop duplicate products: **block** exact duplicates, **warn** on same/similar names, **skip + report** duplicates in bulk import, and a **"Possible duplicates"** review page |
 | Attempt limit | 5 per failing check |
 | Branch | whichever the session opened on (`dev` / `security/auth-hardening`) |
 | Status | READY FOR CLAUDE CODE |
 
-## What the user wants
-Today the document form (`web/index.html` ~line 1233, `#doc-customer` with a
-datalist + "+ New customer") only links a **saved** customer (`Document.customer_id`).
-The user wants a choice in the form:
+## Background
+`services/catalogue-service`: `Product.sku` is unique, but SKUs are generated
+(`_generate_sku`), so two products with the same name and description can be
+created freely, one by one or through `POST /api/products/bulk-import`.
 
-- **Saved customer**: exactly as today.
-- **Enter manually**: the user types the customer info for **this document only**.
-  It is stored on the document and is **never** added to the Customers list
-  (the user confirmed: one time, not saved).
+## Definitions (use one shared helper, e.g. `app/core/duplicates.py`)
+- `norm(text)`: `None`/blank → `""`; otherwise casefold, strip, and collapse all
+  whitespace runs to one space. Nothing else.
+- **Exact duplicate**: another **active** (`is_deleted == False`) product with
+  `norm(name)` **and** `norm(description)` equal.
+- **Same name**: another active product with equal `norm(name)` but a different description.
+- **Similar**: another active product whose `norm(name)` has
+  `difflib.SequenceMatcher(...).ratio() >= 0.88` (not exact or same-name). Return the
+  top 5 by ratio. Use stdlib `difflib`; no new dependency. Fine for catalogue
+  sizes up to ~10k. Add a `shortcut:` comment noting the limit.
+- Trashed products are ignored everywhere except restore (below).
 
-Manual fields:
-| Field | Required | Prints in the END USER block as |
-|---|---|---|
-| Customer Name | yes | Customer Name |
-| Organization | no | Organization (falls back to Customer Name if empty) |
-| Address | no | Address |
-| Phone | no | not printed (stored only) |
-| Email | no | not printed (stored only) |
-
-Saved-customer documents keep their current output exactly (Organization still
-shows the customer name). Do not add an Organization field to saved customers.
-
-## Backend: `services/document-service`
-1. **Model + migration**: add nullable columns to `documents`:
-   `end_user_name` (String 255), `end_user_organization` (255), `end_user_address` (Text),
-   `end_user_phone` (50), `end_user_email` (255). New migration
-   `alembic/versions/0005_document_manual_end_user.py`, guarded/idempotent like
-   `0004_company_director_position.py` (it runs automatically at startup via
-   `alembic upgrade head` in `app/main.py`). Existing rows stay untouched.
-2. **Schemas** (`app/schemas.py`): add the 5 fields to create / update / out.
-3. **Validation** (create and full edit in `app/routers/documents.py`):
-   - A document has **either** `customer_id` **or** `end_user_name`, never both
-     → 422 with a clear message if both are sent.
-   - Whatever is allowed today when neither is sent stays allowed (check current behaviour; don't make it stricter).
-   - Switching a document from manual to saved clears the 5 manual fields, and saved to manual sets `customer_id` to null.
-   - Trim whitespace. An all-blank `end_user_name` counts as not sent.
-4. **Exports** (`_gather_export_data` ~line 725, `quotation.html` ~line 211, `export_quotation.py` ~line 173):
-   when `customer_id` is null and `end_user_name` is set, build the same
-   `customer` dict the exports already use from the manual fields, plus
-   `organization` and `address`. Make Organization print
-   `organization or name` and Address print the manual address. Saved-customer
-   output must not change.
-5. **Search**: `app/core/search_client.py` indexes documents. Add `end_user_name`
-   and `end_user_organization` to the indexed document so a manual-customer
-   document is searchable by those names.
-6. Anywhere the API returns or lists a document's customer name for the UI
-   (document list, detail), the manual name must show up too.
+## Backend: `services/catalogue-service/app/routers/products.py`
+1. **Create** (`POST /api/products`): exact duplicate → **409** with detail
+   `{"message": "This item already exists", "existing": {"id", "sku", "name"}}`.
+2. **Edit** (`PATCH /api/products/{id}`): run the exact check **only if name or
+   description changed**, excluding the product itself. (Existing duplicate pairs
+   must still allow price/category/file edits.) Same 409.
+3. **Restore** (`PATCH /{id}/restore`): if restoring would create an exact
+   duplicate of an active product → 409, same shape.
+4. **New** `GET /api/products/duplicate-check?name=&description=&exclude_id=`
+   → `{"exact": [...], "same_name": [...], "similar": [...]}`. Each item has
+   `id, sku, name, description, category`. Same auth/visibility filter as
+   `GET /api/products`. Declare the route **before** `/{product_id}` so it isn't
+   treated as an id.
+5. **New** `GET /api/products/duplicates` → groups across the whole active
+   catalogue: `{"exact_groups": [[...],...], "same_name_groups": [[...],...]}`,
+   with only groups of 2 or more, sorted by name. Same auth/visibility filter.
+   Similar-name groups are not needed here.
+6. **Bulk import** (`POST /bulk-import`):
+   - Skip a row if it is an exact duplicate of an active product, **or** of an
+     earlier row in the same file. Add it to `skipped: [{row, name, reason, existing_sku}]`.
+     `reason` is `"already exists"` or `"duplicate of row N"`.
+   - A row that only matches by name is still created, but added to
+     `warnings: [{row, name, reason: "same name as <sku>"}]`.
+   - Keep the existing response fields and the file-number/row-position rules
+     exactly (a skipped row still "uses up" its position number, as blank rows do).
+   - Check the Nginx gateway routes `/api/products/duplicate-check` and
+     `/api/products/duplicates` through the same auth as the other product routes
+     (`infra/nginx/nginx.conf*`). They should, via the `/api/products` prefix.
 
 ## Frontend: `web/index.html` + `web/js/app.js`
-1. In the document modal, above the customer input: a two-option switch,
-   **Saved customer** / **Enter manually** (radio buttons or a small segmented
-   control in the existing style). Default: Saved customer.
-2. Saved customer: today's input, datalist, hint and "+ New customer" button unchanged.
-3. Enter manually: hide those and show 5 inputs (Customer Name*, Organization,
-   Address (textarea), Phone, Email). Send them as the `end_user_*` fields and
-   send `customer_id: null`.
-4. Editing an existing document opens in the right mode with the values filled in.
-5. The document list / detail shows the manual customer name where it now shows
-   the saved customer's name (`app.js` ~lines 549 and 685 look it up in
-   `cachedCustomers`; fall back to `doc.end_user_name`).
-6. Keep the style of the existing form. No new libraries.
+1. **Product form (create/edit)**: before submitting, call `duplicate-check`
+   (pass `exclude_id` when editing).
+   - `exact` not empty → show "This item already exists: <sku> <name>", with a
+     link that opens the existing product, and don't submit.
+   - otherwise, `same_name` or `similar` not empty → show a warning dialog listing
+     them (sku, name, short description), with **Use existing** (opens that product,
+     closes the form) and **Create anyway** (submits).
+   - Also handle a 409 from the server (race) with the same "already exists" message.
+2. **Bulk import result**: after upload, show counts (created / skipped /
+   warnings) and a list of skipped rows with reason and warnings.
+3. **"Possible duplicates" page**: a button in the Products section opens a view
+   listing `exact_groups` first (red label "Exact duplicates"), then
+   `same_name_groups` ("Same name"). Each row shows sku, name, description,
+   category, and the existing **Move to trash** action. The groups refresh after
+   trashing.
+4. Match the existing UI style; no new libraries.
 
 ## Tests
-- `services/document-service/tests/test_manual_end_user.py` (unit, like the existing tests):
-  1. Create with manual fields → stored; no Customer row created (count unchanged).
-  2. Both `customer_id` and `end_user_name` → 422.
-  3. Edit manual → saved clears the manual fields; saved → manual nulls `customer_id`.
-  4. PDF + XLSX with manual end user: Customer Name, Organization, Address show the manual values; empty Organization → name.
-  5. Saved-customer PDF + XLSX END USER output is unchanged.
-  6. Migration: running `alembic upgrade head` twice is safe (follow `test_migrations_idempotent.py`).
-- Smoke (`tests/test_documents_smoke.py`): through the gateway, create a quotation
-  with a manual customer, export the PDF, check the name/org/address text, check that
-  `GET /api/customers` doesn't contain it, check search finds the document by the
-  manual name (poll ≤ 10 s), then clean up.
-- UI proof: use Playwright (Python; `pip install playwright && playwright install --with-deps chromium`)
-  against the running stack. Log in, open the New document form, switch to
-  "Enter manually", fill it in, save, and confirm the document appears in the
-  list with the manual name. Add it as `tests/test_ui_manual_customer.py`, skipped
-  automatically if Playwright isn't installed. If Playwright can't be installed,
-  record the reason and still do every other check.
+- `services/catalogue-service/tests/test_duplicates.py`:
+  1. `norm` cases: case, extra spaces, None vs "".
+  2. Create exact dup → 409 with the existing sku. Same name + different description → 201.
+  3. Edit: changing price on one of an existing duplicate pair → 200; renaming into an exact dup → 409.
+  4. Restore into an exact dup → 409.
+  5. `duplicate-check`: returns exact / same_name / similar correctly, `exclude_id`
+     works, a trashed product is not returned, typo `"Cantilver Shelf 750mm"` finds
+     `"Cantilever Shelf 750 mm"` as similar.
+  6. `duplicates`: groups are correct and exclude trashed and singletons.
+  7. Bulk import: existing-dup row and within-file dup row are skipped with the right
+     reasons; a same-name row is created with a warning; file numbering is unchanged
+     (a file for a row after a skipped row still attaches to the right product).
+- Smoke (`tests/test_catalogue_smoke.py`): through the gateway, create a product,
+  then creating it again → 409; `duplicate-check` and `duplicates` → 200; clean up
+  (trash) what you created.
+- UI (Playwright, like iteration 7; skip if unavailable): create a product, try to
+  create the same one again → the "already exists" message is shown; create one with
+  the same name and a different description → the warning dialog appears → Create anyway works.
 
 ## Acceptance checks
 | # | Check | How to verify |
 |---|---|---|
-| A1 | New unit tests pass | `pytest services/document-service/tests/test_manual_end_user.py -v` |
-| A2 | No regressions | `pytest services/document-service/tests`: all pass |
-| A3 | Smoke passes | `./scripts/verify.sh` exits 0, including the new manual-customer smoke test |
-| A4 | UI proof | Screenshots: `loop/evidence/iter-7-form-saved.png`, `iter-7-form-manual.png` (form in each mode) and `iter-7-list.png` (list showing the manual name) |
-| A5 | PDF proof | `loop/evidence/iter-7-pdf-manual.png`: crop of the END USER block of a manual-customer quotation |
-| A6 | Existing data safe | Start the stack on the old code with a saved-customer document, upgrade to the new code, and confirm that document still opens and exports the same END USER text |
+| A1 | New unit tests pass | `pytest services/catalogue-service/tests/test_duplicates.py -v` |
+| A2 | No regressions | `pytest services/*/tests`: all pass (run each service's suite) |
+| A3 | Smoke passes | `./scripts/verify.sh` exits 0 |
+| A4 | UI proof | `loop/evidence/iter-8-exact-block.png`, `iter-8-warning.png`, `iter-8-import-result.png`, `iter-8-duplicates-page.png` |
+| A5 | Existing data | With 2 pre-existing exact duplicates in the DB: the list still loads, both appear on the duplicates page, and editing the price of one works |
+
+## Out of scope
+Merging duplicates (re-pointing documents to the kept product). Users trash the extras manually.
+
+## Also from iteration 7 (no action needed)
+The new "Customer" column in the documents list stays (user to confirm).
