@@ -6,6 +6,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils.units import pixels_to_EMU
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
@@ -336,17 +339,42 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     if director:
         seal_row = row
         seal_placed = False
+        # "Regards," sign-off on its own row just above the seal (same as the
+        # PDF). Centered in column G, and the seal below is centered in G too
+        # (see the anchor offset), so the text's center is the seal's center.
+        # The seal is anchored to the NEXT row's top edge, so it can't cover
+        # the text. The no-seal fallback below rewrites this as F:G merged,
+        # centered over the name/position lines instead.
+        regards_row = row
+        ws[f"G{row}"] = "Regards,"
+        ws[f"G{row}"].font = Font(name="Arial", bold=True)
+        ws[f"G{row}"].alignment = Alignment(horizontal="center")
+        row += 1
         if director_seal_bytes and director_seal_mime != "image/svg+xml":
             try:
                 md_seal_img = XLImage(BytesIO(director_seal_bytes))
                 md_seal_img.width = 100
                 md_seal_img.height = 100
-                ws.add_image(md_seal_img, f"G{row}")
+                # Excel shows a column of width w (characters) as
+                # trunc((256*w + trunc(128/7)) / 256 * 7) px: 30 -> 210px. A
+                # plain "G{row}" anchor would put the 100px seal at G's left
+                # edge, 55px left of where the centered "Regards," sits.
+                g_px = int((256 * col_widths[6] + 128 // 7) / 256 * 7)
+                md_seal_img.anchor = OneCellAnchor(
+                    _from=AnchorMarker(col=6, colOff=pixels_to_EMU((g_px - 100) // 2), row=row - 1, rowOff=0),
+                    ext=XDRPositiveSize2D(pixels_to_EMU(100), pixels_to_EMU(100)),
+                )
+                ws.add_image(md_seal_img)
                 row += 6  # leave room for the image
                 seal_placed = True
             except Exception:
                 pass  # bad/unsupported image format shouldn't block the whole export
         if not seal_placed:
+            ws[f"G{regards_row}"] = None
+            ws.merge_cells(f"F{regards_row}:G{regards_row}")
+            ws[f"F{regards_row}"] = "Regards,"
+            ws[f"F{regards_row}"].font = Font(name="Arial", bold=True)
+            ws[f"F{regards_row}"].alignment = Alignment(horizontal="center")
             ws.merge_cells(f"F{row}:G{row}")
             ws[f"F{row}"] = _safe_str(director.get("name", ""))
             ws[f"F{row}"].font = Font(name="Arial", bold=True)
