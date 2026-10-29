@@ -27,6 +27,8 @@ and writes the next `PLAN.md`.
 ## Rules (follow every iteration)
 
 ### 1. Before you start
+0. Load the `ponytail` skill (Skill tool) and follow it for the whole
+   iteration: smallest complete change, but never skip tests.
 1. Read `loop/PLAN.md` fully. Read the docs it links (in `docs/`) before
    touching code — `docs/coding-standards.md` always applies.
 2. If a previous `loop/report.md` exists, move it to
