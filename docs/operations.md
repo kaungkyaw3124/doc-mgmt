@@ -76,6 +76,35 @@ for s in auth-service document-service catalogue-service search-service; do
 done
 ```
 
+## Running tests
+
+The black-box smoke suite in `tests/` talks to the real stack through the
+Nginx gateway (`http://localhost:8080/api`) only. One command boots the
+stack, waits for every service's `/health`, and runs it:
+
+```bash
+./scripts/verify.sh          # tears the stack down on success, leaves it up on failure
+./scripts/verify.sh --keep   # leave it running either way
+```
+
+It exits non-zero and prints `FAILED at step: <step>` on any failure.
+Missing `services/*/.env` files are created from each `.env.example`
+(test/dev placeholder values only; an existing `.env` is never touched).
+Test dependencies go into a gitignored `.venv-tests/`.
+
+Against an already-running stack:
+
+```bash
+pip install -r tests/requirements.txt
+BASE_URL=http://localhost:8080/api pytest tests/ -v
+```
+
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` override the seeded `admin` /
+`CHANGE_ME` login. Tests use uuid-suffixed names and clean up after
+themselves where an API exists, so they can be re-run without resetting
+the database. Categories have no delete endpoint, so a few `test-category-*`
+rows build up across runs.
+
 ## Seed / clear demo data
 
 Two standalone scripts, standard-library only (`urllib`), driven entirely
