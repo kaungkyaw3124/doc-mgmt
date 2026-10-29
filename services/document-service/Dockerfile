@@ -2,7 +2,7 @@ FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# libpq-dev + gcc needed to build psycopg2 if a wheel isn't available for the platform
+# libpq-dev is intentionally NOT installed: requirements use psycopg2-binary (prebuilt wheel), and libpq-dev pulls in libssl-dev, whose exact-version dependency on libssl3 breaks the build whenever a mirror is out of sync (libssl-dev 3.0.20 vs libssl3 3.0.22). gcc stays as a generic build fallback.
 # The rest (pango, cairo, gdk-pixbuf, fonts) are required by WeasyPrint for PDF generation
 #
 # Always rewritten to https:// (below), regardless of mirror — this base
@@ -23,7 +23,6 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    libpq-dev \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     libgdk-pixbuf2.0-0 \

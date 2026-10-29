@@ -1161,6 +1161,10 @@ function buildDirectorRow(director) {
         <input type="text" class="director-name" placeholder="Managing Director's name" value="${director ? escapeHtml(director.name) : ''}">
       </div>
       <div style="min-width:180px;">
+        <label>Position</label>
+        <input type="text" class="director-position" maxlength="100" placeholder="Managing Director" value="${director ? escapeHtml(director.position || '') : ''}">
+      </div>
+      <div style="min-width:180px;">
         <label>Address</label>
         <input type="text" class="director-address" placeholder="Mayangon, Yangon" value="${director ? escapeHtml(director.address || '') : ''}">
       </div>
@@ -1316,6 +1320,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       const address = row.querySelector('.director-address').value.trim() || null;
       const contact_no = row.querySelector('.director-contact').value.trim() || null;
       const email = row.querySelector('.director-email').value.trim() || null;
+      const position = row.querySelector('.director-position').value.trim() || null;
       const sealFile = row.querySelector('.director-seal-file').files[0];
       let directorId = row.dataset.directorId;
 
@@ -1323,7 +1328,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         if (!name) continue; // a genuinely blank unused row — skip silently
         const created = await apiFetch('/companies/' + company.id + '/directors', {
           method: 'POST',
-          body: JSON.stringify({ name, address, contact_no, email })
+          body: JSON.stringify({ name, address, contact_no, email, position })
         });
         if (!created) {
           showBanner('company-modal-banner', 'Company saved, but one MD row failed to save.');
@@ -1334,7 +1339,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       } else if (name) {
         await apiFetch('/companies/' + company.id + '/directors/' + directorId, {
           method: 'PATCH',
-          body: JSON.stringify({ name, address, contact_no, email })
+          body: JSON.stringify({ name, address, contact_no, email, position })
         });
       }
 
@@ -3052,15 +3057,15 @@ function renderAllUsersTable(users) {
     <tr>
       <td>${escapeHtml(u.username)}</td>
       <td>${u.groups && u.groups.length ? escapeHtml(u.groups.join(', ')) : '—'}</td>
-      <td>${u.is_superuser ? 'Superuser' : (u.roles && u.roles.length ? escapeHtml(u.roles.join(', ')) : '<span style="color:var(--text-dim);">— no role —</span>')}</td>
+      <td>${u.is_superuser ? '<span class="stamp stamp-admin">Admin</span>' : (u.roles && u.roles.length ? escapeHtml(u.roles.join(', ')) : '<span style="color:var(--text-dim);">— no role —</span>')}</td>
       <td>
-        ${u.is_superuser
+        ${u.is_superuser && !currentUserIsSuperuser
           ? '<span class="stamp stamp-paid" style="font-size:10px;">active</span>'
           : (!u.is_approved
               ? '<span style="color:var(--danger);">Pending</span>'
               : `<button class="status-toggle-btn ${u.is_active ? 'is-active' : 'is-disabled'}" data-toggle-user-id="${u.id}" data-toggle-active="${u.is_active}">${u.is_active ? 'Active' : 'Disabled'}</button>`)}
       </td>
-      <td>${u.is_superuser ? '<span style="color:var(--text-dim);">—</span>' : `<button class="link-btn-inline" data-edit-user-id="${u.id}">Manage</button>`}</td>
+      <td>${u.is_superuser && !currentUserIsSuperuser ? '<span style="color:var(--text-dim);">—</span>' : `<button class="link-btn-inline" data-edit-user-id="${u.id}">Manage</button>`}</td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-edit-user-id]').forEach(btn => {
@@ -3092,6 +3097,27 @@ document.getElementById('all-users-filter').addEventListener('input', (e) => {
   renderAllUsersTable(filtered);
 });
 
+function updateEditUserToggleBtn(isActive) {
+  const btn = document.getElementById('edit-user-toggle-active-btn');
+  btn.textContent = isActive ? 'Deactivate account' : 'Activate account';
+  btn.dataset.active = isActive;
+}
+
+document.getElementById('edit-user-toggle-active-btn').addEventListener('click', async () => {
+  const currentlyActive = document.getElementById('edit-user-toggle-active-btn').dataset.active === 'true';
+  showBanner('edit-user-banner', '');
+  try {
+    await apiFetch('/admin/users/' + editingUserId + '/active', {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active: !currentlyActive })
+    });
+    updateEditUserToggleBtn(!currentlyActive);
+    loadAllUsers();
+  } catch (err) {
+    showBanner('edit-user-banner', err.message);
+  }
+});
+
 async function openEditUserModal(user) {
   editingUserId = user.id;
   document.getElementById('edit-user-title').textContent = 'Manage user — ' + user.username;
@@ -3099,6 +3125,19 @@ async function openEditUserModal(user) {
   document.getElementById('edit-user-password').value = '';
   showBanner('edit-user-banner', '');
   document.getElementById('edit-user-modal').classList.add('active');
+
+  // An admin isn't in a group and doesn't carry roles/project grants — see
+  // CreateUserInGroupRequest's docstring (never accepts is_superuser) and
+  // get_user_allowed_project_ids (superuser always returns "ALL" regardless
+  // of any grant). Nothing in those sections applies, so skip loading and
+  // showing them entirely rather than a confusing empty state.
+  const isAdmin = !!user.is_superuser;
+  document.getElementById('edit-user-group-sections').style.display = isAdmin ? 'none' : 'block';
+  document.getElementById('edit-user-admin-only-row').style.display = isAdmin ? 'block' : 'none';
+  if (isAdmin) {
+    updateEditUserToggleBtn(user.is_active);
+    return;
+  }
   await loadEditUserGroups();
   await loadGroupsForAddPicker();
   await loadEditUserRoles();
@@ -3224,6 +3263,8 @@ document.getElementById('edit-user-close').addEventListener('click', () => {
 
 // ---------- create user (Task 3 — Admin -> All Users -> Create User) ----------
 
+const CREATE_USER_ADMIN_SENTINEL = '__admin__';
+
 async function loadCreateUserRolePicker() {
   const groupId = document.getElementById('create-user-group').value;
   const roleSelect = document.getElementById('create-user-role');
@@ -3242,7 +3283,13 @@ async function loadCreateUserRolePicker() {
   }
 }
 
-document.getElementById('create-user-group').addEventListener('change', loadCreateUserRolePicker);
+function updateCreateUserGroupVisibility() {
+  const isAdmin = document.getElementById('create-user-group').value === CREATE_USER_ADMIN_SENTINEL;
+  document.getElementById('create-user-role-wrap').style.display = isAdmin ? 'none' : 'block';
+  document.getElementById('create-user-admin-hint').style.display = isAdmin ? 'block' : 'none';
+  if (!isAdmin) loadCreateUserRolePicker();
+}
+document.getElementById('create-user-group').addEventListener('change', updateCreateUserGroupVisibility);
 
 document.getElementById('open-create-user-btn').addEventListener('click', async () => {
   showBanner('create-user-banner', '');
@@ -3258,13 +3305,23 @@ document.getElementById('open-create-user-btn').addEventListener('click', async 
       opt.textContent = g.name;
       groupSelect.appendChild(opt);
     });
+    // Only a superuser can create another admin — a group admin managing
+    // their own group never sees this option, matching POST /auth/users
+    // being superuser-only server-side (see admin.py's CreateUserInGroupRequest,
+    // which has no is_superuser field at all).
+    if (currentUserIsSuperuser) {
+      const adminOpt = document.createElement('option');
+      adminOpt.value = CREATE_USER_ADMIN_SENTINEL;
+      adminOpt.textContent = 'Admin';
+      groupSelect.appendChild(adminOpt);
+    }
     // Default to the Operation group — that's where normal operational users belong.
     const operation = groups.find(g => g.name === 'Operation');
     if (operation) groupSelect.value = operation.id;
   } catch (err) {
     showBanner('create-user-banner', err.message);
   }
-  await loadCreateUserRolePicker();
+  updateCreateUserGroupVisibility();
   document.getElementById('create-user-modal').classList.add('active');
 });
 
@@ -3275,18 +3332,30 @@ document.getElementById('create-user-close').addEventListener('click', () => {
 document.getElementById('create-user-submit-btn').addEventListener('click', async () => {
   const username = document.getElementById('create-user-username').value.trim();
   const password = document.getElementById('create-user-password').value;
-  const groupId = document.getElementById('create-user-group').value;
-  const roleId = document.getElementById('create-user-role').value;
+  const groupValue = document.getElementById('create-user-group').value;
+  const isAdmin = groupValue === CREATE_USER_ADMIN_SENTINEL;
   showBanner('create-user-banner', '');
-  if (!username || !password || !groupId) {
-    showBanner('create-user-banner', 'Username, password, and group are required.');
+  if (!username || !password) {
+    showBanner('create-user-banner', 'Username and password are required.');
     return;
   }
   try {
     document.getElementById('create-user-submit-btn').disabled = true;
-    const payload = { username, password };
-    if (roleId) payload.role_id = roleId;
-    await apiFetch('/admin/groups/' + groupId + '/users', { method: 'POST', body: JSON.stringify(payload) });
+    if (isAdmin) {
+      // Superuser-only endpoint — a bare account with no group/role, since
+      // an admin bypasses group scoping entirely (see services/auth-service/
+      // app/routers/auth.py's create_user).
+      await apiFetch('/auth/users', { method: 'POST', body: JSON.stringify({ username, password, is_superuser: true }) });
+    } else {
+      const roleId = document.getElementById('create-user-role').value;
+      if (!groupValue) {
+        showBanner('create-user-banner', 'Group is required for a group member.');
+        return;
+      }
+      const payload = { username, password };
+      if (roleId) payload.role_id = roleId;
+      await apiFetch('/admin/groups/' + groupValue + '/users', { method: 'POST', body: JSON.stringify(payload) });
+    }
     document.getElementById('create-user-modal').classList.remove('active');
     loadAllUsers();
   } catch (err) {

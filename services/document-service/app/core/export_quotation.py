@@ -103,8 +103,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     if logo_bytes and logo_mime != "image/svg+xml":
         try:
             img = XLImage(BytesIO(logo_bytes))
-            img.width = 100
-            img.height = 100
+            img.width = 90
+            img.height = 90
             ws.add_image(img, f"A{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
@@ -112,8 +112,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     if seal_bytes and seal_mime != "image/svg+xml":
         try:
             seal_img = XLImage(BytesIO(seal_bytes))
-            seal_img.width = 100
-            seal_img.height = 100
+            seal_img.width = 90
+            seal_img.height = 90
             ws.add_image(seal_img, f"F{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
@@ -123,7 +123,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
 
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "QUOTATION"
-    ws[f"A{row}"].font = Font(name="Arial", size=18, bold=True)
+    # Same heading treatment as the PDF (quotation.html .title): same size as the Date line
+    # (11pt), bold dark red, down from 18pt black.
+    ws[f"A{row}"].font = Font(name="Arial", size=11, bold=True, color="C00000")
     row += 2
 
     ws[f"A{row}"] = "Date:"
@@ -139,7 +141,14 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"E{row}"].font = Font(name="Arial", bold=True)
     row += 1
 
-    supplier_rows = [
+    supplier_rows = []
+    # The selected MD's own position (CompanyDirector.position); omitted when
+    # no MD is selected or the MD has none (e.g. created before the column).
+    # Falls back to the company's "Signer position" when the MD has none.
+    supplier_position = (director or {}).get("position") or (company or {}).get("position")
+    if supplier_position:
+        supplier_rows.append(("Position", _safe_str(supplier_position)))
+    supplier_rows += [
         ("Address", _safe_str(company.get("address")) if company else ""),
         ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
         ("Email", _safe_str(company.get("support_email")) if company else ""),
@@ -295,34 +304,36 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         row += 1
     row += 1
 
+    # Name/position used to be printed under the seal image too, but the
+    # seal itself already carries the director's name and title — showing
+    # both was redundant, so the seal now stands alone whenever one was
+    # actually placed. Name/position text is kept ONLY as a fallback for
+    # a director with no seal uploaded yet, so the signature area is
+    # never left completely blank.
     if director:
         seal_row = row
+        seal_placed = False
         if director_seal_bytes and director_seal_mime != "image/svg+xml":
             try:
                 md_seal_img = XLImage(BytesIO(director_seal_bytes))
                 md_seal_img.width = 100
                 md_seal_img.height = 100
-                # Anchored at G, not F: the name/title below is centered
-                # across the merged F:G span, and column F alone (16
-                # units wide) is roughly as wide as this image itself —
-                # anchoring at F left-aligns the image within F, well
-                # left of the F:G merge's visual center. G's left edge
-                # sits close to where that center actually falls, so
-                # anchoring there lines the seal up with the name/title
-                # underneath it instead of drifting left of them.
                 ws.add_image(md_seal_img, f"G{row}")
-                row += 6  # leave room for the image before writing the name below it
+                row += 6  # leave room for the image
+                seal_placed = True
             except Exception:
                 pass  # bad/unsupported image format shouldn't block the whole export
-        ws.merge_cells(f"F{row}:G{row}")
-        ws[f"F{row}"] = _safe_str(director.get("name", ""))
-        ws[f"F{row}"].font = Font(name="Arial", bold=True)
-        ws[f"F{row}"].alignment = Alignment(horizontal="center")
-        row += 1
-        ws.merge_cells(f"F{row}:G{row}")
-        ws[f"F{row}"] = "Managing Director"
-        ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
-        ws[f"F{row}"].alignment = Alignment(horizontal="center")
+        if not seal_placed:
+            ws.merge_cells(f"F{row}:G{row}")
+            ws[f"F{row}"] = _safe_str(director.get("name", ""))
+            ws[f"F{row}"].font = Font(name="Arial", bold=True)
+            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            row += 1
+            ws.merge_cells(f"F{row}:G{row}")
+            ws[f"F{row}"] = _safe_str(director.get("position")) or "Managing Director"
+            ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
+            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            row += 1
         row = max(row, seal_row + 7) + 1
 
     ws[f"A{row}"] = "Customer Service"

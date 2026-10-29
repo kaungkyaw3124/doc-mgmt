@@ -20,7 +20,6 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    libpq-dev \
     unar \
     && rm -rf /var/lib/apt/lists/*
 

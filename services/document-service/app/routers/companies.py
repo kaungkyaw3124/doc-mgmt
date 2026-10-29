@@ -322,6 +322,7 @@ def add_company_director(
         address=payload.address,
         contact_no=payload.contact_no,
         email=payload.email,
+        position=payload.position,
         sort_order=next_order,
     )
     db.add(director)
