@@ -331,13 +331,16 @@ def test_logo_stays_left_and_seal_right_inside_margins_and_clear_of_heading(layo
     assert logo.position_y == pytest.approx(seal.position_y, abs=0.5), "logo and seal must share a top edge"
 
 
-def test_logo_only_on_first_page_and_md_seal_size_unchanged(layout):
+def test_logo_and_seal_on_every_page_and_md_seal_size_unchanged(layout):
+    """Inverted in loop iteration 2 (was test_logo_only_on_first_page_...):
+    the header — logo and company seal included — repeats on every page."""
     result = layout(n_items=40, logo_bytes=_png(), seal_bytes=_png(), director_seal_bytes=_png())
     assert len(result.pages) >= 2
-    assert len(_images(result.pages[0])) == 2
-    assert not any(_images(p) for p in result.pages[1:-1])  # no stray header images on middle pages
+    for n, page in enumerate(result.pages, 1):
+        header_imgs = [i for i in _images(page) if i.width == pytest.approx(120, abs=0.5)]
+        assert len(header_imgs) == 2, f"page {n}: expected logo + seal (120px) in the header, got {len(header_imgs)}"
     md = [i for p in result.pages for i in _images(p) if i.width == pytest.approx(130, abs=0.5)]
-    assert md, "the MD signature seal keeps its 130px size (not a logo)"
+    assert len(md) == 1, "the MD signature seal keeps its 130px size and appears once"
 
 
 def test_xlsx_logo_and_seal_are_10px_smaller():

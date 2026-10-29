@@ -1,9 +1,15 @@
 """
 Regression tests for the quotation PDF's pagination/layout: the Managing
 Director signature block must stay attached to page 1 whenever the
-quotation fits, and the supplier/end-user header must never be repeated
-onto a page that only exists because the signature block overflowed. See
+quotation fits, and must never land alone on a page. See
 docs/SECURITY_HARDENING_LOG.md's "Quotation PDF pagination fix" entry.
+
+Loop iteration 2 reversed one earlier rule on purpose: the header (logo,
+seal, QUOTATION, Date, SUPPLIER / END USER) now repeats at the top of
+EVERY page, as the <thead> of an outer layout table in quotation.html — NOT
+via the `running()` margin box described in root cause #1 below, which
+needed a guessed fixed top margin. The orphan checks therefore strip the
+repeated header/footer text before measuring what else is on a page.
 
 Root cause #1 (fixed in 6aa04e1): the supplier/end-user header lived in a
 `position: running()` @page margin box, which is a FIXED-height reservation
@@ -134,14 +140,33 @@ def _generate(n_items, terms=None, director=DIRECTOR, tax_rate=None, subtotal=No
     return _pages_text(buffer)
 
 
+# Last line of the repeated header (the END USER address) and the repeated
+# items-table column titles, as pypdf extracts them.
+HEADER_END = "Address No. 99, Customer Street, Mandalay"
+COLUMN_TITLES = "No Item Qty Unit Price (USD) Amount (USD) Remark"
+FOOTER_START = "Customer Service\nEmail:"
+
+
+def _page_body(text):
+    """A page's text minus what now repeats on every page regardless of
+    content: the header (everything up to the END USER address), the items
+    table's column titles, and the running footer. Without this, the ~350
+    chars of header on every page would make an MD-only page look full."""
+    assert HEADER_END in text, f"page is missing the repeated header: {text!r}"
+    body = text.split(HEADER_END, 1)[1]
+    body = body.split(FOOTER_START, 1)[0]
+    return body.replace(COLUMN_TITLES, "").strip()
+
+
 def _assert_md_page_not_orphaned(text, n_items):
-    # The running footer alone ("Customer Service" + email + phone) is
-    # already present on every page and runs well under 120 chars — this
-    # threshold only passes when something substantial beyond MD + footer
-    # (Terms text, item rows) shares the page.
-    assert len(text.strip()) > 160, (
+    # With header, column titles and footer stripped, an MD-only page is
+    # just "Zaw Zaw" + "Managing Director" (~25 chars); even a lone Total row
+    # plus MD stays under ~45. Anything genuinely attached (Terms text, item
+    # rows) is well past this threshold.
+    body = _page_body(text)
+    assert len(body) > 60, (
         f"with {n_items} items: found a page carrying the Managing Director block "
-        f"with suspiciously little else on it (looks orphaned). Page text was: {text!r}"
+        f"with suspiciously little else on it (looks orphaned). Page body was: {body!r}"
     )
 
 
@@ -158,8 +183,8 @@ def test_normal_quotation_keeps_md_correctly_positioned():
     deliberately doesn't hardcode an exact page count (that's a function
     of font metrics, not something this fix controls), but whichever page
     the content lands on, it must be *correctly* positioned: attached to
-    Terms (never alone), and the supplier/end-user header must still
-    appear exactly once, on page 1."""
+    Terms (never alone), and the supplier/end-user header must be at the
+    top of every page."""
     pages = _generate(10)
     assert len(pages) <= 2, f"a 10-item quotation should not need more than two pages, got {len(pages)}"
 
@@ -170,7 +195,7 @@ def test_normal_quotation_keeps_md_correctly_positioned():
     _assert_md_page_not_orphaned(md_page, n_items=10)
 
     header_pages = [i for i, text in enumerate(pages) if "SUPPLIER" in text and "END USER" in text]
-    assert header_pages == [0], f"expected the header exactly once, on page 1 — found it on page(s) {header_pages}"
+    assert header_pages == list(range(len(pages))), f"expected the header on every page — found it on page(s) {header_pages}"
 
 
 def test_long_quotation_paginates_cleanly_md_not_orphaned_alone():
@@ -181,27 +206,40 @@ def test_long_quotation_paginates_cleanly_md_not_orphaned_alone():
     assert md_pages, "Managing Director block must appear somewhere in the document"
     md_page = pages[md_pages[0]]
 
-    # The MD block must never be the only real content on its page. Every
-    # page also carries the running footer ("Customer Service" + email +
-    # phone, ~90 chars) regardless of what else is on it, so a page with
-    # only MD + footer sits well under this threshold — anything genuinely
-    # attached (item rows, Terms text) pushes well past it.
+    # The MD block must never be the only real content on its page.
+    # Every page also carries the repeated header and running footer
+    # regardless of what else is on it; _assert_md_page_not_orphaned strips
+    # those before measuring.
     _assert_md_page_not_orphaned(md_page, n_items=80)
 
 
-def test_header_and_parties_are_never_duplicated_onto_a_later_page():
+def test_header_and_parties_repeat_on_every_page():
+    """Inverted in loop iteration 2 (was ..._are_never_duplicated_onto_a_later_page):
+    the user wants the whole header on every page, including a last page
+    holding only Terms / MD signature."""
     for n_items in (2, 10, 80):
         pages = _generate(n_items)
-        header_pages = [i for i, text in enumerate(pages) if "SUPPLIER" in text and "END USER" in text]
-        assert header_pages == [0], (
-            f"with {n_items} items: expected the SUPPLIER/END USER header to appear exactly once, "
-            f"on page 1 only — found it on page(s) {header_pages} (out of {len(pages)} total)"
-        )
-        title_count = sum(text.count("QUOTATION") for text in pages)
-        assert title_count == 1, (
-            f"with {n_items} items: expected the QUOTATION title to appear exactly once, "
-            f"got {title_count} occurrences across {len(pages)} page(s)"
-        )
+        for n, text in enumerate(pages, 1):
+            for needle in ("QUOTATION", f"SUPPLIER: {COMPANY['name']}", "END USER",
+                           f"Name {DIRECTOR['name']}", "QT-0001"):
+                assert needle in text, (
+                    f"with {n_items} items: page {n} of {len(pages)} is missing {needle!r} from the header"
+                )
+            assert text.count("QUOTATION") == 1, f"with {n_items} items: page {n} has the title more than once"
+
+
+def test_orphan_check_still_catches_an_md_only_page_under_the_repeated_header():
+    """Guard for the helper itself: now that every page carries ~350 chars
+    of header, a page holding ONLY header + MD block + footer must still be
+    reported as orphaned. Built from a real page's header and footer."""
+    real = _generate(1)[0]
+    header = real.split(HEADER_END, 1)[0] + HEADER_END
+    footer = FOOTER_START + real.split(FOOTER_START, 1)[1]
+    md_only = f"{header}\nZaw Zaw\nManaging Director\n{footer}"
+    with pytest.raises(AssertionError, match="orphaned"):
+        _assert_md_page_not_orphaned(md_only, n_items=0)
+    with pytest.raises(AssertionError, match="orphaned"):  # lone Total row + MD, under the column titles
+        _assert_md_page_not_orphaned(f"{header}\n{COLUMN_TITLES}\nTotal: 8,000.00\nZaw Zaw\nManaging Director\n{footer}", n_items=0)
 
 
 def test_no_md_only_page_across_a_range_of_lengths():

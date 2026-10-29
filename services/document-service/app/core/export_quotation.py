@@ -195,6 +195,12 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         cell.fill = HEADER_FILL
         cell.border = BORDER
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
+    # Same intent as the PDF, where the whole header repeats on every page:
+    # when the sheet is printed, rows 1 through this column-titles row
+    # (title, date, SUPPLIER / END USER, column titles) repeat at the top of
+    # every printed page. Excel's print titles repeat cell content only —
+    # the floating logo/seal images still print on page 1 alone.
+    ws.print_title_rows = f"1:{row}"
     row += 1
 
     categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}

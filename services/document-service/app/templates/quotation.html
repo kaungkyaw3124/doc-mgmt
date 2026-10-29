@@ -5,18 +5,17 @@
 <style>
   @page {
     size: A4;
-    /* Only the footer is a repeating margin-box element now (see
-       .pdf-footer below) — it's short and its height is predictable, so a
-       fixed 3cm reservation for it is safe. The header (logo/seal, title,
-       date, supplier/end-user parties) used to live in a `running()` margin
-       box too, which forced a huge, guessed top margin on *every* page to
+    /* Only the footer is a repeating margin-box element (see .pdf-footer
+       below) — it's short and its height is predictable, so a fixed 3cm
+       reservation for it is safe. The header (logo/seal, title, date,
+       supplier/end-user parties) used to live in a `running()` margin box
+       too, which forced a huge, guessed top margin on *every* page to
        avoid the fixed-height margin box colliding with body content when a
        long address wrapped to extra lines (previous values of 6.5cm, 10cm,
-       then 12.5cm all still overflowed). That header is normal in-flow body
-       content now (see .pdf-header below): it renders once, at the top of
-       page 1, sized to whatever it actually needs — no guessing, no
-       reserved dead space on every page, and it no longer repeats on later
-       pages. */
+       then 12.5cm all still overflowed). Do not go back to that. The
+       header now repeats on every page as the <thead> of the outer
+       table.page-layout (see below), whose height comes from the real
+       content — nothing to guess, no reserved dead space. */
     /* Left/right 11mm (was 20mm): usable width 188mm instead of 170mm. The
        footer's width below must equal 210mm - 2*11mm. */
     margin: 1.2cm 11mm 3cm 11mm;
@@ -27,10 +26,21 @@
      side) of every page. The @page margin is now the only page margin. */
   body { margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #1a1a1a; }
 
-  /* Normal in-flow block (not `position: running()`): it renders once, at
-     the top of page 1, and is never repeated on later pages — this is what
-     stops the supplier/end-user header from being duplicated onto a page 2
-     that only exists because the signature block overflowed. */
+  /* The header must appear at the top of EVERY page (the user asked for
+     it, including a last page that only holds Terms / MD signature). The
+     whole body is one outer table: its <thead> holds .pdf-header and its
+     single <tbody> cell holds the items table, Terms and the MD block.
+     WeasyPrint repeats a table's <thead> on every page the table spans,
+     sized from the header's actual content (a long wrapped address just
+     makes it taller on every page), unlike the old fixed-height
+     `running()` margin box. The inner items table's own <thead> (column
+     titles) still repeats below it. The outer table has no borders,
+     padding or spacing so it is invisible; the cell may split across
+     pages, and the existing break rules on .terms / .md-block / item rows
+     apply inside it unchanged. */
+  table.page-layout { width: 100%; border-collapse: collapse; border-spacing: 0; }
+  table.page-layout > thead > tr > td,
+  table.page-layout > tbody > tr > td { padding: 0; border: none; vertical-align: top; }
   .pdf-header { break-inside: avoid; page-break-inside: avoid; }
 
   /* `position: running()` pulls this block out of normal body flow and
@@ -135,6 +145,14 @@
 </head>
 <body>
 
+  <div class="pdf-footer">
+    <h3>Customer Service</h3>
+    <div class="footer-line">Email: {{ company.support_email if company else "" }}</div>
+    <div class="footer-line">Phone: {{ company.contact_no if company else "" }}</div>
+  </div>
+
+  <table class="page-layout">
+  <thead><tr><td>
   <div class="pdf-header">
     <div class="header-top">
       <div>{% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
@@ -167,12 +185,8 @@
       </div>
     </div>
   </div>
-
-  <div class="pdf-footer">
-    <h3>Customer Service</h3>
-    <div class="footer-line">Email: {{ company.support_email if company else "" }}</div>
-    <div class="footer-line">Phone: {{ company.contact_no if company else "" }}</div>
-  </div>
+  </td></tr></thead>
+  <tbody><tr><td>
 
   <table class="items">
     <thead>
@@ -242,6 +256,9 @@
     </div>
   </div>
   {% endif %}
+
+  </td></tr></tbody>
+  </table>
 
 </body>
 </html>
