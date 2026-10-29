@@ -213,7 +213,7 @@ def test_xlsx_heading_is_red_and_smaller_too():
 #   logo-row bottom -> heading 29, parties -> table 18, 100px min-height
 #   header row even with no logo.
 OLD_TOP_CONTENT_PX = 64.7
-MAX_TOP_CONTENT_PX = 50  # was: 1.2cm page margin (45.4px) + slack; the page margin is now 7.6mm (28.7px)
+MAX_TOP_CONTENT_PX = 50  # page margin 12.7mm (48.0px) + a little slack
 
 
 def _page_box(layout_result):
@@ -230,8 +230,8 @@ def test_top_of_first_page_has_no_stacked_margins(layout):
     top = _first_content_y(result)
     assert top < OLD_TOP_CONTENT_PX - 8, f"first content starts {top:.1f}px from the page edge, expected a smaller top margin"
     assert top <= MAX_TOP_CONTENT_PX
-    # The user asked for a 0.3in (7.6mm) top margin (loop iteration 3); was a 0.8cm floor.
-    assert top >= 7.6 * MM - 0.5, "top margin must not shrink below the 7.6mm the user asked for"
+    # The user asked for a 0.5in (12.7mm) top margin (loop iteration 4; was 7.6mm in iteration 3).
+    assert top >= 12.7 * MM - 0.5, "top margin must not shrink below the 12.7mm the user asked for"
 
 
 def test_gap_between_logo_row_and_heading_is_tight(layout):
