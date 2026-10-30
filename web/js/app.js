@@ -232,32 +232,44 @@ document.getElementById('logout-btn').addEventListener('click', () => doLogout()
 
 // message: shown on the login screen (why the user was logged out).
 // broadcast: tell the other tabs; false when this logout came from one.
-function doLogout(message = '', broadcast = true) {
+// Every logout ends in a page reload: hiding #app used to leave the
+// previous user's caches, permission flags, active view and rendered
+// tables in place for whoever logged in next on the same page (an Editor
+// saw the admin's Admin page). The reason is shown after the reload.
+const LOGOUT_MESSAGE_KEY = 'ledger_logout_message';
+let loggingOut = false;
+async function doLogout(message = '', broadcast = true) {
+  if (loggingOut) return;
+  loggingOut = true;
   clearInterval(sessionTimer);
-  hideSessionWarning();
-  sessionInfo = null;
-  document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+  token = null;
   if (broadcast) {
+    // Revoke the refresh cookie server-side before reloading (at most 2 s),
+    // so the reloaded page — and the other tabs told below — can't silently
+    // sign back in with it.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 2000);
+    await fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include', signal: abort.signal }).catch(() => {});
+    clearTimeout(timer);
     try { localStorage.setItem(LOGOUT_KEY, Date.now() + '|' + message); } catch (e) {}
   }
-  // Best-effort server-side revocation of the refresh cookie — this is
-  // what makes logout actually invalidate the session (rather than just
-  // forgetting the access token client-side while it — and the refresh
-  // cookie — would otherwise still be perfectly valid). Fire-and-forget:
-  // the UI logs out regardless of whether this succeeds.
-  fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-  token = null;
-  localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
-  document.getElementById('app').classList.remove('active');
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('login-username').value = '';
-  document.getElementById('login-password').value = '';
-  document.getElementById('login-error').innerHTML = message
-    ? `<div class="banner banner-info">${escapeHtml(message)}</div>` : '';
+  try {
+    localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
+    if (message) sessionStorage.setItem(LOGOUT_MESSAGE_KEY, message);
+  } catch (e) {}
+  location.replace('/');
 }
 
 async function enterApp() {
   startSessionWatch();
+  // Defence in depth (logout reloads the page anyway): start from "nothing
+  // permission-gated is shown, Documents view", then let /admin/me show
+  // what this user may see.
+  ['admin-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
+    .forEach(id => { document.getElementById(id).style.display = 'none'; });
+  currentUserIsSuperuser = false;
+  currentUserCanDeleteDocuments = false;
+  document.querySelector('.nav-item[data-view="documents"]').click();
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').classList.add('active');
   try {
@@ -4350,10 +4362,19 @@ loadPublicGroups();
 // Success re-enters the app exactly as before; failure (no cookie, or an
 // expired/revoked one) just leaves the login screen showing.
 (async function bootstrap() {
+  let logoutMessage = '';
+  try {
+    logoutMessage = sessionStorage.getItem(LOGOUT_MESSAGE_KEY) || '';
+    sessionStorage.removeItem(LOGOUT_MESSAGE_KEY);
+  } catch (e) {}
   try {
     await refreshAccessToken();
     enterApp();
   } catch (e) {
+    // No live session: show the login screen once (no reload here, so no loop).
     document.getElementById('login-screen').style.display = 'flex';
+    if (logoutMessage) {
+      document.getElementById('login-error').innerHTML = `<div class="banner banner-info">${escapeHtml(logoutMessage)}</div>`;
+    }
   }
 })();
