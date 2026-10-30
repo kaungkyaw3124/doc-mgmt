@@ -1447,8 +1447,11 @@ function buildDirectorRow(director) {
   const div = document.createElement('div');
   div.className = 'director-row';
   div.dataset.directorId = director ? director.id : '';
-  div.style.cssText = 'margin-bottom:14px; padding:12px; border:1px solid var(--border); border-radius:8px;';
   div.innerHTML = `
+    <div class="director-row-header">
+      <span class="director-row-title">MD</span>
+      <button type="button" class="link-btn-inline director-remove-btn" style="color:var(--danger);">Remove</button>
+    </div>
     <div class="form-row" style="flex-wrap:wrap;">
       <div style="min-width:180px;">
         <label>Name</label>
@@ -1479,9 +1482,6 @@ function buildDirectorRow(director) {
         <input type="file" class="director-seal-file" accept="image/png,image/jpeg">
         ${director && director.seal_object_key ? `<div style="font-size:12px; color:var(--text-dim); margin-top:2px;">Seal already attached — choosing a new file replaces it. <button type="button" class="link-btn-inline director-view-seal-btn">View</button></div>` : ''}
       </div>
-      <div style="min-width:180px; text-align:right;">
-        <button type="button" class="link-btn-inline director-remove-btn" style="color:var(--danger);">Remove</button>
-      </div>
     </div>
   `;
   div.querySelector('.director-remove-btn').addEventListener('click', async () => {
@@ -1496,6 +1496,7 @@ function buildDirectorRow(director) {
       }
     }
     div.remove();
+    renumberDirectorRows();
   });
   if (director && director.seal_object_key) {
     div.querySelector('.director-view-seal-btn').addEventListener('click', async () => {
@@ -1510,6 +1511,13 @@ function buildDirectorRow(director) {
   return div;
 }
 
+// "MD 1", "MD 2"… by position, so the numbers close up after a Remove
+function renumberDirectorRows() {
+  document.querySelectorAll('#director-rows .director-row-title').forEach((el, i) => {
+    el.textContent = 'MD ' + (i + 1);
+  });
+}
+
 function resetDirectorRows(directors) {
   const container = document.getElementById('director-rows');
   container.innerHTML = '';
@@ -1518,10 +1526,12 @@ function resetDirectorRows(directors) {
   } else {
     container.appendChild(buildDirectorRow(null)); // default: one blank row
   }
+  renumberDirectorRows();
 }
 
 document.getElementById('add-director-row-btn').addEventListener('click', () => {
   document.getElementById('director-rows').appendChild(buildDirectorRow(null));
+  renumberDirectorRows();
 });
 
 document.getElementById('toggle-company-form').addEventListener('click', () => {

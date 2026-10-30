@@ -15,6 +15,7 @@
     --rust: #C1682F;
     --rust-dark: #A5541F;
     --hairline: #D8D2C4;
+    --separator: #B5AC98; /* between repeated form blocks: visible, calmer than --ink */
     --success: #3F7857;
     --warn: #B8862E;
     --danger: #A13D3D;
@@ -330,9 +331,19 @@
     gap: 10px;
     align-items: flex-end;
     margin-bottom: 12px;
-    padding-bottom: 12px;
-    border-bottom: 1px dashed var(--hairline);
   }
+  /* one separator for every repeated block (MDs, line items, sub-items): a line between
+     blocks, none above the first or after the last */
+  .director-row + .director-row,
+  .line-item-row + .line-item-row {
+    border-top: 1px solid var(--separator);
+    margin-top: 16px;
+    padding-top: 16px;
+  }
+  #director-rows { margin-top: 12px; }
+  .director-row { margin-bottom: 16px; }
+  .director-row-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .director-row-title { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
   .line-item-row > div { flex: 1; }
   .line-item-row label { font-size: 11px; }
   .line-item-row input { margin-bottom: 0; }
