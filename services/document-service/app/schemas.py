@@ -28,10 +28,11 @@ class ProjectOut(BaseModel):
     created_at: datetime
 
 
+# No `position` on companies since loop iteration 12: each MD has their own
+# (required) position. A `position` sent by an old client is ignored.
 class CompanyCreate(BaseModel):
     name: str
-    short_name: Optional[str] = None  # e.g. "SS" for Swift Solution — used in doc numbers
-    position: Optional[str] = None  # signer/signature title — not shown in the quotation Supplier block
+    short_name: Optional[str] = None  # e.g. "SS" for Swift Solution — doc-number prefix; validated in routers/companies.py
     address: Optional[str] = None
     contact_no: Optional[str] = None
     support_email: Optional[str] = None
@@ -41,7 +42,6 @@ class CompanyCreate(BaseModel):
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
     short_name: Optional[str] = None
-    position: Optional[str] = None
     address: Optional[str] = None
     contact_no: Optional[str] = None
     support_email: Optional[str] = None
@@ -53,7 +53,6 @@ class CompanyOut(BaseModel):
     id: uuid.UUID
     name: str
     short_name: Optional[str]
-    position: Optional[str]
     address: Optional[str]
     contact_no: Optional[str]
     support_email: Optional[str]
@@ -69,7 +68,7 @@ class CompanyDirectorCreate(BaseModel):
     address: Optional[str] = None
     contact_no: Optional[str] = None
     email: Optional[str] = None
-    position: Optional[str] = None
+    position: Optional[str] = None  # required: missing -> "Managing Director", blank -> 422 (routers/companies.py)
 
 
 class CompanyDirectorUpdate(BaseModel):

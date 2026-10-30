@@ -198,9 +198,8 @@
         <h3>SUPPLIER{% if company and company.name %}: {{ company.name }}{% endif %}</h3>
         <table>
           <tr><td class="label">Name</td><td>{{ director.name if director and director.name else "—" }}</td></tr>
-          {# Position: the selected MD's own position (CompanyDirector.position) if set, otherwise the company's "Signer position" (Company.position). Row omitted — no placeholder — when neither exists. #}
-          {% set supplier_position = (director.position if director and director.position else None) or (company.position if company and company.position else None) %}
-          {% if supplier_position %}<tr><td class="label">Position</td><td>{{ supplier_position }}</td></tr>{% endif %}
+          {# Position: the selected MD's own position (required since loop iteration 12; no company fallback). Row omitted when there is no MD. #}
+          {% if director and director.position %}<tr><td class="label">Position</td><td>{{ director.position }}</td></tr>{% endif %}
           <tr><td class="label">Address</td><td>{{ (director.address if director and director.address else None) or (company.address if company and company.address else "") }}</td></tr>
           <tr><td class="label">Contact No</td><td>{{ (director.contact_no if director and director.contact_no else None) or (company.contact_no if company and company.contact_no else "") }}</td></tr>
         </table>

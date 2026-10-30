@@ -72,17 +72,17 @@ DEFAULT_TERMS = (
 def generate_quotation_xlsx(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png", director=None, director_seal_bytes=None, director_seal_mime="image/png") -> BytesIO:
     """
     items_with_product: list of (LineItem, product_dict_or_None, sub_items_list) tuples.
-    company: dict with keys name/position/address/contact_no/support_email,
-              or None if no company profile has been set up yet. Its name
-              goes on the Supplier heading line ("SUPPLIER: <name>"); its
-              position/address/contact_no are only fallbacks for the
-              director's own, and support_email appears only in the
-              Customer Service footer.
+    company: dict with keys name/address/contact_no/support_email, or None
+              if no company profile has been set up yet. Its name goes on
+              the Supplier heading line ("SUPPLIER: <name>"); its
+              address/contact_no are only fallbacks for the director's own,
+              and support_email appears only in the Customer Service footer.
     director: dict with keys name/address/contact_no/email/position — the
               selected Managing Director. The Supplier block's rows
-              (Name / Position / Address / Contact No) describe this MD,
-              each falling back to the company's value when the MD's is
-              empty; it also drives the signature block at the bottom.
+              (Name / Position / Address / Contact No) describe this MD;
+              address and contact fall back to the company's when the MD's
+              is empty (Position has no fallback); it also drives the
+              signature block at the bottom.
               None if no director was chosen on this document (Name then
               shows "—").
     logo_bytes / seal_bytes: raw image bytes to embed, or None. SVGs are
@@ -158,10 +158,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     row += 1
 
     supplier_rows = [("Name", _safe_str(director_info.get("name")) or "—")]
-    # The selected MD's own position (CompanyDirector.position); omitted when
-    # no MD is selected or the MD has none (e.g. created before the column).
-    # Falls back to the company's "Signer position" when the MD has none.
-    supplier_position = director_info.get("position") or company_info.get("position")
+    # The selected MD's own position (required since loop iteration 12; no
+    # company fallback). Omitted when no MD is selected.
+    supplier_position = director_info.get("position")
     if supplier_position:
         supplier_rows.append(("Position", _safe_str(supplier_position)))
     supplier_rows += [

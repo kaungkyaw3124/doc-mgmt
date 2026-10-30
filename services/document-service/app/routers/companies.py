@@ -83,6 +83,28 @@ def _standardize_image(file_bytes: bytes, filename: str, target_size: tuple[int,
         return file_bytes, filename
 
 
+SHORT_NAME_RE = re.compile(r"^[A-Za-z0-9]{2,6}$")
+DEFAULT_MD_POSITION = "Managing Director"
+
+
+def _clean_short_name(value):
+    """Trimmed and uppercased; blank -> None (document numbers then use "DOC").
+    Existing invalid values in the DB are left alone until the company is edited."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if not SHORT_NAME_RE.match(value):
+        raise HTTPException(status_code=422, detail='Short name must be 2–6 letters or digits (e.g. "WF") — it is used in document numbers.')
+    return value.upper()
+
+
+def _clean_md_position(value):
+    value = (value or "").strip()
+    if not value:
+        raise HTTPException(status_code=422, detail='Position is required for a Managing Director (e.g. "Managing Director").')
+    return value
+
+
 @router.post("", response_model=schemas.CompanyOut, status_code=201)
 def create_company(
     payload: schemas.CompanyCreate,
@@ -90,7 +112,9 @@ def create_company(
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     _require_edit_access(x_access_level)
-    company = models.Company(**payload.model_dump())
+    data = payload.model_dump()
+    data["short_name"] = _clean_short_name(data["short_name"])
+    company = models.Company(**data)
 
     # If this is the first company ever created, or explicitly marked primary,
     # make sure only one company is ever "primary" at a time (used as the
@@ -147,6 +171,8 @@ def update_company(
         raise HTTPException(status_code=404, detail="company not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    if "short_name" in update_data:
+        update_data["short_name"] = _clean_short_name(update_data["short_name"])
     if update_data.get("is_primary") is True:
         db.query(models.Company).update({models.Company.is_primary: False})
 
@@ -322,7 +348,7 @@ def add_company_director(
         address=payload.address,
         contact_no=payload.contact_no,
         email=payload.email,
-        position=payload.position,
+        position=_clean_md_position(payload.position) if "position" in payload.model_fields_set else DEFAULT_MD_POSITION,
         sort_order=next_order,
     )
     db.add(director)
@@ -347,7 +373,10 @@ def update_company_director(
     )
     if not director:
         raise HTTPException(status_code=404, detail="director not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    if "position" in changes:
+        changes["position"] = _clean_md_position(changes["position"])
+    for field, value in changes.items():
         setattr(director, field, value)
     db.commit()
     db.refresh(director)

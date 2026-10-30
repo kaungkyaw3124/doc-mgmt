@@ -16,7 +16,14 @@ covered by the infra-integration CI job (real HTTP through the stack).
 from app import schemas
 
 
-KEPT_COMPANY_FIELDS = {"name", "short_name", "position", "address", "contact_no", "support_email"}
+# `position` left the company schemas in iteration 12 (each MD has a required
+# position); the DB column is kept, unused.
+KEPT_COMPANY_FIELDS = {"name", "short_name", "address", "contact_no", "support_email"}
+
+
+def test_company_position_is_gone_from_the_api():
+    for schema in (schemas.CompanyCreate, schemas.CompanyUpdate, schemas.CompanyOut):
+        assert "position" not in schema.model_fields
 
 
 def test_company_create_still_has_kept_fields():
@@ -47,13 +54,13 @@ def test_company_create_round_trips_supplier_fields():
     company = schemas.CompanyCreate(
         name="Trustwell International Co., Ltd.",
         short_name="TW",
-        position="Director",
+        position="Director",  # an old client may still send it: ignored, not an error
         address="No. 45, Kabar Aye Pagoda Road, Yangon, Myanmar",
         contact_no="+95 9 123 456 789",
         support_email="support@trustwell.example.com",
     )
     assert company.name == "Trustwell International Co., Ltd."
-    assert company.position == "Director"
+    assert not hasattr(company, "position")
     assert company.address == "No. 45, Kabar Aye Pagoda Road, Yangon, Myanmar"
     assert company.contact_no == "+95 9 123 456 789"
     assert company.support_email == "support@trustwell.example.com"

@@ -1456,7 +1456,7 @@ function buildDirectorRow(director) {
       </div>
       <div style="min-width:180px;">
         <label>Position</label>
-        <input type="text" class="director-position" maxlength="100" placeholder="Managing Director" value="${director ? escapeHtml(director.position || '') : ''}">
+        <input type="text" class="director-position" maxlength="100" required placeholder="Managing Director" value="${director ? escapeHtml(director.position || '') : 'Managing Director'}">
       </div>
       <div style="min-width:180px;">
         <label>Address</label>
@@ -1547,8 +1547,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
   const sealInput = document.getElementById('company-seal');
   const payload = {
     name: document.getElementById('company-name').value,
-    short_name: document.getElementById('company-short-name').value || null,
-    position: document.getElementById('company-position').value || null,
+    short_name: document.getElementById('company-short-name').value.trim().toUpperCase() || null,
     address: document.getElementById('company-address').value || null,
     contact_no: document.getElementById('company-contact').value || null,
     support_email: document.getElementById('company-email').value || null
@@ -1674,7 +1673,6 @@ function startEditCompany(company) {
   document.getElementById('company-form-submit-btn').textContent = 'Save changes';
   document.getElementById('company-name').value = company.name;
   document.getElementById('company-short-name').value = company.short_name || '';
-  document.getElementById('company-position').value = company.position || '';
   document.getElementById('company-address').value = company.address || '';
   document.getElementById('company-contact').value = company.contact_no || '';
   document.getElementById('company-email').value = company.support_email || '';
@@ -1732,6 +1730,13 @@ async function loadCompanies() {
   }
 }
 
+document.getElementById('company-short-name').addEventListener('input', (e) => {
+  e.target.value = e.target.value.toUpperCase();
+});
+
+// same rule the API enforces on save (companies.SHORT_NAME_RE)
+const SHORT_NAME_RE = /^[A-Za-z0-9]{2,6}$/;
+
 function renderCompaniesTable(companies) {
   const tbody = document.getElementById('companies-tbody');
   if (!companies.length) {
@@ -1741,7 +1746,7 @@ function renderCompaniesTable(companies) {
   tbody.innerHTML = companies.map(c => `
     <tr>
       <td>${escapeHtml(c.name)}</td>
-      <td>${escapeHtml(c.position || '—')}</td>
+      <td>${escapeHtml(c.short_name || '—')}${c.short_name && !SHORT_NAME_RE.test(c.short_name) ? ' <span class="short-name-warning" style="color:var(--danger); font-size:12px;">Short name needs fixing</span>' : ''}</td>
       <td>${escapeHtml(c.contact_no || '—')}</td>
       <td>${c.logo_object_key ? `<button class="link-btn-inline" data-logo-id="${c.id}">View logo</button>` : '—'}</td>
       <td>${c.seal_object_key ? `<button class="link-btn-inline" data-seal-id="${c.id}">View seal</button>` : '—'}</td>
@@ -3247,7 +3252,7 @@ async function loadCompanyTrash() {
     tbody.innerHTML = companies.map(c => `
       <tr>
         <td>${escapeHtml(c.name)}</td>
-        <td>${escapeHtml(c.position || '—')}</td>
+        <td>${escapeHtml(c.short_name || '—')}</td>
         <td><button class="link-btn-inline" data-restore-company-id="${c.id}">Restore</button></td>
       </tr>
     `).join('');

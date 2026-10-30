@@ -96,20 +96,21 @@ def _pdf_text_company(company, director):
     return "\n".join(p.extract_text() for p in PdfReader(BytesIO(pdf.getvalue())).pages)
 
 
-def test_pdf_falls_back_to_company_signer_position():
+def test_pdf_no_longer_falls_back_to_company_signer_position():
+    """Inverted in iteration 12: a company `position` is never printed — the
+    Supplier Position is the MD's own (required) position only."""
     company = dict(COMPANY, position="Director")
-    # MD without a position, and no MD at all -> company's Signer position
     for d in (_director(), None):
-        assert "Director" in _supplier_block(_pdf_text_company(company, d))
-    # an MD's own position wins over the company's
+        assert "Director" not in _supplier_block(_pdf_text_company(company, d))
     block = _supplier_block(_pdf_text_company(company, _director(position="Founder")))
-    assert "Founder" in block and "Director" not in block.replace("Managing Director", "")
+    assert "Founder" in block and "Director" not in block
 
 
-def test_xlsx_falls_back_to_company_signer_position():
+def test_xlsx_no_longer_falls_back_to_company_signer_position():
+    """Inverted in iteration 12, as above."""
     wb = load_workbook(generate_quotation_xlsx(_doc(), CUSTOMER, [(_item(), None, [])], company=dict(COMPANY, position="Director"), director=None))
     values = [c.value for row in wb.active.iter_rows() for c in row]
-    assert "Position" in values and "Director" in values
+    assert "Position" not in values and "Director" not in values
 
 
 # ---- XLSX -----------------------------------------------------------------

@@ -836,7 +836,7 @@
         <thead>
           <tr>
             <th>Name <button class="sort-btn" data-sort-table="company" data-sort-col="name">⇅</button></th>
-            <th>Position</th><th>Contact No</th><th>Logo</th><th>Seal</th><th>Edit</th><th>Delete</th>
+            <th>Short name</th><th>Customer service phone</th><th>Logo</th><th>Seal</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="companies-tbody">
@@ -1173,31 +1173,27 @@
           <input type="text" id="company-name" placeholder="Trustwell International Co., Ltd." required>
         </div>
         <div>
-          <label for="company-short-name">Short name (used in doc numbers, e.g. "SS")</label>
-          <input type="text" id="company-short-name" placeholder="SS" maxlength="20">
+          <label for="company-short-name">Short name (2–6 letters/digits, used in document numbers, e.g. "WF")</label>
+          <input type="text" id="company-short-name" placeholder="WF" maxlength="6">
         </div>
       </div>
       <div class="form-row">
         <div>
-          <label for="company-position">Signer position</label>
-          <input type="text" id="company-position" placeholder="Director">
-        </div>
-        <div></div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label for="company-address">Address</label>
+          <label for="company-address">Office address</label>
           <input type="text" id="company-address" placeholder="Yangon, Myanmar">
+          <div class="hint">Used when the MD has no address.</div>
         </div>
         <div>
-          <label for="company-contact">Contact No</label>
+          <label for="company-contact">Customer service phone</label>
           <input type="text" id="company-contact" placeholder="+95 9 xxx xxx xxx">
+          <div class="hint">Printed in the footer of every quotation.</div>
         </div>
       </div>
       <div class="form-row">
         <div>
-          <label for="company-email">Support email</label>
+          <label for="company-email">Customer service email</label>
           <input type="text" id="company-email" placeholder="support@trustwell.com">
+          <div class="hint">Printed in the footer of every quotation.</div>
         </div>
         <div></div>
       </div>
@@ -1493,7 +1489,7 @@ Warranty: 2 years from the date of delivery</textarea>
     <h3>Companies — recycle bin</h3>
     <div id="company-trash-banner"></div>
     <table>
-      <thead><tr><th>Name</th><th>Position</th><th>Restore</th></tr></thead>
+      <thead><tr><th>Name</th><th>Short name</th><th>Restore</th></tr></thead>
       <tbody id="company-trash-tbody">
         <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:80%"></span></td></tr>
         <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:55%"></span></td></tr>

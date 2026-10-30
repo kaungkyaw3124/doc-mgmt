@@ -65,7 +65,8 @@ def _director(client, company_id, name, position):
         body["position"] = position
     r = client.post(f"/companies/{company_id}/directors", json=body)
     assert r.status_code == 201, r.text
-    assert r.json()["position"] == position
+    # iteration 12: an MD's position is required; a missing one defaults to "Managing Director"
+    assert r.json()["position"] == (position if position is not None else "Managing Director")
     return r.json()["id"]
 
 
@@ -103,7 +104,8 @@ def test_selected_directors_position_reaches_pdf_and_excel_in_the_right_place(cl
     other = _supplier_block(client, _quotation(client, cid, ceo))
     assert "Chief Executive Officer" in other and "MD" not in other.split("Position", 1)[1].split("Address", 1)[0]
 
-    assert "Position" not in _supplier_block(client, _quotation(client, cid, plain))  # MD without a position
+    # iteration 12: an MD created without a position gets "Managing Director"
+    assert "Managing Director" in _supplier_block(client, _quotation(client, cid, plain))
     assert "Position" not in _supplier_block(client, _quotation(client, cid, None))   # legacy: no MD at all
 
     rows = _xlsx_rows(client, _quotation(client, cid, md))
@@ -111,7 +113,8 @@ def test_selected_directors_position_reaches_pdf_and_excel_in_the_right_place(cl
     assert pos[1] == "MD"
     labels = [r[0] for r in rows]
     assert labels.index("SUPPLIER: Aungaung") < labels.index("Position") < labels.index("Address")  # company name now on the heading
-    assert "Position" not in [r[0] for r in _xlsx_rows(client, _quotation(client, cid, plain))]
+    plain_rows = _xlsx_rows(client, _quotation(client, cid, plain))
+    assert next(r for r in plain_rows if r[0] == "Position")[1] == "Managing Director"
 
 
 def test_editing_a_directors_position_changes_the_next_export(client):
@@ -123,15 +126,19 @@ def test_editing_a_directors_position_changes_the_next_export(client):
     assert r.status_code == 200 and r.json()["position"] == "MD"
     block = _supplier_block(client, doc)  # same document, position is looked up live
     assert "MD" in block and "Director" not in block
-    client.patch(f"/companies/{cid}/directors/{did}", json={"position": None})
-    assert "Position" not in _supplier_block(client, doc)
+    # iteration 12: the position can't be cleared (422) and the export is unchanged
+    assert client.patch(f"/companies/{cid}/directors/{did}", json={"position": None}).status_code == 422
+    assert client.patch(f"/companies/{cid}/directors/{did}", json={"position": "  "}).status_code == 422
+    assert "MD" in _supplier_block(client, doc)
 
 
-def test_company_signer_position_is_the_fallback_when_the_md_has_none(client):
+def test_company_signer_position_is_no_longer_used(client):
+    """Inverted in iteration 12 (was ..._is_the_fallback_when_the_md_has_none):
+    a company `position` sent by an old client is ignored and never printed."""
     cid = _setup(client, company_position="Director")
     plain = _director(client, cid, "No Title", None)
     md = _director(client, cid, "Aung Aung", "MD")
-    assert "Director" in _supplier_block(client, _quotation(client, cid, plain))
-    assert "Director" in _supplier_block(client, _quotation(client, cid, None))
+    assert "Managing Director" in _supplier_block(client, _quotation(client, cid, plain))
+    assert "Position" not in _supplier_block(client, _quotation(client, cid, None))  # no MD -> no Position row
     own = _supplier_block(client, _quotation(client, cid, md))
     assert "MD" in own and "Director" not in own
