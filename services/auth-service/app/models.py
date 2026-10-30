@@ -194,5 +194,16 @@ class RefreshToken(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+    # Session: one per login, shared by every token rotated from it. Rows
+    # from before sessions existed have NULLs and are treated as expired.
+    # Added to existing databases by refresh_tokens.ensure_session_columns().
+    session_id = Column(UUID(as_uuid=True))
+    session_started_at = Column(DateTime(timezone=True))
+    last_activity_at = Column(DateTime(timezone=True))
+    user_agent = Column(String(255))
+    ip = Column(String(64))
 
-    __table_args__ = (Index("ix_refresh_tokens_user_id", "user_id"),)
+    __table_args__ = (
+        Index("ix_refresh_tokens_user_id", "user_id"),
+        Index("ix_refresh_tokens_session_id", "session_id"),  # /verify looks sessions up on every request
+    )

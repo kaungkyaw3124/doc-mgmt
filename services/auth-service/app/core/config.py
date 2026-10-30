@@ -25,10 +25,20 @@ class Settings(BaseSettings):
     # capping how long a stolen-from-memory/XSS'd token stays useful.
     jwt_expire_minutes: int = 15
 
-    # Refresh token lifetime — the HttpOnly/SameSite cookie set on login,
-    # used only to mint new access tokens via POST /refresh (see
-    # app/core/refresh_tokens.py). Each use rotates it (the old one is
-    # revoked), so a given refresh token is single-use.
+    # Sessions (see app/core/refresh_tokens.py). A login starts a session;
+    # each POST /refresh rotates its refresh token (single-use) and counts
+    # as activity. The refresh token — and its HttpOnly cookie — expires at
+    # min(now + idle timeout, login + max hours): idle for longer than the
+    # timeout, or reaching the hard limit however active, ends the session.
+    # Floats so a test stack can use seconds-scale values (e.g. 0.5 = 30 s).
+    session_idle_timeout_minutes: float = 30
+    session_max_hours: float = 10
+    # How long before the idle logout the UI shows its warning dialog.
+    session_idle_warning_seconds: int = 60
+    # No longer used (sessions above replaced the fixed 14-day refresh
+    # token). Kept only so existing .env files that still set
+    # REFRESH_TOKEN_EXPIRE_DAYS keep loading: Settings rejects unknown keys,
+    # so removing it would stop auth-service from starting on those servers.
     refresh_token_expire_days: int = 14
 
     # Login rate limiting (see app/core/rate_limit.py). All windows are

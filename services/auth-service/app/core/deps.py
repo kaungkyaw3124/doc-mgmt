@@ -6,7 +6,21 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.jwt_utils import decode_access_token
+from app.core.refresh_tokens import session_is_active
 from app import models
+
+
+def require_live_session(db: Session, user_id, payload: dict) -> None:
+    """401 unless the token's session (its `sid` claim) is still live —
+    not logged out, revoked by an admin, idle-expired or past its hard end.
+    Shared by get_current_user and /verify, so a revoked session's access
+    token stops working everywhere at once, not after its 15 minutes."""
+    try:
+        sid = uuid.UUID(payload["sid"])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=401, detail="invalid token")
+    if not session_is_active(db, user_id, sid):
+        raise HTTPException(status_code=401, detail="session ended")
 
 
 def get_current_user(
@@ -36,6 +50,7 @@ def get_current_user(
         raise HTTPException(status_code=403, detail="account disabled")
     if not user.is_approved:
         raise HTTPException(status_code=403, detail="account pending approval")
+    require_live_session(db, user_id, payload)
     return user
 
 

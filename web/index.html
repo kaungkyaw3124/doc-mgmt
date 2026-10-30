@@ -588,6 +588,7 @@
     <div class="sidebar-footer">
       <div class="who">Signed in as<br><strong id="whoami-username">—</strong></div>
       <button class="link-btn" id="logout-btn">Sign out</button>
+      <button class="link-btn" id="my-sessions-btn">My sessions</button>
     </div>
   </div>
 
@@ -1617,6 +1618,35 @@ Warranty: 2 years from the date of delivery</textarea>
     <input type="file" id="category-bulk-import-excel" accept=".xlsx">
     <button type="button" class="btn-primary" id="category-bulk-import-submit-btn" style="margin-top:14px;">Import</button>
     <div id="category-bulk-import-results" style="margin-top:16px;"></div>
+  </div>
+</div>
+
+<!-- Generic sessions list: "My sessions" (own) or an admin's view of one user's sessions. -->
+<div class="modal-overlay" id="sessions-modal">
+  <div class="modal-box modal-box-wide">
+    <button class="link-btn-inline modal-close" id="sessions-modal-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+    <h3 id="sessions-modal-title">My sessions</h3>
+    <div id="sessions-modal-banner"></div>
+    <table>
+      <thead><tr><th>Browser</th><th>IP</th><th>Started</th><th>Last active</th><th></th></tr></thead>
+      <tbody id="sessions-tbody"></tbody>
+    </table>
+    <div style="margin-top:16px; text-align:right;">
+      <button type="button" class="btn-primary" id="sessions-logout-all-btn">Log out all devices</button>
+    </div>
+  </div>
+</div>
+
+<!-- Last in the page so it sits above any open form modal. -->
+<div class="modal-overlay" id="session-warning-modal" role="alertdialog" aria-labelledby="session-warning-text">
+  <div class="modal-box">
+    <h3>Still there?</h3>
+    <p id="session-warning-text">You'll be logged out in <strong id="session-warning-countdown">60</strong> s due to inactivity.</p>
+    <p id="session-warning-dirty" style="display:none; color:var(--danger);">You have unsaved changes in an open form — they will be lost.</p>
+    <div style="margin-top:16px; text-align:right;">
+      <button type="button" class="btn-secondary" id="session-warning-logout" style="margin-right:8px;">Log out</button>
+      <button type="button" class="btn-primary" id="session-warning-stay">Stay logged in</button>
+    </div>
   </div>
 </div>
 

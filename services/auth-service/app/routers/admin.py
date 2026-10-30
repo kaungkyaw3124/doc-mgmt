@@ -9,7 +9,7 @@ from app.core.db import get_db
 from app.core.deps import get_current_user, require_superuser
 from app.core.security import hash_password
 from app.core.authz import can_manage_group, is_member_of, user_has_service_access
-from app.core.refresh_tokens import revoke_all_user_tokens
+from app.core.refresh_tokens import active_sessions, revoke_all_user_tokens, revoke_session
 from app import models
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -431,6 +431,56 @@ def set_user_active(
         revoke_all_user_tokens(db, target.id)
 
     return {"id": str(target.id), "is_active": target.is_active}
+
+
+# ---------- Sessions ----------
+# Same scoping as suspend (set_user_active): a superuser can manage anyone's
+# sessions; a group admin only those of users in a group they administer,
+# and never a superuser's.
+
+def _require_can_manage_sessions(db: Session, current_user: models.User, user_id: uuid.UUID) -> models.User:
+    _require_can_manage_users(db, current_user)
+    target = db.query(models.User).filter_by(id=user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="user not found")
+    if target.is_superuser and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="only a superuser can manage a superuser's sessions")
+    if not current_user.is_superuser and not _target_is_in_an_administered_group(db, current_user, target):
+        raise HTTPException(status_code=403, detail="you can only manage sessions of users who belong to a group you administer")
+    return target
+
+
+@router.get("/users/{user_id}/sessions")
+def list_user_sessions(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    from app.routers.auth import session_out  # auth imports nothing from admin; avoids a module-level cycle risk
+    target = _require_can_manage_sessions(db, current_user, user_id)
+    return [session_out(row) for row in active_sessions(db, target.id)]
+
+
+@router.post("/users/{user_id}/sessions/{session_id}/revoke", status_code=204)
+def revoke_user_session(
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    target = _require_can_manage_sessions(db, current_user, user_id)
+    if not revoke_session(db, target.id, session_id):
+        raise HTTPException(status_code=404, detail="no such active session")
+
+
+@router.post("/users/{user_id}/logout-all", status_code=204)
+def logout_user_everywhere(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    target = _require_can_manage_sessions(db, current_user, user_id)
+    revoke_all_user_tokens(db, target.id)
 
 
 # ---------- Groups ----------

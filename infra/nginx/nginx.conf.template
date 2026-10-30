@@ -221,6 +221,9 @@ http {
             rewrite ^/api/auth/refresh$ /refresh break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
+            # The session list shows each session's latest IP: set by nginx
+            # here so a client-sent X-Forwarded-For can't fake it.
+            proxy_set_header X-Real-IP $remote_addr;
         }
 
         # Public: same reasoning as /refresh — authenticates via the
@@ -232,6 +235,20 @@ http {
             rewrite ^/api/auth/logout$ /logout break;
             proxy_pass http://auth-service:8000;
             proxy_set_header Host $host;
+        }
+
+        # The caller's own sessions / "log out all devices". auth-service
+        # checks the Bearer token (and its session) itself, like /api/admin/.
+        # A regex location, so it wins over the /api/auth/logout prefix
+        # location above for /api/auth/logout-all.
+        location ~ ^/api/auth/(sessions|logout-all)$ {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/auth/(.*)$ /$1 break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
         }
 
         # auth-service's own admin endpoints (users/groups/roles/access) check
