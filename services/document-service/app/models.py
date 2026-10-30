@@ -67,6 +67,7 @@ class Customer(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
+    organization = Column(String(255))  # optional; NULL means "print the name" (not a copy of it, so a rename flows through)
     email = Column(String(255))
     phone = Column(String(50))
     billing_address = Column(JSONB)

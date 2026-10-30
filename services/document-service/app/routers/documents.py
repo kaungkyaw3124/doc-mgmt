@@ -756,11 +756,12 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
             customer = {
                 "id": customer_row.id,
                 "name": customer_row.name,
+                "organization": customer_row.organization,  # None -> exports print the name
                 "billing_address": customer_row.billing_address,
             }
     elif doc.end_user_name:
         # One-time customer typed on the document: same dict shape the exports
-        # use, plus organization/address (saved customers have neither key).
+        # use, plus address (saved customers carry billing_address instead).
         customer = {
             "id": None,
             "name": doc.end_user_name,

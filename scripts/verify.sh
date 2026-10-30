@@ -70,6 +70,9 @@ done
 # --- step 2: build + start ----------------------------------------------
 step "docker compose up -d --build"
 "${COMPOSE[@]}" up -d --build || fail "docker compose up" $?
+# nginx resolves the backends' hostnames once at startup; a backend that
+# --build just recreated may have a new IP, so nginx must re-resolve.
+"${COMPOSE[@]}" restart nginx || fail "docker compose restart nginx" $?
 
 # --- step 3: wait for health --------------------------------------------
 # The backends' /health routes are not proxied by any /api/* location (see

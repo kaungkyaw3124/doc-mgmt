@@ -107,3 +107,30 @@ def test_quotation_with_one_time_manual_customer(admin):
         assert poll(_found), f"document not searchable by the manual customer name {name!r} within 10s"
     finally:
         admin.delete(f"/documents/{doc_id}")
+
+
+def test_quotation_for_a_saved_customer_with_an_organization(admin):
+    """Loop iteration 9: a saved customer's optional Organization prints
+    separately from its Name in the PDF's END USER block."""
+    name = unique("Org Smoke Buyer")
+    org = unique("Org Smoke Holdings")
+    cust = admin.post("/customers", json={"name": name, "organization": org})
+    assert cust.status_code == 201, cust.text
+    assert cust.json()["organization"] == org
+    doc_id = None
+    try:
+        doc = admin.post("/documents", json={
+            "doc_type": "quotation", "currency": "USD", "customer_id": cust.json()["id"],
+            "items": [{"description": unique("test-item"), "quantity": "1", "unit_price": "5.00"}]})
+        assert doc.status_code == 201, doc.text
+        doc_id = doc.json()["id"]
+        pdf = admin.get(f"/documents/{doc_id}/export/quotation-pdf")
+        assert pdf.status_code == 200, pdf.text[:300]
+        end_user = PdfReader(io.BytesIO(pdf.content)).pages[0].extract_text().split("END USER", 1)[1]
+        assert name in end_user
+        assert f"Organization {org}" in end_user
+    finally:
+        # documents first: a customer still referenced by one can't be deleted
+        if doc_id:
+            admin.delete(f"/documents/{doc_id}")
+        admin.delete(f"/customers/{cust.json()['id']}")

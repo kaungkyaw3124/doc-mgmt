@@ -10,6 +10,10 @@
 # replaced. (Not spelled out literally in this comment on purpose —
 # envsubst is a dumb text substitution and would replace it here too if
 # it appeared verbatim.)
+# njs (bundled with the official nginx image): computes the web UI's version
+# from app.js's mtime — see "Static UI caching" below.
+load_module modules/ngx_http_js_module.so;
+
 events {}
 
 http {
@@ -28,6 +32,8 @@ http {
     # rather than erroring loudly. Explicit and correct now for both.
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
+
+    js_import static_version from /etc/nginx/static-version.js;
 
     # Task 8 — stop advertising the exact Nginx version. Applies to the
     # `Server` response header AND Nginx's own auto-generated error
@@ -97,8 +103,28 @@ http {
         root /usr/share/nginx/html;
         index index.html;
 
+        # Static UI caching. Without a Cache-Control header browsers cached
+        # web/ heuristically (from Last-Modified) and kept running an old
+        # js/app.js after an update until a hard refresh. Now every UI file
+        # is `no-cache`: the browser may keep a copy but revalidates it on
+        # each load (a cheap 304 when unchanged). add_header in a location
+        # replaces inherited ones, so each location here re-includes the
+        # security headers. /api/* and MinIO downloads are unaffected.
+        #
+        # index.html is served by infra/nginx/static-version.js: it writes
+        # app.js's mtime into the <script src> `?v=` placeholder, so a browser
+        # that still holds an old app.js under the bare URL fetches the new
+        # one on its next normal load, and it answers If-None-Match itself
+        # with an ETag covering both files.
+        location = /index.html {
+            include /etc/nginx/security-headers.conf;
+            add_header Cache-Control "no-cache" always;
+            js_content static_version.index;
+        }
+
         location / {
             include /etc/nginx/security-headers.conf;
+            add_header Cache-Control "no-cache" always;
             try_files $uri $uri/ /index.html;
         }
 

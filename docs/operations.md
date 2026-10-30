@@ -9,6 +9,24 @@ docker compose restart nginx  # required after ANY nginx.conf edit — no hot re
 docker compose down            # stop (bind-mounted data in ./data/ survives)
 ```
 
+## Updating a server
+
+```bash
+git pull
+docker compose -f infra/docker-compose.yml up -d --build
+docker compose -f infra/docker-compose.yml restart nginx
+```
+
+The nginx restart is required, not optional: nginx resolves the backends'
+hostnames once when it starts, and `up --build` recreates any backend whose
+image changed — with a possibly different internal IP — while nginx keeps
+running. Without the restart, nginx can send requests to the wrong service
+(seen as 401 "missing or invalid gateway credential" on `/api/auth/...`).
+
+Browsers pick up the new UI on their next normal page load: `web/` is served
+with `Cache-Control: no-cache`, and `index.html` loads `js/app.js?v=<its
+mtime>` (`infra/nginx/static-version.js`), so nobody needs a hard refresh.
+
 Full data reset (destructive — confirm before running against anything you
 care about):
 

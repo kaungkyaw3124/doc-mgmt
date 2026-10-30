@@ -1589,6 +1589,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
   showBanner('customer-modal-banner', '');
   const payload = {
     name: document.getElementById('customer-name').value,
+    organization: document.getElementById('customer-organization').value.trim() || null,  // blank -> the name is printed
     email: document.getElementById('customer-email').value || null,
     phone: document.getElementById('customer-phone').value || null,
     billing_address: document.getElementById('customer-address').value
@@ -1631,6 +1632,7 @@ function startEditCustomer(customer) {
   document.getElementById('customer-form-title').textContent = 'Edit customer — ' + customer.name;
   document.getElementById('customer-form-submit-btn').textContent = 'Save changes';
   document.getElementById('customer-name').value = customer.name;
+  document.getElementById('customer-organization').value = customer.organization || '';
   document.getElementById('customer-email').value = customer.email || '';
   document.getElementById('customer-phone').value = customer.phone || '';
   document.getElementById('customer-address').value = (customer.billing_address && customer.billing_address.address) || '';
@@ -1673,12 +1675,13 @@ async function loadCustomers() {
 function renderCustomersTable(customers) {
   const tbody = document.getElementById('customers-tbody');
   if (!customers.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No customers match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No customers match.</td></tr>';
     return;
   }
   tbody.innerHTML = customers.map(c => `
     <tr>
       <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button></td>
+      <td>${c.organization ? escapeHtml(c.organization) : `<span style="color:var(--text-dim);">${escapeHtml(c.name)}</span>`}</td>
       <td>${escapeHtml(c.email || '—')}</td>
       <td>${escapeHtml(c.phone || '—')}</td>
       <td>${fmtDate(c.created_at)}</td>
@@ -3079,7 +3082,7 @@ const tableConfig = {
   customers: {
     cache: () => cachedCustomers,
     filterInputId: 'customers-filter',
-    matchFn: (c, q) => c.name.toLowerCase().includes(q),
+    matchFn: (c, q) => c.name.toLowerCase().includes(q) || (c.organization || '').toLowerCase().includes(q),
     render: renderCustomersTable,
     dateFilter: { fromId: 'customers-date-from', toId: 'customers-date-to', field: 'created_at' },
   },

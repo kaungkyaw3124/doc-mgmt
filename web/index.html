@@ -732,7 +732,7 @@
       <div id="customers-banner"></div>
 
       <div class="filter-bar">
-        <input type="text" id="customers-filter" placeholder="Filter by name…">
+        <input type="text" id="customers-filter" placeholder="Filter by name or organization…">
         <div class="filter-date-group">
           <span>Created</span>
           <input type="date" id="customers-date-from">
@@ -746,15 +746,16 @@
         <thead>
           <tr>
             <th>Name <button class="sort-btn" data-sort-table="customers" data-sort-col="name">⇅</button></th>
+            <th>Organization</th>
             <th>Email</th><th>Phone</th>
             <th>Created <button class="sort-btn" data-sort-table="customers" data-sort-col="created_at">⇅</button></th>
             <th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="customers-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -1104,23 +1105,30 @@
     <form id="customer-form">
       <div class="form-row">
         <div>
-          <label for="customer-name">Name / organization</label>
-          <input type="text" id="customer-name" placeholder="Acme Corp" required>
+          <label for="customer-name">Name</label>
+          <input type="text" id="customer-name" placeholder="U Aung Aung" required>
         </div>
         <div>
-          <label for="customer-email">Email</label>
-          <input type="text" id="customer-email" placeholder="billing@acme.com">
+          <label for="customer-organization">Organization</label>
+          <input type="text" id="customer-organization" placeholder="Same as name if empty">
         </div>
       </div>
       <div class="form-row">
         <div>
+          <label for="customer-email">Email</label>
+          <input type="text" id="customer-email" placeholder="billing@acme.com">
+        </div>
+        <div>
           <label for="customer-phone">Phone</label>
           <input type="text" id="customer-phone" placeholder="+95 9 xxx xxx xxx">
         </div>
+      </div>
+      <div class="form-row">
         <div>
           <label for="customer-address">Address</label>
           <input type="text" id="customer-address" placeholder="Yangon, Myanmar">
         </div>
+        <div></div>
       </div>
       <button type="submit" class="btn-primary" id="customer-form-submit-btn">Create customer</button>
     </form>
@@ -1612,6 +1620,7 @@ Warranty: 2 years from the date of delivery</textarea>
   </div>
 </div>
 
-<script src="/js/app.js"></script>
+<!-- the ?v= placeholder is replaced by nginx with app.js's mtime (infra/nginx/static-version.js) -->
+<script src="/js/app.js?v=__APP_VERSION__"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class ProjectCreate(BaseModel):
@@ -94,24 +94,37 @@ class CompanyDirectorOut(BaseModel):
     created_at: datetime
 
 
+def _blank_to_none(value):
+    """Trimmed; blank -> None, so the name is used as the organization."""
+    return (value or "").strip() or None
+
+
 class CustomerCreate(BaseModel):
     name: str
+    organization: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     billing_address: Optional[dict] = None
+
+
+    _organization = field_validator("organization")(_blank_to_none)
 
 
 class CustomerUpdate(BaseModel):
     name: Optional[str] = None
+    organization: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     billing_address: Optional[dict] = None
+
+    _organization = field_validator("organization")(_blank_to_none)
 
 
 class CustomerOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     name: str
+    organization: Optional[str] = None
     email: Optional[str]
     phone: Optional[str]
     billing_address: Optional[dict]

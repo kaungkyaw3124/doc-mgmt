@@ -1,29 +1,26 @@
-# report.md — Iteration 8
+# report.md — Iteration 9
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Stop duplicate products: **block** exact duplicates, **warn** on same/similar names, **skip + report** duplicates in bulk import, and a **"Possible duplicates"** review page
+- **Goal**: **A)** Browsers always load the newest UI after an update (no hard refresh). **B)** Saved customers get an optional **Organization** separate from the Name
 - **Ponytail skill loaded**: yes. Loaded with the Skill tool (`.claude/skills/ponytail`, level full) before any work
-- **Branch / commit**: `loop/iter-8-duplicate-products` @ the commit that adds this report (`loop iter 8: duplicate product detection [DONE]`), merged into `dev`
-- **One-paragraph summary**: One shared helper, `catalogue-service/app/core/duplicates.py` (stdlib `difflib`, no new dependency), defines `norm` (casefold + collapse whitespace), exact / same-name / similar (ratio ≥ 0.88, top 5), and the review groups.
-  - **Blocking**: create, edit (only when name or description changes) and restore return **409** `{"message": "This item already exists", "existing": {id, sku, name}}` on an exact duplicate of an active product.
-  - **New routes**: `GET /products/duplicate-check` and `GET /products/duplicates`, declared before `/{product_id}`, with the same visibility filter as the product list.
-  - **Bulk import**: skips existing and within-file duplicates into `skipped`, and warns on same-name rows. Row/file numbering is unchanged.
-  - **UI**: the product form pre-checks before saving. An exact match is blocked with a link to the existing product; same or similar names get a dialog with **Use existing** / **Create anyway**. The bulk-import result shows counts, skipped rows and warnings. A **Possible duplicates** view lists exact groups (red), then same-name groups, each row with **Move to trash**.
-
-  All five checks pass: catalogue unit tests 66 → 74, other services unchanged and green, smoke 16 → 18.
+- **Branch / commit**: `loop/iter-9-cache-and-customer-org` @ the commit that adds this report (`loop iter 9: no stale UI after updates + customer organization [DONE]`), merged into `dev`
+- **One-paragraph summary**:
+  - **A, stale UI**: every web UI file is now served with `Cache-Control: no-cache`, so browsers revalidate it on each load (a cheap 304). All five security headers are still sent, and `/api/*` and MinIO downloads are unchanged. `index.html` is served by a 25-line njs handler, `infra/nginx/static-version.js`. It writes `app.js`'s modification time into `<script src="/js/app.js?v=…">` and answers `If-None-Match` itself, with an ETag covering both files. So a browser that still holds an old `app.js` fetches the new one on its next **normal** reload, and nothing has to be bumped by hand.
+  - **The original bug is reproduced and fixed**: the new Playwright test **fails on the old nginx config** (`assert None == 2`, the old JS kept running) and passes on the new one.
+  - **Harness**: `verify.sh` restarts nginx after `up --build`, every service has a `.dockerignore`, and `docs/operations.md` has the server update steps.
+  - **B, organization**: `customers.organization`, nullable, added by idempotent migration `0006`. It is trimmed, and blank is stored as NULL, never a copy of the name. Exports print `organization or name`. The customer form has separate **Name** and **Organization** fields. The table has an Organization column (the name shown muted when empty), and the filter matches both.
+  - **Results**: all six checks pass. Unit tests: document 195 → 201, others unchanged. Smoke 18 → 26.
 
 ## 2. Baseline (before any change)
+The first attempt found the Docker daemon not running (`pgrep -x dockerd` matched without a working daemon). After starting `dockerd` explicitly:
 ```
 $ ./scripts/verify.sh --keep
-============================= 16 passed in 12.65s ==============================
+============================= 18 passed in 16.17s ==============================
 verify.sh: PASSED (stack left running: --keep)
 
-Unit suites (one Python 3.12 venv per service):
-auth-service       82 errors   -> psycopg2 "connection to localhost:5432 refused": its conftest needs a real Postgres
-                                  (auth_test DB; CI provides one). Started a throwaway postgres:16 on :55432 with
-                                  TEST_DATABASE_URL -> 82 passed. Removed afterwards.
-catalogue-service  66 passed
+auth-service       82 passed   (throwaway postgres:16 on :55432 via TEST_DATABASE_URL, as in iteration 8)
+catalogue-service  74 passed
 search-service     12 passed
 document-service  195 passed
 ```
@@ -31,95 +28,122 @@ document-service  195 passed
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | New unit tests pass | PASS | `pytest services/catalogue-service/tests/test_duplicates.py -v` → 8 passed. Against the old app code: `6 failed, 2 passed` (the 2 are `test_norm`, whose new helper file is untracked so it stays, and "same name allowed", which was old behaviour too) |
-| A2 | No regressions | PASS | auth `82 passed` (with the throwaway Postgres), catalogue `74 passed` (66 + 8), search `12 passed`, document `195 passed` |
-| A3 | Smoke passes | PASS | `./scripts/verify.sh` → `18 passed in 8.51s` … `verify.sh: PASSED`, exit 0. New: `test_duplicate_product_is_blocked_and_reported`, `test_ui_duplicate_products.py`. The first final run failed on a harness issue (§5 attempt 2, §7) |
-| A4 | UI proof | PASS | Four screenshots in `loop/evidence/`, listed below |
-| A5 | Existing data | PASS | output below |
+| A1 | Headers | PASS | `curl -sI` output below |
+| A2 | Normal reload picks up new JS | PASS | `tests/test_ui_cache_reload.py` passed. **Against the old nginx config + old `index.html` it fails**: `AssertionError: assert None == 2` (old `app.js` still running after `page.reload()`); the old `app.js` response had no `Cache-Control` at all. This is the user's bug, reproduced, then fixed |
+| A3 | No regressions | PASS | auth `82 passed`, catalogue `74 passed`, search `12 passed`, document `201 passed` (195 + 6) |
+| A4 | Smoke passes | PASS | `./scripts/verify.sh` → `26 passed in 12.29s` … `verify.sh: PASSED`. That run **recreated** auth-service and search-service (the new `.dockerignore` changed their images), which is exactly what broke the gateway in iteration 8, and the new `restart nginx` step handled it |
+| A5 | Part B tests | PASS | `pytest services/document-service/tests/test_customer_organization.py -v` → 6 passed. Against the old app code: `2 failed, 4 passed`; the 2 are the new-behaviour tests, and the 4 are regression guards (no-org prints the name, manual unchanged, old rows, migration) that should pass either way |
+| A6 | Part B proof | PASS | `loop/evidence/iter-9-customer-form.png`: the New customer form with **Name** and **Organization** ("Same as name if empty") side by side, then Email | Phone, then Address; behind it the table's new Organization column shows a name-only customer's name in muted grey. `loop/evidence/iter-9-pdf-org.png`: END USER block with Customer Name `U Kyaw Min`, Organization `Golden Lotus Trading Co., Ltd.`, Address `No. 5, Pansodan Road, Yangon` |
 
-**A4 screenshots** (`loop/evidence/`):
-- `iter-8-exact-block.png`: the product form with a red banner "This item already exists: PRD-0003 UI Dup Shelf-…", the item a link to the existing product. The typed description was `steel,  GREY` against `Steel, grey`, so normalization works.
-- `iter-8-warning.png`: the "Similar products already exist" dialog over the form, listing PRD-0003 with **Use existing**, plus **Cancel** / **Create anyway**.
-- `iter-8-import-result.png`: "Created 2 products · Skipped 2 duplicates · 1 warning", the created table, a Skipped table (row 1 `already exists` → PRD-0003; row 3 `duplicate of row 2` → PRD-0005), and the warning "Row 4 (…): same name as PRD-0004".
-- `iter-8-duplicates-page.png`: "Exact duplicates (1)" in red with the A5 legacy pair PRD-0001 / PRD-0002, then "Same name (1)" with the three UI-test shelves; every row has **Move to trash**.
+**A1** (from the running stack; `Date:` removed):
+```
+$ curl -sI http://localhost:8080/
+HTTP/1.1 200 OK
+Server: nginx
+Content-Type: text/html
+Content-Length: 80300
+Connection: keep-alive
+ETag: "mvug10rd-mvug4o2f"
+X-Content-Type-Options: nosniff
+Referrer-Policy: strict-origin-when-cross-origin
+X-Frame-Options: SAMEORIGIN
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(), clipboard-read=(), clipboard-write=()
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+Cache-Control: no-cache
 
-**A5: pre-existing duplicates.** Two exact duplicates were created on the **old** code, which accepted both (`[(201, 'PRD-0001'), (201, 'PRD-0002')]`; old `/products/duplicates` → 422, treated as an id). Then catalogue-service was rebuilt with the new code against the same DB:
+$ curl -sI http://localhost:8080/js/app.js
+HTTP/1.1 200 OK
+Server: nginx
+Content-Type: application/javascript
+Content-Length: 176685
+Last-Modified: Fri, 30 Oct 2026 04:02:19 GMT
+Connection: keep-alive
+ETag: "6ae416cb-2b22d"
+X-Content-Type-Options: nosniff
+Referrer-Policy: strict-origin-when-cross-origin
+X-Frame-Options: SAMEORIGIN
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(), clipboard-read=(), clipboard-write=()
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+Cache-Control: no-cache
+Accept-Ranges: bytes
 ```
-list: 200 contains both: True
-duplicates exact group: [['PRD-0001', 'PRD-0002']]
-edit price: 200 19.99
-third copy now: 409 {'message': 'This item already exists', 'existing': {..., 'sku': 'PRD-0001', 'name': 'A5 Legacy Shelf e26003'}}
-```
-Both also appear on the duplicates page in the UI (`iter-8-duplicates-page.png`). The two rows were deleted afterwards (204, 204).
+Conditional GETs with those ETags return **304** for both `/` and `/js/app.js` (in `test_static_caching.py`), and the 304s keep `Cache-Control` and the security headers. The served page contains `<script src="/js/app.js?v=mvug4o2f"></script>` (the second half of the `/` ETag).
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/catalogue-service/app/core/duplicates.py` | added | Shared helper (Definitions in the plan): `norm`, `key`, `active_products`, `find_exact` (catalogue-wide), `check` (exact / same_name / similar top 5), `groups`, `brief`. The `shortcut:` comment notes the ~10k-product limit and the upgrade path |
-| `services/catalogue-service/app/routers/products.py` | `_raise_if_exact_duplicate` (409 shape from the plan) used in create, edit (only if name/description changed; self excluded) and restore. New `GET /duplicate-check` and `GET /duplicates`, placed right after the list route, so before `/{product_id}`. Bulk import: dict lookups built once, then updated per created row; `skipped` added; `warnings` keeps its existing strings and gets `{row, name, reason}` entries appended | Plan backend 1–6 |
-| `infra/nginx/nginx.conf.template` | **not changed** | Checked: `location /api/products` (prefix) already covers both new routes with the same `auth_request` / `X-Allowed-Projects` / `X-Access-Level` forwarding |
-| `web/js/app.js` | `formatApiErrorDetail` understands `{message, existing}`; `apiFetch` keeps the raw `detail` on the thrown error. The product form calls `duplicate-check` first, only when name/description is new or changed (`exclude_id` when editing). Exact → banner with a link; same/similar → warning dialog; a 409 race → same banner. New `openExistingProduct`, `showProductExistsBanner`, `openProductDupWarning`, `loadProductDuplicates`. The bulk-import result renders counts, a skipped table and both warning shapes | Plan frontend 1–3 |
-| `web/index.html` | the warning dialog and Possible-duplicates modal (same markup as the recycle-bin modal); a **Possible duplicates** link above the products table | Plan frontend 3–4. A link, not a header button: a 6th header button wrapped the toolbar at 1280 px (measured: "+ New product" dropped from y=54 to y=79) |
-| `services/catalogue-service/tests/test_duplicates.py` | added | Plan tests 1–7, on the SQLite + TestClient pattern from document-service. The bulk test also checks that file 5 still attaches to row 5's product when rows 1 and 3 are skipped |
-| `tests/test_catalogue_smoke.py` | added `test_duplicate_product_is_blocked_and_reported` | Plan smoke. Uses the existing `product` fixture, which removes the product |
-| `tests/test_ui_duplicate_products.py` | added | Plan UI test (skips without Python Playwright); `UI_SCREENSHOT_DIR` saves the A4 shots |
-| `tests/requirements.txt` | `openpyxl==3.1.5` | The UI test builds the bulk-import .xlsx; same pin as the services |
-| `loop/history/report-iter-7.md`, `loop/evidence/iter-8-*.png` | moved / added | LOOP 1.2, A4 |
+| `infra/nginx/nginx.conf.template` | `load_module ngx_http_js_module.so` + `js_import`; `location = /index.html` (security headers + `Cache-Control: no-cache` + `js_content`); `location /` gets `Cache-Control: no-cache`. Both locations re-`include` `security-headers.conf` (the `add_header` inheritance gotcha). `/api/*` and MinIO locations untouched | Part A tasks 1–2 |
+| `infra/nginx/static-version.js` | added (25 lines) | Part A task 2, see the choice below |
+| `infra/docker-compose.yml` | mounts `static-version.js` read-only into nginx | needed by the above |
+| `web/index.html` | `<script src="/js/app.js?v=__APP_VERSION__">`; customer form: **Name** + **Organization** fields (Email/Phone and Address moved down a row, same 2-column grid); Organization column (colspans 6 → 7); filter placeholder "Filter by name or organization…" | Part A task 2; Part B frontend 1, 3 |
+| `web/js/app.js` | customer create/edit send/fill `organization`; table column (`organization`, else the name muted); filter also matches the organization | Part B frontend 2–3 |
+| `scripts/verify.sh` | `docker compose restart nginx` right after `up -d --build` | Part A task 3 (iteration 8 §7 fix a) |
+| `services/{auth,catalogue,document,search}-service/.dockerignore` | added: `**/__pycache__`, `**/.pytest_cache`, `tests/` | Part A task 3 (fix c). `**/` is needed: a bare `__pycache__/` only matches at the build-context root |
+| `docs/operations.md` | "Updating a server": `git pull` → `up -d --build` → `restart nginx`, why the restart is required, and that browsers pick up the new UI without a hard refresh | Part A task 4 |
+| `services/document-service/app/models.py`, `alembic/versions/0006_customer_organization.py` | `Customer.organization` String(255) nullable; guarded migration, revision `0006_customer_organization` (26 chars) | Part B backend 1 |
+| `services/document-service/app/schemas.py` | `organization` on `CustomerCreate`/`CustomerUpdate`/`CustomerOut`; one shared `field_validator` trims and turns blank into `None` | Part B backend 2 |
+| `services/document-service/app/routers/documents.py` | `organization` in the saved-customer export dict | Part B backend 3. The PDF/XLSX already print `organization or name` (`export_pdf.py` builds the template's `customer.organization` with that fallback since iteration 7), so neither template nor XLSX code needed changing |
+| tests | added `tests/test_static_caching.py` (Part A smoke 1–5), `tests/test_ui_cache_reload.py`, `tests/test_ui_customer_organization.py`, `services/document-service/tests/test_customer_organization.py`; one smoke test in `tests/test_documents_smoke.py` | Plan tests |
+| `loop/history/report-iter-8.md`, `loop/evidence/iter-9-*.png` | moved / added | LOOP 1.2, A6 |
 
-**Plan conflict, resolved.** The plan asks for `warnings: [{row, name, reason}]` and also says to keep the existing response fields exactly. `warnings` was already a list of **strings** (unmatched catalogue files). Both are kept: the strings are unchanged, and the same-name objects are appended to the same list. The only consumer, the web UI, renders both shapes. A file whose row was skipped as a duplicate ends up in the existing "didn't match any spreadsheet row" warning, exactly as for blank rows (the plan's rule).
-
-**Visibility.** The exact-duplicate **block** is catalogue-wide, but the 409's `existing` details are included only when the caller may see that product; otherwise `existing: null` and the message alone. This avoids leaking a hidden product's sku/name to project-restricted users. `duplicate-check` and `duplicates` use the same filter as `GET /products`.
+**The cache-busting choice (task 2).** nginx's bundled njs module (`ngx_http_js_module`, already in the official image, no new dependency) serves `index.html`. Per request, it reads `app.js`'s mtime with `fs.statSync`, replaces the `__APP_VERSION__` placeholder, and sets `ETag = "<index.html mtime>-<app.js mtime>"`, returning 304 when `If-None-Match` matches. Why this design:
+- **No build step and no hand-bumped constant.** The value changes the moment a new `app.js` is on disk, with no nginx restart (`test_script_version_changes_when_app_js_changes` touches the file and checks it).
+- **I tried `sub_filter` first and dropped it** for two reasons:
+  - With `sub_filter_once`, it replaced a placeholder that also appeared in my HTML comment.
+  - More importantly, it clears the response's ETag: an `add_header ETag` is cleared too, because nginx maps that header onto the same field. The only validator left would be `index.html`'s own `Last-Modified`, which would let a browser get a 304 for a page whose `app.js` changed: the very bug. The njs handler gives a correct validator.
+- `$request_id` as the version would also have "worked", but it would defeat caching of `app.js` entirely, so I rejected it.
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | Baseline: auth-service unit suite | `connection to server at "localhost" … port 5432 failed: Connection refused` (82 errors) | Its conftest needs a real Postgres `auth_test`, which CI provides; none here | Throwaway `postgres:16` on :55432 + `TEST_DATABASE_URL` → 82 passed. No code change; container removed |
-| 2 | A3, first final `verify.sh` | `FAILED at step: wait for health … not healthy after 180s: gateway`; `/api/auth/groups-public` → 401 `missing or invalid gateway credential` | `up -d --build` **recreated** auth-service and catalogue-service (my unit-test runs had put `__pycache__`/`.pytest_cache` into their build contexts). They got swapped IPs (auth .5, catalogue .7), but the long-running nginx had resolved the hostnames at its start, so `/api/auth` went to catalogue-service's gateway check. Confirmed with `docker inspect` + `getent` | `docker compose restart nginx` (gateway → 200), then re-ran `verify.sh`: 18 passed. No code change; the harness fix is proposed in §7 |
-| 3 | UI cosmetics (not a failing check) | header wrapped at 1280 px; import-result screenshot cut off | a 6th header button; the results are taller than the modal | Moved the button to a link above the table; scroll the results' last line into view before the shot |
+| 1 | Baseline `verify.sh` | `Cannot connect to the Docker daemon` | dockerd not running; `pgrep -x` guard misfired | Started dockerd when `docker info` fails; baseline 18 passed |
+| 2 | A1 (manual curl after the first nginx edit) | `/` had no ETag; the `<script>` still showed `?v=__APP_VERSION__` | `sub_filter` clears ETag (including `add_header ETag`), and `sub_filter_once` hit the placeholder in my comment first | Replaced `sub_filter` + `if` with the njs `js_content` handler; removed the placeholder from the comment |
+| 3 | A5 (5 tests) | `ValueError: not enough values to unpack (expected 3, got 2)` | **Test bug**: iteration 7's `ctx` fixture yields `(client, Session)` | Fixed the unpacking |
+| 4 | A5 (1 test) | `AttributeError: 'str' object has no attribute 'hex'` | **Test bug**: `Session.get()` needs a `uuid.UUID`, not the JSON string | `uuid.UUID(...)` |
 
 ## 6. Final verification output
 ```
-tests/test_auth.py::test_admin_login_ok PASSED                           [  5%]
-tests/test_auth.py::test_wrong_password_rejected PASSED                  [ 11%]
-tests/test_auth.py::test_protected_route_without_token_rejected PASSED   [ 16%]
-tests/test_auth.py::test_protected_route_with_garbage_token_rejected PASSED [ 22%]
-tests/test_catalogue_smoke.py::test_category_and_product PASSED          [ 27%]
-tests/test_catalogue_smoke.py::test_duplicate_product_is_blocked_and_reported PASSED [ 33%]
-tests/test_documents_smoke.py::test_quotation_lifecycle PASSED           [ 38%]
-tests/test_documents_smoke.py::test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md PASSED [ 44%]
-tests/test_documents_smoke.py::test_quotation_with_one_time_manual_customer PASSED [ 50%]
-tests/test_health.py::test_service_reachable_via_gateway[auth-service] PASSED [ 55%]
-tests/test_health.py::test_service_reachable_via_gateway[document-service] PASSED [ 61%]
-tests/test_health.py::test_service_reachable_via_gateway[catalogue-service] PASSED [ 66%]
-tests/test_health.py::test_service_reachable_via_gateway[search-service] PASSED [ 72%]
-tests/test_health.py::test_web_ui_served PASSED                          [ 77%]
-tests/test_search_smoke.py::test_product_becomes_searchable PASSED       [ 83%]
-tests/test_search_smoke.py::test_document_becomes_searchable PASSED      [ 88%]
-tests/test_ui_duplicate_products.py::test_duplicate_products_in_the_ui PASSED [ 94%]
+tests/test_auth.py::test_admin_login_ok PASSED                           [  3%]
+tests/test_auth.py::test_wrong_password_rejected PASSED                  [  7%]
+tests/test_auth.py::test_protected_route_without_token_rejected PASSED   [ 11%]
+tests/test_auth.py::test_protected_route_with_garbage_token_rejected PASSED [ 15%]
+tests/test_catalogue_smoke.py::test_category_and_product PASSED          [ 19%]
+tests/test_catalogue_smoke.py::test_duplicate_product_is_blocked_and_reported PASSED [ 23%]
+tests/test_documents_smoke.py::test_quotation_lifecycle PASSED           [ 26%]
+tests/test_documents_smoke.py::test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md PASSED [ 30%]
+tests/test_documents_smoke.py::test_quotation_with_one_time_manual_customer PASSED [ 34%]
+tests/test_documents_smoke.py::test_quotation_for_a_saved_customer_with_an_organization PASSED [ 38%]
+tests/test_health.py::test_service_reachable_via_gateway[auth-service] PASSED [ 42%]
+tests/test_health.py::test_service_reachable_via_gateway[document-service] PASSED [ 46%]
+tests/test_health.py::test_service_reachable_via_gateway[catalogue-service] PASSED [ 50%]
+tests/test_health.py::test_service_reachable_via_gateway[search-service] PASSED [ 53%]
+tests/test_health.py::test_web_ui_served PASSED                          [ 57%]
+tests/test_search_smoke.py::test_product_becomes_searchable PASSED       [ 61%]
+tests/test_search_smoke.py::test_document_becomes_searchable PASSED      [ 65%]
+tests/test_static_caching.py::test_ui_files_revalidate_and_keep_every_security_header[/] PASSED [ 69%]
+tests/test_static_caching.py::test_ui_files_revalidate_and_keep_every_security_header[/js/app.js] PASSED [ 73%]
+tests/test_static_caching.py::test_index_is_served_with_the_current_app_js_version PASSED [ 76%]
+tests/test_static_caching.py::test_script_version_changes_when_app_js_changes PASSED [ 80%]
+tests/test_static_caching.py::test_api_responses_get_no_new_cache_control PASSED [ 84%]
+tests/test_ui_cache_reload.py::test_normal_reload_runs_the_new_app_js PASSED [ 88%]
+tests/test_ui_customer_organization.py::test_customer_form_and_table_show_the_organization PASSED [ 92%]
+tests/test_ui_duplicate_products.py::test_duplicate_products_in_the_ui PASSED [ 96%]
 tests/test_ui_manual_customer.py::test_create_document_with_manual_customer PASSED [100%]
-============================== 18 passed in 8.51s ==============================
-verify.sh: PASSED
+============================= 26 passed in 12.29s ==============================
+verify.sh: PASSED (stack left running: --keep)
 ```
-Unit suites: auth 82, catalogue 74, search 12, document 195, all passed. The stack is down.
+That run used `--keep` so A1's `curl -sI` could be captured; afterwards `docker compose down` (0 containers) and the throwaway auth-test Postgres was removed. Unit suites: auth 82, catalogue 74, search 12, document 201, all passed.
 
 ## 7. Found but not fixed (out of scope)
-- **`verify.sh` can fail when a backend is recreated while nginx keeps running** (§5 attempt 2). nginx resolves `proxy_pass http://<service>:8000` once at startup, so after a backend is recreated with a new IP, requests go to whichever container now has the old IP. In production this same staleness would follow any single-service redeploy. Fixes:
-  - (a) in `verify.sh`, `docker compose restart nginx` after `up -d --build`, which is the smallest;
-  - (b) in `nginx.conf.template`, `resolver 127.0.0.11 valid=10s;` with variable upstreams, which also fixes it at runtime;
-  - (c) a `.dockerignore` (`__pycache__`, `.pytest_cache`, `tests/`) in each service, so running unit tests doesn't change the images at all.
-
-  I recommend (a) + (c).
-- **auth-service unit tests need a Postgres** at `localhost:5432/auth_test`. `verify.sh` doesn't provide one; CI does.
-- **Similar-name search is O(catalogue)** per check, and bulk import uses dict lookups only (no similar check there, as the plan said). This is noted in the `shortcut:` comment.
-- **The same-name warning names one existing sku** (the first found), even when several products share the name.
-- Still open from earlier iterations: the Customer column confirmation (iteration 7), the footer margin assumption, the Total-row orphan, the MinIO image decision.
+- **Search has no customer names to extend** (Part B backend 4). Documents are indexed with `customer_id` only, and customers aren't indexed at all, so there was nothing to add the organization to. Searching documents by a saved customer's name (or organization) would be a new feature.
+- **The customers table's error row uses `colspan="5"`** (`app.js`, the `loadCustomers` catch), which was already wrong at 6 columns, now 7. Cosmetic, pre-existing.
+- **The two file-editing tests** (`test_script_version_changes_when_app_js_changes`, `test_ui_cache_reload.py`) modify `web/js/app.js` on the host and restore it in `finally`. They skip unless `BASE_URL` is localhost. A hard kill mid-test could leave the file touched or appended; `git diff web/js/app.js` would show it.
+- **The `index.html` handler reads the file on every request** (about 80 KB, no nginx file cache). That's negligible for this app's traffic.
+- Still open: the auth-service unit tests need a Postgres; the manual-customer Phone/Email question (plan's open question); the footer margin assumption; the Total-row orphan; the MinIO image decision.
 
 ## 8. Blockers / decisions needed
-None blocking. One to note:
-- **Question**: should a project-restricted user's 409 reveal the existing product? It's implemented as no: the block still applies, and the message has no sku/name for a product they can't see.
-- **Options**: A) keep (safer); B) always show sku/name.
-- **My recommendation**: A.
+None.
 
 ## 9. Suggestions for the next iteration
-- Harden the harness: `docker compose restart nginx` in `verify.sh` plus per-service `.dockerignore` (§7).
-- The user reviews the four `iter-8-*.png` screenshots, especially whether the "Possible duplicates" link above the table is visible enough.
+- After deploying this, users with an **already cached** old `index.html` may need one more normal load. Until now `index.html` was cached heuristically too, so the very first load after the update can still show the old page. From then on every load revalidates. Worth one line in the release note.
+- Consider indexing documents with their customer's name and organization if users search that way.
