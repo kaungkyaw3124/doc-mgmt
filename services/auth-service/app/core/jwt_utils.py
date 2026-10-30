@@ -6,8 +6,12 @@ import jwt
 from app.core.config import settings
 
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, session_id=None, session_end: datetime | None = None) -> str:
+    """`sid` ties the token to its login session, so /verify can reject it
+    once the session is revoked; it never outlives the session's hard end."""
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
+    if session_end is not None:
+        expire = min(expire, session_end)
     # jti: a random per-token nonce, not a PII/identity claim. Without it,
     # two tokens minted for the same user within the same wall-clock
     # second (exp only has 1-second resolution) would be byte-for-byte
@@ -20,6 +24,8 @@ def create_access_token(subject: str) -> str:
     # end-to-end tests. A random jti makes every issued token unique
     # regardless of timing.
     payload = {"sub": subject, "exp": expire, "jti": secrets.token_urlsafe(8)}
+    if session_id is not None:
+        payload["sid"] = str(session_id)
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

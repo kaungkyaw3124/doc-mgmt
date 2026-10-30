@@ -91,16 +91,23 @@ function formatApiErrorDetail(detail) {
 // Concurrent callers share one in-flight request (not one each) so a
 // burst of 401s from several parallel API calls doesn't rotate the
 // refresh token multiple times and invalidate itself mid-burst.
+// Never refreshes for an idle user (see "session" below): that is what
+// lets an unattended tab's session end.
 function refreshAccessToken() {
+  if (isIdle()) return Promise.reject(new Error('idle'));
   if (!refreshPromise) {
-    refreshPromise = fetch(API_BASE + '/auth/refresh', { method: 'POST', credentials: 'include' })
-      .then(async res => {
-        if (!res.ok) throw new Error('refresh failed');
-        const data = await res.json();
-        token = data.access_token;
-        return token;
-      })
-      .finally(() => { refreshPromise = null; });
+    refreshPromise = (async () => {
+      // Tabs share the refresh cookie and every refresh rotates it, so two
+      // tabs refreshing at the same moment would present the same token and
+      // trip replay detection (which ends every session). Stagger them.
+      let since = Date.now() - Number(localStorage.getItem(REFRESH_AT_KEY) || 0);
+      if (since >= 0 && since < 3000) await new Promise(r => setTimeout(r, 3000 - since));
+      try { localStorage.setItem(REFRESH_AT_KEY, String(Date.now())); } catch (e) {}
+      const res = await fetch(API_BASE + '/auth/refresh', { method: 'POST', credentials: 'include' });
+      if (!res.ok) throw new Error('refresh failed');
+      applySession(await res.json());
+      return token;
+    })().finally(() => { refreshPromise = null; });
   }
   return refreshPromise;
 }
@@ -119,11 +126,11 @@ async function apiFetch(path, options = {}, _retriedAfterRefresh = false) {
         await refreshAccessToken();
         return apiFetch(path, options, true);
       } catch (e) {
-        doLogout();
+        doLogout(isIdle() ? idleLogoutMessage() : EXPIRED_MESSAGE);
         throw new Error('Session expired — please sign in again.');
       }
     }
-    doLogout();
+    doLogout(EXPIRED_MESSAGE);
     throw new Error('Session expired — please sign in again.');
   }
   if (!res.ok) {
@@ -168,7 +175,8 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     const data = await res.json();
     // Kept in memory only — the server also set an HttpOnly refresh
     // cookie, which is what survives a page reload, not this variable.
-    token = data.access_token;
+    recordActivity(true);
+    applySession(data);
     enterApp();
   } catch (err) {
     document.getElementById('login-error').innerHTML =
@@ -220,24 +228,48 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
   }
 });
 
-document.getElementById('logout-btn').addEventListener('click', doLogout);
+document.getElementById('logout-btn').addEventListener('click', () => doLogout());
 
-function doLogout() {
-  // Best-effort server-side revocation of the refresh cookie — this is
-  // what makes logout actually invalidate the session (rather than just
-  // forgetting the access token client-side while it — and the refresh
-  // cookie — would otherwise still be perfectly valid). Fire-and-forget:
-  // the UI logs out regardless of whether this succeeds.
-  fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+// message: shown on the login screen (why the user was logged out).
+// broadcast: tell the other tabs; false when this logout came from one.
+// Every logout ends in a page reload: hiding #app used to leave the
+// previous user's caches, permission flags, active view and rendered
+// tables in place for whoever logged in next on the same page (an Editor
+// saw the admin's Admin page). The reason is shown after the reload.
+const LOGOUT_MESSAGE_KEY = 'ledger_logout_message';
+let loggingOut = false;
+async function doLogout(message = '', broadcast = true) {
+  if (loggingOut) return;
+  loggingOut = true;
+  clearInterval(sessionTimer);
   token = null;
-  localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
-  document.getElementById('app').classList.remove('active');
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('login-username').value = '';
-  document.getElementById('login-password').value = '';
+  if (broadcast) {
+    // Revoke the refresh cookie server-side before reloading (at most 2 s),
+    // so the reloaded page — and the other tabs told below — can't silently
+    // sign back in with it.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 2000);
+    await fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include', signal: abort.signal }).catch(() => {});
+    clearTimeout(timer);
+    try { localStorage.setItem(LOGOUT_KEY, Date.now() + '|' + message); } catch (e) {}
+  }
+  try {
+    localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
+    if (message) sessionStorage.setItem(LOGOUT_MESSAGE_KEY, message);
+  } catch (e) {}
+  location.replace('/');
 }
 
 async function enterApp() {
+  startSessionWatch();
+  // Defence in depth (logout reloads the page anyway): start from "nothing
+  // permission-gated is shown, Documents view", then let /admin/me show
+  // what this user may see.
+  ['admin-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
+    .forEach(id => { document.getElementById(id).style.display = 'none'; });
+  currentUserIsSuperuser = false;
+  currentUserCanDeleteDocuments = false;
+  document.querySelector('.nav-item[data-view="documents"]').click();
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').classList.add('active');
   try {
@@ -280,6 +312,224 @@ async function enterApp() {
   loadProjects();
   loadCategories();
 }
+
+// ---------- session: idle timeout, max session, all tabs ----------
+// The server ends a session after `idle_timeout_s` without a /refresh and at
+// `expires_at` regardless (see auth-service refresh_tokens.py); both values
+// come from the login/refresh response. Here "activity" means the user's
+// own input. The token is refreshed only when there was activity since the
+// last refresh, so a tab left open never keeps a session alive by itself.
+// Tabs share the activity time and logouts through localStorage: timestamps
+// only, never a token.
+const ACTIVITY_KEY = 'ledger_last_activity';
+const LOGOUT_KEY = 'ledger_logout';
+const REFRESH_AT_KEY = 'ledger_refresh_at';
+let sessionInfo = null;          // {idle_timeout_s, warning_s, expires_at}
+let tokenExpiresAt = 0;          // ms, from the access token's exp claim
+let lastRefreshAt = 0;           // ms
+let lastActivity = Date.now();   // loading the page counts as activity
+let sessionTimer = null;
+let sessionWarningOpen = false;
+
+function applySession(data) {
+  token = data.access_token;
+  sessionInfo = data.session || null;
+  lastRefreshAt = Date.now();
+  try {
+    const claims = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    tokenExpiresAt = claims.exp * 1000;
+  } catch (e) {
+    tokenExpiresAt = 0;
+  }
+}
+
+function idleLimitMs() {
+  return (sessionInfo ? sessionInfo.idle_timeout_s : 30 * 60) * 1000;
+}
+
+function isIdle() {
+  return Date.now() - lastActivity >= idleLimitMs();
+}
+
+function idleLogoutMessage() {
+  const s = idleLimitMs() / 1000;
+  return `Logged out after ${s % 60 === 0 ? (s / 60) + ' minutes' : s + ' seconds'} of inactivity.`;
+}
+const EXPIRED_MESSAGE = 'Your session expired, please log in again.';
+
+let lastActivityBroadcast = 0;
+function recordActivity(force = false) {
+  // While the warning is up only "Stay logged in" counts, so a stray mouse
+  // movement doesn't dismiss it.
+  if (sessionWarningOpen && !force) return;
+  lastActivity = Date.now();
+  if (force || lastActivity - lastActivityBroadcast > 10000) {  // throttled to ~1 per 10 s
+    lastActivityBroadcast = lastActivity;
+    try { localStorage.setItem(ACTIVITY_KEY, String(lastActivity)); } catch (e) {}
+  }
+}
+['mousedown', 'mousemove', 'keydown', 'scroll', 'wheel', 'touchstart'].forEach(type =>
+  window.addEventListener(type, () => recordActivity(), { passive: true, capture: true }));
+
+window.addEventListener('storage', (e) => {
+  if (e.key === ACTIVITY_KEY && e.newValue) {
+    lastActivity = Math.max(lastActivity, Number(e.newValue));
+    if (sessionWarningOpen && !isIdle()) hideSessionWarning();
+  } else if (e.key === LOGOUT_KEY && e.newValue && token) {
+    doLogout(e.newValue.split('|')[1] || '', false);
+  }
+});
+
+function formIsDirty() {
+  return ['doc', 'product'].some(name =>
+    document.getElementById(name + '-modal').classList.contains('active')
+    && document.getElementById(name + '-form').dataset.dirty === '1');
+}
+['doc', 'product'].forEach(name => {
+  const form = document.getElementById(name + '-form');
+  form.addEventListener('input', () => { form.dataset.dirty = '1'; });
+  form.addEventListener('reset', () => { form.dataset.dirty = ''; });
+  document.getElementById(name + '-modal-close').addEventListener('click', () => { form.dataset.dirty = ''; });
+});
+
+function showSessionWarning(secondsLeft) {
+  document.getElementById('session-warning-countdown').textContent = secondsLeft;
+  document.getElementById('session-warning-dirty').style.display = formIsDirty() ? 'block' : 'none';
+  if (!sessionWarningOpen) {
+    sessionWarningOpen = true;
+    document.getElementById('session-warning-modal').classList.add('active');
+    document.getElementById('session-warning-stay').focus();
+  }
+}
+
+function hideSessionWarning() {
+  sessionWarningOpen = false;
+  document.getElementById('session-warning-modal').classList.remove('active');
+}
+
+document.getElementById('session-warning-stay').addEventListener('click', () => {
+  hideSessionWarning();
+  recordActivity(true);
+  refreshAccessToken().catch(() => doLogout(EXPIRED_MESSAGE));
+});
+document.getElementById('session-warning-logout').addEventListener('click', () => doLogout());
+
+function sessionTick() {
+  if (!token) return;
+  const now = Date.now();
+  const sinceActivity = now - lastActivity;
+  if (sessionInfo && now >= Date.parse(sessionInfo.expires_at)) {
+    doLogout(EXPIRED_MESSAGE);
+    return;
+  }
+  if (sinceActivity >= idleLimitMs()) {
+    doLogout(idleLogoutMessage());
+    return;
+  }
+  const warnMs = (sessionInfo ? sessionInfo.warning_s : 60) * 1000;
+  if (sinceActivity >= idleLimitMs() - warnMs) {
+    showSessionWarning(Math.ceil((idleLimitMs() - sinceActivity) / 1000));
+  } else if (sessionWarningOpen) {
+    hideSessionWarning();
+  }
+  // Keep the server-side session alive while the user is active: refresh
+  // halfway through the idle window, or shortly before the access token
+  // expires, but only if there was activity since the last refresh.
+  // (A token capped at the session's hard end can't be extended, so its
+  // expiry doesn't make a refresh due.)
+  let due = lastRefreshAt + idleLimitMs() / 2;
+  const cappedAtSessionEnd = sessionInfo && tokenExpiresAt >= Date.parse(sessionInfo.expires_at) - 1000;
+  if (!cappedAtSessionEnd) due = Math.min(due, tokenExpiresAt - 60000);
+  if (now >= due && lastActivity > lastRefreshAt && !refreshPromise) {
+    refreshAccessToken().catch(() => doLogout(EXPIRED_MESSAGE));
+  }
+}
+
+function startSessionWatch() {
+  clearInterval(sessionTimer);
+  sessionTimer = setInterval(sessionTick, 1000);
+}
+
+// ---------- my sessions / an admin's view of a user's sessions ----------
+function describeUserAgent(ua) {
+  if (!ua) return 'Unknown browser';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  const os = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS'
+    : /Mac OS X/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${browser} on ${os}` : browser;
+}
+
+let sessionsView = null;  // {listPath, revokePath(sid) | null, logoutAllPath, self}
+
+async function openSessionsModal(view) {
+  sessionsView = view;
+  document.getElementById('sessions-modal-title').textContent = view.title;
+  document.getElementById('sessions-logout-all-btn').textContent = view.self ? 'Log out all devices' : 'Log out everywhere';
+  showBanner('sessions-modal-banner', '');
+  document.getElementById('sessions-modal').classList.add('active');
+  await loadSessionsList();
+}
+
+async function loadSessionsList() {
+  const tbody = document.getElementById('sessions-tbody');
+  tbody.innerHTML = skeletonRows(5);
+  try {
+    const sessions = await apiFetch(sessionsView.listPath);
+    if (!sessions.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No active sessions.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = sessions.map(s => `
+      <tr>
+        <td>${escapeHtml(describeUserAgent(s.user_agent))}${s.current ? ' <span class="stamp stamp-admin">this device</span>' : ''}</td>
+        <td class="mono">${escapeHtml(s.ip || '—')}</td>
+        <td>${escapeHtml(new Date(s.started_at).toLocaleString())}</td>
+        <td>${escapeHtml(new Date(s.last_activity_at).toLocaleString())}</td>
+        <td>${sessionsView.revokePath ? `<button class="link-btn-inline" data-revoke-session-id="${s.id}" style="color:var(--danger);">Revoke</button>` : ''}</td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('[data-revoke-session-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await apiFetch(sessionsView.revokePath(btn.dataset.revokeSessionId), { method: 'POST' });
+          loadSessionsList();
+        } catch (err) {
+          showBanner('sessions-modal-banner', err.message);
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = '';
+    showBanner('sessions-modal-banner', err.message);
+  }
+}
+
+document.getElementById('sessions-modal-close').addEventListener('click', () => {
+  document.getElementById('sessions-modal').classList.remove('active');
+});
+
+document.getElementById('sessions-logout-all-btn').addEventListener('click', async () => {
+  const prompt = sessionsView.self
+    ? 'Log out of every device, including this one?'
+    : 'End all of this user\'s sessions? They will have to log in again everywhere.';
+  if (!confirm(prompt)) return;
+  try {
+    await apiFetch(sessionsView.logoutAllPath, { method: 'POST' });
+    if (sessionsView.self) {
+      document.getElementById('sessions-modal').classList.remove('active');
+      doLogout('Logged out of all devices.');
+    } else {
+      loadSessionsList();
+    }
+  } catch (err) {
+    showBanner('sessions-modal-banner', err.message);
+  }
+});
+
+document.getElementById('my-sessions-btn').addEventListener('click', () => openSessionsModal({
+  title: 'My sessions', listPath: '/auth/sessions', revokePath: null, logoutAllPath: '/auth/logout-all', self: true,
+}));
 
 // ---------- navigation ----------
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -3259,13 +3509,26 @@ function renderAllUsersTable(users) {
               ? '<span style="color:var(--danger);">Pending</span>'
               : `<button class="status-toggle-btn ${u.is_active ? 'is-active' : 'is-disabled'}" data-toggle-user-id="${u.id}" data-toggle-active="${u.is_active}">${u.is_active ? 'Active' : 'Disabled'}</button>`)}
       </td>
-      <td>${u.is_superuser && !currentUserIsSuperuser ? '<span style="color:var(--text-dim);">—</span>' : `<button class="link-btn-inline" data-edit-user-id="${u.id}">Manage</button>`}</td>
+      <td>${u.is_superuser && !currentUserIsSuperuser ? '<span style="color:var(--text-dim);">—</span>' : `<button class="link-btn-inline" data-edit-user-id="${u.id}">Manage</button>
+        &nbsp;|&nbsp; <button class="link-btn-inline" data-user-sessions-id="${u.id}" data-user-sessions-name="${escapeHtml(u.username)}">Sessions</button>`}</td>
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-edit-user-id]').forEach(btn => {
     btn.addEventListener('click', () => {
       const user = cachedAllUsers.find(u => u.id === btn.dataset.editUserId);
       if (user) openEditUserModal(user);
+    });
+  });
+  tbody.querySelectorAll('[data-user-sessions-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.userSessionsId;
+      openSessionsModal({
+        title: 'Sessions — ' + btn.dataset.userSessionsName,
+        listPath: `/admin/users/${id}/sessions`,
+        revokePath: sid => `/admin/users/${id}/sessions/${sid}/revoke`,
+        logoutAllPath: `/admin/users/${id}/logout-all`,
+        self: false,
+      });
     });
   });
   tbody.querySelectorAll('[data-toggle-user-id]').forEach(btn => {
@@ -4099,10 +4362,19 @@ loadPublicGroups();
 // Success re-enters the app exactly as before; failure (no cookie, or an
 // expired/revoked one) just leaves the login screen showing.
 (async function bootstrap() {
+  let logoutMessage = '';
+  try {
+    logoutMessage = sessionStorage.getItem(LOGOUT_MESSAGE_KEY) || '';
+    sessionStorage.removeItem(LOGOUT_MESSAGE_KEY);
+  } catch (e) {}
   try {
     await refreshAccessToken();
     enterApp();
   } catch (e) {
+    // No live session: show the login screen once (no reload here, so no loop).
     document.getElementById('login-screen').style.display = 'flex';
+    if (logoutMessage) {
+      document.getElementById('login-error').innerHTML = `<div class="banner banner-info">${escapeHtml(logoutMessage)}</div>`;
+    }
   }
 })();

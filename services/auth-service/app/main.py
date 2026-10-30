@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.core.security import hash_password
 from app.core.secrets_check import db_password_from_url, enforce_production_secrets, is_insecure
 from app.core.seed import ensure_default_groups_and_roles, migrate_operation_members_to_full_existing_data_access
+from app.core.refresh_tokens import ensure_session_columns
 from app import models
 from app.routers import auth, admin
 
@@ -37,6 +38,7 @@ def on_startup():
     enforce_production_secrets(settings.environment, _secret_problems())
 
     Base.metadata.create_all(bind=engine)
+    ensure_session_columns(engine)
 
     # Seed the first user as a superuser, but only if the users table is
     # completely empty — someone needs superuser rights to bootstrap every

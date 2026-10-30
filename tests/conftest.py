@@ -122,3 +122,22 @@ def product(admin, category):
     body = resp.json()
     yield body
     admin.delete(f"/products/{body['id']}")
+
+
+@pytest.fixture
+def editor_user(admin):
+    """A plain Operation-group Editor (not a superuser, not a group admin):
+    {"username", "password", "id"}. Users can't be deleted (by design), so
+    it is deactivated afterwards."""
+    groups = admin.get("/admin/groups")
+    assert groups.status_code == 200, groups.text
+    operation = next(g for g in groups.json() if g["name"] == "Operation")
+    roles = admin.get(f"/admin/groups/{operation['id']}/roles").json()
+    editor_role = next(r for r in roles if r["name"] == "Editor")
+    user = {"username": unique("ui-editor"), "password": "a long throwaway password 123"}
+    resp = admin.post(f"/admin/groups/{operation['id']}/users",
+                      json={**user, "role_id": editor_role["id"]})
+    assert resp.status_code == 201, f"create editor: {resp.status_code} {resp.text}"
+    user["id"] = next(u["id"] for u in admin.get("/admin/users").json() if u["username"] == user["username"])
+    yield user
+    admin.patch(f"/admin/users/{user['id']}/active", json={"is_active": False})
