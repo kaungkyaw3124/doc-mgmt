@@ -60,15 +60,21 @@ def seed_company():
     print("Creating company profile...")
     company = call("POST", "/companies", {
         "name": "Trustwell International Co., Ltd.",
-        "position": "Director",
-        "address": "No. 45, Kabar Aye Pagoda Road, Yangon, Myanmar",
-        "contact_no": "+95 9 123 456 789",
-        "support_email": "support@trustwell.example.com",
-        "support_phone": "+95 9 987 654 321",
         "is_primary": True,
     })
-    if company:
-        print(f"  created: {company['name']}")
+    if not company:
+        return company
+    print(f"  created: {company['name']}")
+
+    print("Creating a Managing Director for it...")
+    director = call("POST", f"/companies/{company['id']}/directors", {
+        "name": "Aung Aung",
+        "address": "No. 45, Kabar Aye Pagoda Road, Yangon, Myanmar",
+        "contact_no": "+95 9 123 456 789",
+        "email": "aungaung@trustwell.example.com",
+    })
+    if director:
+        print(f"  created: {director['name']}")
     return company
 
 

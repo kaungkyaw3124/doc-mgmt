@@ -5,45 +5,97 @@
 <style>
   @page {
     size: A4;
-    /* Reserve room at the top/bottom of every page for the repeating
-       header/footer (see .pdf-header/.pdf-footer below). Sized generously —
-       a long wrapping supplier address can make the header quite tall, and
-       CSS paged-media margin boxes are a FIXED height (content that
-       overflows them collides with the body below), so it's safer to
-       reserve more than needed than to risk that overlap. Bumped up
-       further to fit the extra top spacing above the logo/seal row. */
-    /* This has overflowed twice now at smaller values (6.5cm, then 10cm,
-       then 12.5cm) — the actual header content (logo+seal row, title,
-       date, and a supplier address that can wrap to many lines) keeps
-       coming out taller than estimated. Being deliberately generous here
-       instead of guessing again; the trade-off is more blank space at
-       the top of documents with a short address, which is far better
-       than text colliding with the items table. */
-    margin: 13cm 2cm 3cm 2cm;
-    @top-center { content: element(pdfHeader); vertical-align: top; }
+    /* Only the footer is a repeating margin-box element (see .pdf-footer
+       below) — it's short and its height is predictable, so a fixed
+       bottom-margin reservation for it is safe (see the math below). The header (logo/seal, title, date,
+       supplier/end-user parties) used to live in a `running()` margin box
+       too, which forced a huge, guessed top margin on *every* page to
+       avoid the fixed-height margin box colliding with body content when a
+       long address wrapped to extra lines (previous values of 6.5cm, 10cm,
+       then 12.5cm all still overflowed). Do not go back to that. The
+       header now repeats on every page as the <thead> of the outer
+       table.page-layout (see below), whose height comes from the real
+       content — nothing to guess, no reserved dead space. */
+    /* Page margins asked for by the user: top 0.3in (7.6mm), left/right/
+       bottom 0.5in (12.7mm). (Top history: 7.6mm in loop iteration 3,
+       12.7mm in iteration 4, back to 7.6mm in iteration 5 after the user
+       checked a real PDF.) Usable width 210mm - 2*12.7mm = 184.6mm; the
+       footer's width below must equal that.
+       Top: content starts right at 7.6mm — body has no margin and the
+       header has no margin above its first element (logo/seal row, or the
+       QUOTATION title when there are no images).
+       Bottom: the footer sits at the TOP of this bottom margin box
+       (vertical-align: top), so for its last line to end 12.7mm above the
+       page edge the margin must be 12.7mm + the footer's own height:
+         h3 "Customer Service" 11pt   16.39px  (+6px margin-bottom, no margin-top)
+         2 x .footer-line 7pt         2 x 10.43px
+         = 43.24px (measured from WeasyPrint's box tree, Arial/Liberation Sans)
+       -> 12.7mm + 43.24px (= 11.44mm) = 24.14mm. Written out as a plain
+       length: WeasyPrint 62.3 drops an @page `margin` that uses calc()
+       (it silently fell back to its 75px default). If the footer's font
+       sizes or lines change, re-measure (tests/test_page_margins.py
+       checks the 12.7mm). */
+    margin: 7.6mm 12.7mm 24.14mm 12.7mm;
     @bottom-center { content: element(pdfFooter); vertical-align: top; }
   }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #1a1a1a; }
+  /* margin: 0 — the browser default 8px body margin was stacking on top of
+     the @page margin, adding an unintended extra 8px at the top (and on each
+     side) of every page. The @page margin is now the only page margin. */
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #1a1a1a; }
+
+  /* The header must appear at the top of EVERY page (the user asked for
+     it, including a last page that only holds Terms / MD signature). The
+     whole body is one outer table: its <thead> holds .pdf-header and its
+     single <tbody> cell holds the items table, Terms and the MD block.
+     WeasyPrint repeats a table's <thead> on every page the table spans,
+     sized from the header's actual content (a long wrapped address just
+     makes it taller on every page), unlike the old fixed-height
+     `running()` margin box. The inner items table's own <thead> (column
+     titles) still repeats below it. The outer table has no borders,
+     padding or spacing so it is invisible; the cell may split across
+     pages, and the existing break rules on .terms / .md-block / item rows
+     apply inside it unchanged. */
+  table.page-layout { width: 100%; border-collapse: collapse; border-spacing: 0; }
+  table.page-layout > thead > tr > td,
+  table.page-layout > tbody > tr > td { padding: 0; border: none; vertical-align: top; }
+  .pdf-header { break-inside: avoid; page-break-inside: avoid; }
 
   /* `position: running()` pulls this block out of normal body flow and
-     into the @page top/bottom margin boxes above — WeasyPrint then repeats
-     it on every page automatically. */
-  .pdf-header { position: running(pdfHeader); width: 17cm; padding-top: 30px; }
-  .pdf-footer { position: running(pdfFooter); width: 17cm; }
+     into the @page bottom margin box above — WeasyPrint then repeats
+     it on every page automatically. Kept running (small, fixed height,
+     genuinely meant to appear on every page). */
+  .pdf-footer { position: running(pdfFooter); width: 184.6mm; }
 
   .header-top {
     display: flex; justify-content: space-between; align-items: flex-start;
-    margin-bottom: 26px; min-height: 100px;
+    margin-bottom: 10px;
+    /* No min-height: it reserved 100px of blank space above the heading even
+       when the company has no logo/seal. The row is as tall as its images. */
   }
-  .logo { max-width: 130px; max-height: 130px; }
-  .seal { max-width: 130px; max-height: 130px; }
-  .title { font-size: 22pt; font-weight: bold; margin-bottom: 8px; }
-  .date-line { margin-bottom: 14px; }
-  .parties { display: flex; justify-content: space-between; margin-bottom: 18px; }
+  .header-top img { display: block; }  /* no inline-baseline gap under the image */
+  /* Header logo and company seal: 120px (was 130px). max-width/max-height
+     (not fixed width+height) so any logo shrinks proportionally — aspect
+     ratio is preserved. The MD's signature seal (.md-seal) is a separate
+     element and keeps its size. */
+  .logo { max-width: 120px; max-height: 120px; }
+  .seal { max-width: 120px; max-height: 120px; }
+  /* Document heading: same size as the Date line below it (inherits the 10.5pt body size), bold dark red (#c00000, same red the XLSX export
+     uses). Was 22pt near-black, which read as oversized next to the 10.5pt
+     body. Scoped to .title — used only by the QUOTATION heading; the
+     SUPPLIER / END USER / Terms / Customer Service headings are h3 and have
+     their own rules, so they are unaffected. */
+  .title { font-size: 10.5pt; font-weight: bold; color: #c00000; margin-bottom: 4px; }
+  .date-line { margin-bottom: 10px; }
+  .parties { display: flex; justify-content: space-between; margin-bottom: 12px; }
   .party { width: 48%; }
-  .party h3 { font-size: 11pt; margin: 0 0 6px; border-bottom: 1px solid #999; padding-bottom: 3px; }
-  .party table { width: 100%; font-size: 10pt; }
-  .party td { padding: 2px 0; vertical-align: top; }
+  /* overflow-wrap: the heading now carries the company name ("SUPPLIER: <name>"),
+     so an unusually long name must wrap inside the 48% column too. */
+  .party h3 { font-size: 11pt; margin: 0 0 4px; border-bottom: 1px solid #999; padding-bottom: 3px; overflow-wrap: anywhere; }
+  /* table-layout: fixed + overflow-wrap: a single long unbreakable value (an
+     email, a long Position) used to widen the auto-layout table past its 48%
+     column and overprint the neighbouring END USER block; now it wraps. */
+  .party table { width: 100%; font-size: 10pt; table-layout: fixed; }
+  .party td { padding: 2px 0; vertical-align: top; overflow-wrap: anywhere; }
   .party td.label { width: 90px; color: #555; }
 
   table.items { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
@@ -54,39 +106,103 @@
   table.items td.num { text-align: right; }
   table.items tr { break-inside: avoid; page-break-inside: avoid; }
   .group-header { font-style: italic; font-weight: bold; background: #fafafa; }
+  .subtotal-row td { border-top: none; }
+  .subtotal-row:first-of-type td { border-top: 1px solid #999; }
   .total-row td { font-weight: bold; border-top: 2px solid #333; }
   tr.sub-item td { font-size: 8.5pt; }
   tr.sub-item td.sub-label { text-align: right; }
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
+  /* Real CI evidence across several earlier attempts (see git history)
+     finally isolated the two things that are each independently
+     necessary, and the one thing that was a red herring:
+       - .terms needs break-inside: avoid. Without it, real testing
+         showed the Terms paragraph itself splitting mid-sentence across
+         pages (confirmed by test_terms_text_never_splits_mid_paragraph_
+         across_pages).
+       - .terms needs break-after: avoid, PAIRED WITH .md-block's
+         break-before: avoid, to actually keep MD attached to Terms.
+         This pairing was removed after the mid-sentence-split defect
+         above was observed, on the theory that the pairing itself was
+         causing an over-conservative "leave a gap, break early" bug —
+         but three different follow-up attempts (independent
+         break-inside:avoid on both blocks, no break rules on .md-block
+         at all, and a completely different box model for .md-block)
+         all reproduced the exact same MD-orphaned-alone failure in real
+         CI, with .terms' break-inside:avoid as the only constant across
+         all of them. That rules the pairing itself back IN as
+         necessary: the real defect in the version that had it was
+         .terms' missing break-inside:avoid (fixed above), not the
+         pairing. This combination — both fixes together — had never
+         actually been tried until now. */
+  .terms { break-inside: avoid; page-break-inside: avoid; break-after: avoid; page-break-after: avoid; }
 
-  .md-block { margin-top: 40px; width: 200px; margin-left: auto; text-align: center; }
+  /* .md-block previously used `width: 200px; margin-left: auto` (a
+     shrink-to-fit block, auto-margined into place) to right-align
+     itself. Kept the text-align: right + inline-block replacement
+     (.md-block-inner) from that attempt regardless — it's the more
+     ordinary CSS pattern even though the box model turned out not to be
+     the actual cause of the orphaning. break-before: avoid pairs with
+     .terms' break-after: avoid above. */
+  .md-block { margin-top: 40px; text-align: right; break-before: avoid; page-break-before: avoid; }
+  .md-block-inner { display: inline-block; width: 200px; text-align: center; }
   .md-seal { width: 130px; height: 130px; }
+  /* "Regards," sign-off above the MD's seal (or name/position fallback).
+     Inside .md-block-inner, so it shares that box's text-align: center and
+     its horizontal center is the seal's / name's center. .md-block-inner is
+     an inline-block, i.e. one unbreakable box, so the line can never be
+     separated from the seal onto another page. Body font, bold; 6px gap
+     above the seal (collapses with .md-name's own 6px top margin in the
+     no-seal case, so the gap is 6px there too). */
+  .md-regards { font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; font-weight: bold; color: #1a1a1a; margin-bottom: 6px; }
   .md-name { font-weight: bold; margin-top: 6px; }
   .md-title { font-size: 9pt; color: #555; }
 
   .footer h3 { font-size: 11pt; margin-bottom: 6px; }
+  /* Customer Service footer: heading unchanged (11pt bold h3, inherited from
+     the UA h3 rule); only the Email / Phone lines shrink, 10.5pt -> 7pt.
+     overflow-wrap lets an unusually long address wrap inside the 184.6mm footer
+     instead of running off the page edge. */
+  /* margin-top: 0 — the UA default h3 top margin (~14.7px) collapsed
+     through .pdf-footer into the margin box: a hidden gap that pushed the
+     footer down by an amount the @page bottom-margin math didn't count. */
+  .pdf-footer h3 { font-size: 11pt; margin-top: 0; margin-bottom: 6px; color: #666; }  /* greyed out: secondary info, not main content */
+  .pdf-footer .footer-line { font-size: 7pt; color: #777; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
 
+  <div class="pdf-footer">
+    <h3>Customer Service</h3>
+    <div class="footer-line">Email: {{ company.support_email if company else "" }}</div>
+    <div class="footer-line">Phone: {{ company.contact_no if company else "" }}</div>
+  </div>
+
+  <table class="page-layout">
+  <thead><tr><td>
   <div class="pdf-header">
+    {# Row only rendered when there is an image: an empty row still carried its 10px margin-bottom, a hidden gap that pushed QUOTATION below the 7.6mm top margin. #}
+    {% if logo_data_uri or seal_data_uri %}
     <div class="header-top">
       <div>{% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
       <div>{% if seal_data_uri %}<img class="seal" src="{{ seal_data_uri }}">{% endif %}</div>
     </div>
+    {% endif %}
     <div class="title">QUOTATION</div>
     <div class="date-line"><strong>Date:</strong> {{ issue_date }}</div>
 
     <div class="parties">
       <div class="party">
-        <h3>SUPPLIER</h3>
+        {# The company is named on the heading line; the rows below describe the MD selected on this document (Document.director_id), so the reader sees who is quoting on the company's behalf. Each MD field falls back to the company's own value when the MD has none (e.g. a director added without address/contact). No Email row: the company's support email is already in the Customer Service footer. #}
+        <h3>SUPPLIER{% if company and company.name %}: {{ company.name }}{% endif %}</h3>
         <table>
-          <tr><td class="label">Name</td><td>{{ company.name if company else "—" }}</td></tr>
-          <tr><td class="label">Position</td><td>{{ company.position if company else "" }}</td></tr>
-          <tr><td class="label">Address</td><td>{{ company.address if company else "" }}</td></tr>
-          <tr><td class="label">Contact No</td><td>{{ company.contact_no if company else "" }}</td></tr>
+          <tr><td class="label">Name</td><td>{{ director.name if director and director.name else "—" }}</td></tr>
+          {# Position: the selected MD's own position (CompanyDirector.position) if set, otherwise the company's "Signer position" (Company.position). Row omitted — no placeholder — when neither exists. #}
+          {% set supplier_position = (director.position if director and director.position else None) or (company.position if company and company.position else None) %}
+          {% if supplier_position %}<tr><td class="label">Position</td><td>{{ supplier_position }}</td></tr>{% endif %}
+          <tr><td class="label">Address</td><td>{{ (director.address if director and director.address else None) or (company.address if company and company.address else "") }}</td></tr>
+          <tr><td class="label">Contact No</td><td>{{ (director.contact_no if director and director.contact_no else None) or (company.contact_no if company and company.contact_no else "") }}</td></tr>
         </table>
       </div>
       <div class="party">
@@ -94,18 +210,14 @@
         <table>
           <tr><td class="label">Customer Name</td><td>{{ customer.name if customer else "—" }}</td></tr>
           <tr><td class="label">Quotation ID</td><td>{{ doc_number }}</td></tr>
-          <tr><td class="label">Organization</td><td>{{ customer.name if customer else "—" }}</td></tr>
+          <tr><td class="label">Organization</td><td>{{ customer.organization if customer else "—" }}</td></tr>
           <tr><td class="label">Address</td><td>{{ customer_address }}</td></tr>
         </table>
       </div>
     </div>
   </div>
-
-  <div class="pdf-footer">
-    <h3>Customer Service</h3>
-    <div>Email: {{ company.support_email if company else "" }}</div>
-    <div>Phone: {{ company.support_phone if company else "" }}</div>
-  </div>
+  </td></tr></thead>
+  <tbody><tr><td>
 
   <table class="items">
     <thead>
@@ -138,6 +250,18 @@
       </tr>
       {% endfor %}
       {% endfor %}
+      {% if has_tax %}
+      <tr class="subtotal-row">
+        <td colspan="5" style="text-align:right;">Subtotal:</td>
+        <td class="num">{{ subtotal }}</td>
+        <td></td>
+      </tr>
+      <tr class="subtotal-row">
+        <td colspan="5" style="text-align:right;">Tax ({{ tax_rate }}%):</td>
+        <td class="num">{{ tax_total }}</td>
+        <td></td>
+      </tr>
+      {% endif %}
       <tr class="total-row">
         <td colspan="5" style="text-align:right;">Total:</td>
         <td class="num">{{ total }}</td>
@@ -153,11 +277,20 @@
 
   {% if director %}
   <div class="md-block">
-    {% if director_seal_data_uri %}<img class="md-seal" src="{{ director_seal_data_uri }}"><br>{% endif %}
-    <div class="md-name">{{ director.name }}</div>
-    <div class="md-title">Managing Director</div>
+    <div class="md-block-inner">
+      <div class="md-regards">Regards,</div>
+      {% if director_seal_data_uri %}
+      <img class="md-seal" src="{{ director_seal_data_uri }}">
+      {% else %}
+      <div class="md-name">{{ director.name }}</div>
+      <div class="md-title">{{ director.position or "Managing Director" }}</div>
+      {% endif %}
+    </div>
   </div>
   {% endif %}
+
+  </td></tr></tbody>
+  </table>
 
 </body>
 </html>

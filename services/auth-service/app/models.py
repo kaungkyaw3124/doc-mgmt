@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -151,3 +151,48 @@ class UserRole(Base):
 
     user = relationship("User", back_populates="role_assignments")
     role = relationship("Role", back_populates="user_assignments")
+
+
+class LoginAttempt(Base):
+    """
+    One row per FAILED login attempt, used to rate-limit /login. Keyed by
+    client IP and lowercased username (not a user_id FK — the username may
+    not correspond to a real account, e.g. during enumeration attempts).
+    Successful logins are not recorded here, so the table only grows under
+    failed-attempt load and old rows are opportunistically pruned on write.
+    """
+    __tablename__ = "login_attempts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ip = Column(String(64), nullable=False)
+    username = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_login_attempts_ip_created", "ip", "created_at"),
+        Index("ix_login_attempts_ip_username_created", "ip", "username", "created_at"),
+        Index("ix_login_attempts_username_created", "username", "created_at"),
+    )
+
+
+class RefreshToken(Base):
+    """
+    One row per issued refresh token, backing the HttpOnly-cookie refresh
+    flow (see app/core/refresh_tokens.py). Only a SHA-256 hash of the
+    actual token is stored — the plaintext exists only in the cookie sent
+    to the browser and is never persisted, same principle as password
+    hashing. Each successful /refresh call revokes the row it used and
+    inserts a new one (rotation) — a given plaintext token is single-use,
+    so replaying an already-rotated one is detected (revoked_at is set)
+    rather than silently accepted.
+    """
+    __tablename__ = "refresh_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String(64), unique=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_refresh_tokens_user_id", "user_id"),)

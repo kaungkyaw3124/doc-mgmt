@@ -29,11 +29,10 @@ class Company(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     short_name = Column(String(20))  # e.g. "SS" for Swift Solution — used in doc numbers (SS-20260723/001)
-    position = Column(String(100))  # e.g. "Director" — title of the authorized signer
+    position = Column(String(100))  # e.g. "Director" — title of the authorized signer; used by signer/signature generation, not shown in the Supplier block
     address = Column(Text)
     contact_no = Column(String(50))
     support_email = Column(String(255))
-    support_phone = Column(String(50))
     logo_object_key = Column(String(500))
     seal_object_key = Column(String(500))  # official company seal/stamp, shown on quotation exports
     is_primary = Column(Boolean, default=False, nullable=False)
@@ -44,14 +43,20 @@ class Company(Base):
 class CompanyDirector(Base):
     """
     A Managing Director (MD) for a company — a company can have several,
-    each with their own name and their own personal seal (distinct from
-    the company's own general seal_object_key above).
+    each with their own name/address/contact_no/email and their own
+    personal seal (distinct from the company's own general
+    seal_object_key). Selected per-document to show alongside the
+    company's own Supplier info (see Document.director_id).
     """
     __tablename__ = "company_directors"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
+    address = Column(Text)
+    contact_no = Column(String(50))
+    email = Column(String(255))
+    position = Column(String(100))  # this MD's title (e.g. "Managing Director") — shown in the quotation's Supplier block when the director is selected on a document; NULL for directors created before this column existed
     seal_object_key = Column(String(500))
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -62,6 +67,7 @@ class Customer(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
+    organization = Column(String(255))  # optional; NULL means "print the name" (not a copy of it, so a rename flows through)
     email = Column(String(255))
     phone = Column(String(50))
     billing_address = Column(JSONB)
@@ -77,11 +83,20 @@ class Document(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     doc_type = Column(String(20), nullable=False, index=True)  # quotation | invoice | catalogue
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)  # soft delete — trashed, recoverable via recycle bin
+    deleted_by = Column(String(100))  # username of who trashed it (from the server-verified X-Username header, never client-supplied) — cleared on restore
+    deleted_at = Column(DateTime(timezone=True))  # cleared on restore; NULL for both a never-deleted doc and one trashed before this column existed (see docs/SECURITY_HARDENING_LOG.md's Recycle Bin entry)
     doc_number = Column(String(50), unique=True, nullable=False)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), index=True)  # which company issues this document — chosen per-document, no more single "primary" company
     director_id = Column(UUID(as_uuid=True), ForeignKey("company_directors.id"), index=True)  # which MD's name/seal to show on this document
+    # One-time customer typed on this document only — never a Customer row.
+    # A document has either customer_id or end_user_name, never both.
+    end_user_name = Column(String(255))
+    end_user_organization = Column(String(255))
+    end_user_address = Column(Text)
+    end_user_phone = Column(String(50))  # stored only, not printed
+    end_user_email = Column(String(255))  # stored only, not printed
     status = Column(String(20), nullable=False, default="draft", index=True)
     currency = Column(String(3), default="USD")
     subtotal = Column(Numeric(12, 2))
@@ -130,5 +145,5 @@ class AuditLogEntry(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     username = Column(String(100), nullable=False)
-    action = Column(String(30), nullable=False)  # "created" | "viewed" | "edited" | "status_changed" | "file_uploaded"
+    action = Column(String(30), nullable=False)  # "created" | "viewed" | "edited" | "status_changed" | "file_uploaded" | "deleted" | "restored"
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

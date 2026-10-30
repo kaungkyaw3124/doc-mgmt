@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.storage import upload_file, get_presigned_url, get_file_bytes
+from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app.core.catalogue_client import (
     get_product,
     get_product_sub_items,
@@ -53,6 +54,26 @@ def _require_edit_access(x_access_level: str | None):
     """
     if x_access_level == "view":
         raise HTTPException(status_code=403, detail="your role has view-only access to documents")
+
+
+def _require_delete_access(x_has_document_delete: str | None):
+    """
+    x_has_document_delete comes from Nginx (forwarded from auth-service's
+    /verify, computed via user_has_service_access(db, user, "documents-delete")
+    — a superuser always gets "true" from that call, no special-casing
+    needed here).
+
+    Deliberately FAIL-CLOSED, unlike _require_edit_access's missing-header
+    default: Delete is a brand-new permission carved out of what edit access
+    used to also allow, not a retrofit onto pre-existing behavior — the
+    opt-in-restriction philosophy that makes sense for compatibility with
+    accounts that already had edit access does NOT apply to a capability
+    that's being newly separated out. Only an explicit "true" is accepted;
+    anything else (missing, "false", or any unexpected value) is denied.
+    See docs/SECURITY_HARDENING_LOG.md's "Delete permission" entry.
+    """
+    if x_has_document_delete != "true":
+        raise HTTPException(status_code=403, detail="your role does not have permission to delete documents")
 
 
 def _process_items(items_payload, db: Session):
@@ -105,6 +126,24 @@ def _process_items(items_payload, db: Session):
     return line_items, subtotal, tax_total
 
 
+END_USER_FIELDS = ("end_user_name", "end_user_organization", "end_user_address", "end_user_phone", "end_user_email")
+
+
+def _manual_end_user(payload) -> dict:
+    """
+    The one-time (manually typed) customer fields to store on the document,
+    trimmed. A blank name means "no manual customer", and then the other
+    four are dropped too (they would print under nobody). Sending a saved
+    customer_id as well is rejected rather than guessing which one wins.
+    """
+    values = {f: (getattr(payload, f) or "").strip() or None for f in END_USER_FIELDS}
+    if not values["end_user_name"]:
+        return dict.fromkeys(END_USER_FIELDS)
+    if payload.customer_id:
+        raise HTTPException(status_code=422, detail="send either customer_id (saved customer) or end_user_name (one-time customer), not both")
+    return values
+
+
 def _generate_doc_number(db: Session, company_id: uuid.UUID | None = None) -> str:
     """
     e.g. SS-20260723/001 — {chosen company's short_name}-{YYYYMMDD}/{3-digit
@@ -150,6 +189,8 @@ def create_document(
     if payload.currency not in VALID_CURRENCIES:
         raise HTTPException(status_code=422, detail=f"currency must be one of {sorted(VALID_CURRENCIES)}")
 
+    end_user = _manual_end_user(payload)
+
     if payload.customer_id:
         customer = db.query(models.Customer).filter_by(id=payload.customer_id).first()
         if not customer:
@@ -169,6 +210,8 @@ def create_document(
         director = db.query(models.CompanyDirector).filter_by(id=payload.director_id).first()
         if not director:
             raise HTTPException(status_code=400, detail=f"director {payload.director_id} not found")
+        if director.company_id != payload.company_id:
+            raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
     doc = models.Document(
         doc_type=payload.doc_type,
@@ -182,6 +225,7 @@ def create_document(
         due_date=payload.due_date,
         doc_metadata=payload.doc_metadata,
         terms_and_conditions=payload.terms_and_conditions,
+        **end_user,
     )
 
     line_items, subtotal, tax_total = _process_items(payload.items, db)
@@ -401,17 +445,38 @@ def trash_document(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_username: str | None = Header(default=None, alias="X-Username"),
+    x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
 ):
     """Soft delete — hides it from the main list and marks it recoverable.
     For a permanent purge, use DELETE /{document_id} instead (only ever
-    called from within the recycle bin in the UI)."""
+    called from within the recycle bin in the UI).
+
+    Requires the separate Delete permission, not just edit access — see
+    _require_delete_access's own docstring and
+    docs/SECURITY_HARDENING_LOG.md's "Delete permission" entry: an Editor
+    can view/create/edit without being able to delete unless their role
+    is explicitly granted "documents-delete".
+
+    Records who deleted it: X-Username is set by Nginx from auth-service's
+    /verify response (the JWT's own subject, server-side — see
+    infra/nginx/nginx.conf.template and gateway_auth.py), never trusted
+    from an arbitrary client header, so this can't be spoofed by whoever
+    is deleting. Stored on the document itself (deleted_by/deleted_at)
+    rather than only in the audit log so the recycle-bin listing can show
+    it directly without requiring the separate audit-log permission — see
+    docs/SECURITY_HARDENING_LOG.md's Recycle Bin entry for why."""
     _require_edit_access(x_access_level)
+    _require_delete_access(x_has_document_delete)
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
     doc.is_deleted = True
+    doc.deleted_by = x_username
+    doc.deleted_at = datetime.utcnow()
     db.commit()
     db.refresh(doc)
+    log_action(db, doc.id, x_username, "deleted")
     return doc
 
 
@@ -420,14 +485,18 @@ def restore_document(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_username: str | None = Header(default=None, alias="X-Username"),
 ):
     _require_edit_access(x_access_level)
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
     doc.is_deleted = False
+    doc.deleted_by = None
+    doc.deleted_at = None
     db.commit()
     db.refresh(doc)
+    log_action(db, doc.id, x_username, "restored")
     return doc
 
 
@@ -474,6 +543,8 @@ def update_document(
     if payload.currency is not None and payload.currency not in VALID_CURRENCIES:
         raise HTTPException(status_code=422, detail=f"currency must be one of {sorted(VALID_CURRENCIES)}")
 
+    end_user = _manual_end_user(payload)
+
     if payload.customer_id:
         customer = db.query(models.Customer).filter_by(id=payload.customer_id).first()
         if not customer:
@@ -493,10 +564,16 @@ def update_document(
         director = db.query(models.CompanyDirector).filter_by(id=payload.director_id).first()
         if not director:
             raise HTTPException(status_code=400, detail=f"director {payload.director_id} not found")
+        if director.company_id != payload.company_id:
+            raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
     line_items, subtotal, tax_total = _process_items(payload.items, db)
 
+    # Full edit: switching to a saved customer clears the manual fields
+    # (end_user is all None), and switching to manual leaves customer_id None.
     doc.customer_id = payload.customer_id
+    for field, value in end_user.items():
+        setattr(doc, field, value)
     doc.project_id = payload.project_id
     doc.company_id = payload.company_id
     doc.director_id = payload.director_id
@@ -552,8 +629,25 @@ def upload_document_file(
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
 
-    object_key = f"{doc.doc_type}/{doc.doc_number}/{_sanitize_filename(file.filename)}"
-    upload_file(file.file, object_key, content_type=file.content_type or "application/octet-stream")
+    sanitized_filename = _sanitize_filename(file.filename)
+
+    # Read only the leading bytes to check the file's actual content
+    # against what its extension claims — then rewind before streaming
+    # the full upload to storage. See app/core/upload_safety.py: this is
+    # a distinct check from Content-Type derivation below — it rejects
+    # the upload outright rather than just relabeling it.
+    head = file.file.read(4096)
+    file.file.seek(0)
+    if not content_matches_extension(sanitized_filename, head):
+        raise HTTPException(
+            status_code=400,
+            detail="file content does not match its extension",
+        )
+
+    object_key = f"{doc.doc_type}/{doc.doc_number}/{sanitized_filename}"
+    # Content-Type is derived from the filename server-side, NEVER trusted
+    # from the client's upload — see app/core/upload_safety.py.
+    upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
 
     doc.file_object_key = object_key
     db.commit()
@@ -567,8 +661,12 @@ def delete_document(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
 ):
+    """Permanent purge — same Delete permission requirement as the
+    soft-delete trash action above."""
     _require_edit_access(x_access_level)
+    _require_delete_access(x_has_document_delete)
     doc = db.query(models.Document).filter_by(id=document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="document not found")
@@ -591,7 +689,7 @@ def get_document_file_url(
     if allowed is not None and doc.project_id is not None and str(doc.project_id) not in allowed:
         raise HTTPException(status_code=403, detail="you don't have access to this document's project")
 
-    return {"url": get_presigned_url(doc.file_object_key)}
+    return {"url": get_presigned_url(doc.file_object_key, force_download=should_force_download(doc.file_object_key))}
 
 
 @router.get("/{document_id}/audit-log")
@@ -658,8 +756,18 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
             customer = {
                 "id": customer_row.id,
                 "name": customer_row.name,
+                "organization": customer_row.organization,  # None -> exports print the name
                 "billing_address": customer_row.billing_address,
             }
+    elif doc.end_user_name:
+        # One-time customer typed on the document: same dict shape the exports
+        # use, plus address (saved customers carry billing_address instead).
+        customer = {
+            "id": None,
+            "name": doc.end_user_name,
+            "organization": doc.end_user_organization,
+            "address": doc.end_user_address,
+        }
 
     items_with_product = []
     for item in doc.items:
@@ -682,11 +790,10 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
     if company_row:
         company = {
             "name": company_row.name,
-            "position": company_row.position,
+            "position": company_row.position,  # signer/signature title — not shown in the Supplier block, kept for signature generation
             "address": company_row.address,
             "contact_no": company_row.contact_no,
             "support_email": company_row.support_email,
-            "support_phone": company_row.support_phone,
         }
         if company_row.logo_object_key:
             try:
@@ -707,7 +814,13 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
     if doc.director_id:
         director_row = db.query(models.CompanyDirector).filter_by(id=doc.director_id).first()
         if director_row:
-            director = {"name": director_row.name}
+            director = {
+                "name": director_row.name,
+                "address": director_row.address,
+                "contact_no": director_row.contact_no,
+                "email": director_row.email,
+                "position": director_row.position,  # the selected MD's own title; None for legacy directors
+            }
             if director_row.seal_object_key:
                 try:
                     director_seal_bytes = get_file_bytes(director_row.seal_object_key)

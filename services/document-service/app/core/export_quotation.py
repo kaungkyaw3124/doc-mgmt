@@ -5,6 +5,10 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.page import PageMargins
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils.units import pixels_to_EMU
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
@@ -68,8 +72,19 @@ DEFAULT_TERMS = (
 def generate_quotation_xlsx(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png", director=None, director_seal_bytes=None, director_seal_mime="image/png") -> BytesIO:
     """
     items_with_product: list of (LineItem, product_dict_or_None, sub_items_list) tuples.
-    company: dict with keys name/position/address/contact_no/support_email/support_phone,
-             or None if no company profile has been set up yet.
+    company: dict with keys name/position/address/contact_no/support_email,
+              or None if no company profile has been set up yet. Its name
+              goes on the Supplier heading line ("SUPPLIER: <name>"); its
+              position/address/contact_no are only fallbacks for the
+              director's own, and support_email appears only in the
+              Customer Service footer.
+    director: dict with keys name/address/contact_no/email/position — the
+              selected Managing Director. The Supplier block's rows
+              (Name / Position / Address / Contact No) describe this MD,
+              each falling back to the company's value when the MD's is
+              empty; it also drives the signature block at the bottom.
+              None if no director was chosen on this document (Name then
+              shows "—").
     logo_bytes / seal_bytes: raw image bytes to embed, or None. SVGs are
     skipped here (not embedded) — openpyxl's image support goes through
     PIL, which can't rasterize SVG; the PDF export handles SVG logos fine
@@ -85,55 +100,85 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
 
     row = 1
 
+    # Header order matches the PDF export (quotation.html): logo/seal row
+    # FIRST, then the QUOTATION title below it — not side by side. An
+    # anchored image floats independently of cell content, so if the
+    # title were written into row 1 (the same row the images anchor to),
+    # it would render overlapping/beside the images instead of clearly
+    # above them; reserving dedicated rows for the images before writing
+    # the title avoids that.
+    has_header_image = bool((logo_bytes and logo_mime != "image/svg+xml") or (seal_bytes and seal_mime != "image/svg+xml"))
+
     if logo_bytes and logo_mime != "image/svg+xml":
         try:
             img = XLImage(BytesIO(logo_bytes))
-            img.width = 80
-            img.height = 80
-            ws.add_image(img, "F1")
+            img.width = 90
+            img.height = 90
+            ws.add_image(img, f"A{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
 
     if seal_bytes and seal_mime != "image/svg+xml":
         try:
             seal_img = XLImage(BytesIO(seal_bytes))
-            seal_img.width = 80
-            seal_img.height = 80
-            ws.add_image(seal_img, "H1")
+            seal_img.width = 90
+            seal_img.height = 90
+            ws.add_image(seal_img, f"F{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
 
+    if has_header_image:
+        row += 6  # reserve rows for the (now taller) logo/seal row before the title
+
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "QUOTATION"
-    ws[f"A{row}"].font = Font(name="Arial", size=18, bold=True)
-    row += 4  # leave room for the logo alongside the title
+    # Same heading treatment as the PDF (quotation.html .title): same size as the Date line
+    # (11pt), bold dark red, down from 18pt black.
+    ws[f"A{row}"].font = Font(name="Arial", size=11, bold=True, color="C00000")
+    row += 2
 
     ws[f"A{row}"] = "Date:"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     ws[f"B{row}"] = document.issue_date.isoformat() if document.issue_date else date.today().isoformat()
     row += 2
 
-    company_name = _safe_str(company["name"]) if company else "—"
-    ws[f"A{row}"] = "SUPPLIER"
+    # Same layout as the PDF (quotation.html): the company is named on the
+    # heading line, and the rows below describe the MD selected on this
+    # document — each MD field falling back to the company's own value when
+    # the MD has none. No Email row: the company's support email is already
+    # in the Customer Service footer. The whole heading is one string in A
+    # (B left empty) so it reads as a single line and overflows rightwards.
+    company_info = company or {}
+    director_info = director or {}
+    company_name = company_info.get("name")
+    ws[f"A{row}"] = _safe_str(f"SUPPLIER: {company_name}") if company_name else "SUPPLIER"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
-    ws[f"B{row}"] = company_name
     ws[f"E{row}"] = "END USER"
     ws[f"E{row}"].font = Font(name="Arial", bold=True)
     row += 1
 
-    supplier_rows = [
-        ("Position", _safe_str(company.get("position")) if company else ""),
-        ("Address", _safe_str(company.get("address")) if company else ""),
-        ("Contact No", _safe_str(company.get("contact_no")) if company else ""),
+    supplier_rows = [("Name", _safe_str(director_info.get("name")) or "—")]
+    # The selected MD's own position (CompanyDirector.position); omitted when
+    # no MD is selected or the MD has none (e.g. created before the column).
+    # Falls back to the company's "Signer position" when the MD has none.
+    supplier_position = director_info.get("position") or company_info.get("position")
+    if supplier_position:
+        supplier_rows.append(("Position", _safe_str(supplier_position)))
+    supplier_rows += [
+        ("Address", _safe_str(director_info.get("address") or company_info.get("address") or "")),
+        ("Contact No", _safe_str(director_info.get("contact_no") or company_info.get("contact_no") or "")),
     ]
     customer_name = _safe_str(customer["name"]) if customer else "—"
     customer_address = ""
-    if customer and customer.get("billing_address"):
+    if customer and customer.get("address"):  # one-time customer: typed as one block
+        customer_address = _safe_str(customer["address"])
+    elif customer and customer.get("billing_address"):
         customer_address = _safe_str(", ".join(str(v) for v in customer["billing_address"].values()))
+    customer_org = _safe_str(customer.get("organization") or customer["name"]) if customer else "—"
     end_user_rows = [
         ("Customer Name", customer_name),
         ("Quotation ID", document.doc_number),
-        ("Organization", customer_name),
+        ("Organization", customer_org),
         ("Address", customer_address),
     ]
 
@@ -157,6 +202,17 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         cell.fill = HEADER_FILL
         cell.border = BORDER
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
+    # Same intent as the PDF, where the whole header repeats on every page:
+    # when the sheet is printed, rows 1 through this column-titles row
+    # (title, date, SUPPLIER / END USER, column titles) repeat at the top of
+    # every printed page. Excel's print titles repeat cell content only —
+    # the floating logo/seal images still print on page 1 alone.
+    ws.print_title_rows = f"1:{row}"
+    # Same page margins as the PDF (inches, openpyxl's unit): top 0.3,
+    # left/right/bottom 0.5. Excel's own header/footer areas sit inside
+    # those margins, so keep them smaller (0.2) or they would push the
+    # printed body further in than the user asked for.
+    ws.page_margins = PageMargins(top=0.3, left=0.5, right=0.5, bottom=0.5, header=0.2, footer=0.2)
     row += 1
 
     categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}
@@ -216,12 +272,51 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                 row += 1
     last_item_row = row - 1
 
+    # Tax is a single rate applied uniformly to every line item (the
+    # document-level "Tax rate %" field in web/js/app.js) — read off the
+    # first item, same as the app's own document-detail view
+    # (`doc.items[0].tax_rate`). Only show the Subtotal/Tax breakdown when
+    # there actually is tax, same as the PDF export.
+    tax_rate_value = 0.0
+    if items_with_product and items_with_product[0][0].tax_rate is not None:
+        tax_rate_value = float(items_with_product[0][0].tax_rate)
+    subtotal_formula = ("=" + "+".join(f"F{r}" for r in main_item_rows)) if main_item_rows else 0
+
+    if tax_rate_value > 0:
+        ws.merge_cells(f"A{row}:E{row}")
+        ws[f"A{row}"] = "Subtotal:"
+        ws[f"A{row}"].font = Font(name="Arial", bold=True)
+        ws[f"A{row}"].alignment = Alignment(horizontal="right")
+        subtotal_cell = ws.cell(row=row, column=6)
+        subtotal_cell.value = subtotal_formula
+        subtotal_cell.font = Font(name="Arial", bold=True)
+        subtotal_cell.number_format = "#,##0.00"
+        subtotal_cell.border = BORDER
+        subtotal_row = row
+        row += 1
+
+        ws.merge_cells(f"A{row}:E{row}")
+        ws[f"A{row}"] = f"Tax ({tax_rate_value:g}%):"
+        ws[f"A{row}"].font = Font(name="Arial", bold=True)
+        ws[f"A{row}"].alignment = Alignment(horizontal="right")
+        tax_cell = ws.cell(row=row, column=6)
+        tax_cell.value = f"=F{subtotal_row}*{tax_rate_value}/100"
+        tax_cell.font = Font(name="Arial", bold=True)
+        tax_cell.number_format = "#,##0.00"
+        tax_cell.border = BORDER
+        tax_row = row
+        row += 1
+
+        total_formula = f"=F{subtotal_row}+F{tax_row}"
+    else:
+        total_formula = subtotal_formula
+
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = "Total:"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     ws[f"A{row}"].alignment = Alignment(horizontal="right")
     total_cell = ws.cell(row=row, column=6)
-    total_cell.value = ("=" + "+".join(f"F{r}" for r in main_item_rows)) if main_item_rows else 0
+    total_cell.value = total_formula
     total_cell.font = Font(name="Arial", bold=True)
     total_cell.number_format = "#,##0.00"
     total_cell.border = BORDER
@@ -238,26 +333,61 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         row += 1
     row += 1
 
+    # Name/position used to be printed under the seal image too, but the
+    # seal itself already carries the director's name and title — showing
+    # both was redundant, so the seal now stands alone whenever one was
+    # actually placed. Name/position text is kept ONLY as a fallback for
+    # a director with no seal uploaded yet, so the signature area is
+    # never left completely blank.
     if director:
         seal_row = row
+        seal_placed = False
+        # "Regards," sign-off on its own row just above the seal (same as the
+        # PDF). Centered in column G, and the seal below is centered in G too
+        # (see the anchor offset), so the text's center is the seal's center.
+        # The seal is anchored to the NEXT row's top edge, so it can't cover
+        # the text. The no-seal fallback below rewrites this as F:G merged,
+        # centered over the name/position lines instead.
+        regards_row = row
+        ws[f"G{row}"] = "Regards,"
+        ws[f"G{row}"].font = Font(name="Arial", bold=True)
+        ws[f"G{row}"].alignment = Alignment(horizontal="center")
+        row += 1
         if director_seal_bytes and director_seal_mime != "image/svg+xml":
             try:
                 md_seal_img = XLImage(BytesIO(director_seal_bytes))
-                md_seal_img.width = 90
-                md_seal_img.height = 90
-                ws.add_image(md_seal_img, f"F{row}")
-                row += 6  # leave room for the image before writing the name below it
+                md_seal_img.width = 100
+                md_seal_img.height = 100
+                # Excel shows a column of width w (characters) as
+                # trunc((256*w + trunc(128/7)) / 256 * 7) px: 30 -> 210px. A
+                # plain "G{row}" anchor would put the 100px seal at G's left
+                # edge, 55px left of where the centered "Regards," sits.
+                g_px = int((256 * col_widths[6] + 128 // 7) / 256 * 7)
+                md_seal_img.anchor = OneCellAnchor(
+                    _from=AnchorMarker(col=6, colOff=pixels_to_EMU((g_px - 100) // 2), row=row - 1, rowOff=0),
+                    ext=XDRPositiveSize2D(pixels_to_EMU(100), pixels_to_EMU(100)),
+                )
+                ws.add_image(md_seal_img)
+                row += 6  # leave room for the image
+                seal_placed = True
             except Exception:
                 pass  # bad/unsupported image format shouldn't block the whole export
-        ws.merge_cells(f"F{row}:G{row}")
-        ws[f"F{row}"] = _safe_str(director.get("name", ""))
-        ws[f"F{row}"].font = Font(name="Arial", bold=True)
-        ws[f"F{row}"].alignment = Alignment(horizontal="center")
-        row += 1
-        ws.merge_cells(f"F{row}:G{row}")
-        ws[f"F{row}"] = "Managing Director"
-        ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
-        ws[f"F{row}"].alignment = Alignment(horizontal="center")
+        if not seal_placed:
+            ws[f"G{regards_row}"] = None
+            ws.merge_cells(f"F{regards_row}:G{regards_row}")
+            ws[f"F{regards_row}"] = "Regards,"
+            ws[f"F{regards_row}"].font = Font(name="Arial", bold=True)
+            ws[f"F{regards_row}"].alignment = Alignment(horizontal="center")
+            ws.merge_cells(f"F{row}:G{row}")
+            ws[f"F{row}"] = _safe_str(director.get("name", ""))
+            ws[f"F{row}"].font = Font(name="Arial", bold=True)
+            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            row += 1
+            ws.merge_cells(f"F{row}:G{row}")
+            ws[f"F{row}"] = _safe_str(director.get("position")) or "Managing Director"
+            ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
+            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            row += 1
         row = max(row, seal_row + 7) + 1
 
     ws[f"A{row}"] = "Customer Service"
@@ -267,7 +397,11 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws[f"B{row}"] = _safe_str(company.get("support_email", "")) if company else ""
     row += 1
     ws[f"A{row}"] = "Phone:"
-    ws[f"B{row}"] = _safe_str(company.get("support_phone", "")) if company else ""
+    # support_phone was removed from Company — contact_no is the closest
+    # remaining company-level phone number for this generic footer block
+    # (the Supplier block above shows the director's own number, falling
+    # back to this one only when the director has none).
+    ws[f"B{row}"] = _safe_str(company.get("contact_no", "")) if company else ""
 
     buffer = BytesIO()
     wb.save(buffer)

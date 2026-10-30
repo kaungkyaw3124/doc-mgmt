@@ -1,0 +1,1522 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  auth-service:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: docmgmt
+          POSTGRES_PASSWORD: docmgmt
+          POSTGRES_DB: auth_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docmgmt"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: services/auth-service
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: services/auth-service
+        env:
+          TEST_DATABASE_URL: postgresql://docmgmt:docmgmt@localhost:5432/auth_test
+        run: python -m pytest -v
+
+  catalogue-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: services/catalogue-service
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: services/catalogue-service
+        run: python -m pytest -v
+
+  document-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install WeasyPrint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 \
+            libffi-dev shared-mime-info fonts-liberation
+      - name: Install dependencies
+        working-directory: services/document-service
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: services/document-service
+        run: python -m pytest -v
+
+  search-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: services/search-service
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: services/search-service
+        run: python -m pytest -v
+
+  infra-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create per-service .env files from .env.example (dev defaults)
+        run: |
+          for svc in auth-service catalogue-service document-service search-service; do
+            cp "services/$svc/.env.example" "services/$svc/.env"
+          done
+
+      - name: Acceptance — CORS production config fails safe (no stack needed)
+        run: |
+          fail=0
+          script="infra/nginx/validate-cors-config.sh"
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN= sh "$script" || code=$?
+          echo "production, empty origin -> exit $code"
+          [ "$code" = "1" ] || { echo "FAIL: expected exit 1 (missing origin in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN=http://localhost:8080 sh "$script" || code=$?
+          echo "production, dev-default http origin -> exit $code"
+          [ "$code" = "1" ] || { echo "FAIL: expected exit 1 (dev-default http:// origin must never pass in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN=https://localhost:8080 sh "$script" || code=$?
+          echo "production, https localhost origin -> exit $code"
+          [ "$code" = "1" ] || { echo "FAIL: expected exit 1 (localhost origin must never pass in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=production CORS_ALLOWED_ORIGIN=https://ledger.example.com sh "$script" || code=$?
+          echo "production, valid https origin -> exit $code"
+          [ "$code" = "0" ] || { echo "FAIL: expected exit 0 (a real https:// origin must be accepted in production)"; fail=1; }
+
+          code=0
+          ENVIRONMENT=development CORS_ALLOWED_ORIGIN= sh "$script" || code=$?
+          echo "development, empty origin -> exit $code"
+          [ "$code" = "0" ] || { echo "FAIL: expected exit 0 (development must only warn, never refuse to start)"; fail=1; }
+
+          exit $fail
+
+      - name: Build and start the full stack
+        working-directory: infra
+        run: docker compose up -d --build
+
+      - name: Wait for Nginx to answer a public, no-auth endpoint
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/auth/groups-public || echo 000)
+            if [ "$code" = "200" ]; then echo "up after ${i}0s"; exit 0; fi
+            sleep 10
+          done
+          echo "auth-service via Nginx never became healthy"
+          docker compose -f infra/docker-compose.yml ps
+          docker compose -f infra/docker-compose.yml logs --tail=200
+          exit 1
+
+      - name: All containers are running (internal service-to-service comms worked at boot)
+        working-directory: infra
+        run: |
+          # document-service/catalogue-service's on_startup calls
+          # ensure_bucket_exists() against MinIO and sets Meilisearch
+          # filterable attributes — if either were unreachable over the
+          # internal network, those services would have failed to boot.
+          docker compose ps
+          for svc in postgres minio meilisearch document-service catalogue-service search-service auth-service nginx; do
+            state=$(docker compose ps --format '{{.State}}' "$svc")
+            echo "$svc: $state"
+            case "$state" in
+              running) ;;
+              *) echo "FAIL: $svc is not running ($state)"; exit 1 ;;
+            esac
+          done
+
+      - name: Acceptance — Postgres/MinIO/Meilisearch are NOT reachable from the host
+        run: |
+          fail=0
+          for port in 5432 9000 9001 7700; do
+            if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+              echo "FAIL: host port $port is open (should not be published)"
+              fail=1
+            else
+              echo "OK: host port $port is closed"
+            fi
+          done
+          exit $fail
+
+      - name: Acceptance — presigned-download proxy path reaches MinIO through Nginx
+        run: |
+          # No valid signature on this request, so MinIO is expected to
+          # reject it — the point is confirming Nginx's /documents/ and
+          # /products/ locations actually reach the minio container
+          # (a 502/504/connection-refused here would mean the proxy is
+          # broken), not that this specific request succeeds.
+          for path in /documents/no-such-key /products/no-such-key; do
+            code=$(curl -s -o /tmp/resp.xml -w '%{http_code}' "http://localhost:8080$path")
+            echo "$path -> $code"
+            if [ "$code" = "502" ] || [ "$code" = "504" ] || [ "$code" = "000" ]; then
+              echo "FAIL: $path did not reach MinIO through Nginx (got $code)"
+              cat /tmp/resp.xml
+              exit 1
+            fi
+          done
+
+      - name: Acceptance — legitimate requests through Nginx still work (login + protected endpoint)
+        run: |
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          if [ -z "$token" ]; then
+            echo "FAIL: could not log in as the seeded admin through Nginx"
+            exit 1
+          fi
+          code=$(curl -s -o /tmp/products.json -w '%{http_code}' http://localhost:8080/api/products -H "Authorization: Bearer $token")
+          echo "GET /api/products (through Nginx, real token) -> $code"
+          if [ "$code" != "200" ]; then
+            echo "FAIL: a legitimate authenticated request through Nginx was rejected"
+            cat /tmp/products.json
+            exit 1
+          fi
+
+      - name: Acceptance — Nginx overwrites client-supplied trust/secret headers, not just adds to them
+        run: |
+          # A client sending its OWN X-Internal-Secret and X-Access-Level
+          # through Nginx must not have either survive to document-service:
+          # proxy_set_header REPLACES the header Nginx forwards, so if this
+          # still returns 200 (not 401 from the gateway check, not
+          # elevated/broken behavior), that proves Nginx's real secret won,
+          # not the client's forged one — a client can't smuggle a header
+          # through by sending it alongside legitimate auth.
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          code=$(curl -s -o /tmp/spoofed.json -w '%{http_code}' http://localhost:8080/api/products \
+            -H "Authorization: Bearer $token" \
+            -H 'X-Internal-Secret: attacker-supplied-secret' \
+            -H 'X-Access-Level: superuser' \
+            -H 'X-Allowed-Projects: attacker-controlled')
+          echo "GET /api/products through Nginx with client-forged trust headers -> $code"
+          if [ "$code" != "200" ]; then
+            echo "FAIL: expected this to still succeed via Nginx's own overwritten headers (got $code) — Nginx may not be overwriting the client's forged headers"
+            cat /tmp/spoofed.json
+            exit 1
+          fi
+
+      - name: Acceptance — header spoofing directly against a backend service (bypassing Nginx) is rejected
+        run: |
+          fail=0
+
+          # No X-Internal-Secret at all, but a spoofed superuser-shaped
+          # trust header — must be rejected before ever reaching the route.
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Allowed-Projects: ALL' -H 'X-Access-Level: edit' \
+            http://catalogue-service:8000/products)
+          echo "direct catalogue-service call, no secret, spoofed headers -> $code"
+          [ "$code" = "401" ] || { echo "FAIL: expected 401, got $code"; fail=1; }
+
+          # Wrong X-Internal-Secret — also rejected.
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Internal-Secret: wrong-secret' -H 'X-Allowed-Projects: ALL' \
+            http://catalogue-service:8000/products)
+          echo "direct catalogue-service call, wrong secret -> $code"
+          [ "$code" = "401" ] || { echo "FAIL: expected 401, got $code"; fail=1; }
+
+          # Same call against document-service, for good measure.
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Allowed-Projects: ALL' -H 'X-Access-Level: edit' -H 'X-Username: admin' \
+            http://document-service:8000/documents)
+          echo "direct document-service call, no secret, spoofed headers -> $code"
+          [ "$code" = "401" ] || { echo "FAIL: expected 401, got $code"; fail=1; }
+
+          # Correct secret — the gateway check itself must NOT be what's
+          # blocking this one (whatever the app returns from here on is
+          # a normal routing/DB concern, not a 401 from the gateway guard).
+          code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Internal-Secret: local_dev_internal_secret_change_me' \
+            http://catalogue-service:8000/health)
+          echo "direct catalogue-service call, correct secret, /health -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: expected 200, got $code"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — uploaded file Content-Type is derived server-side, not trusted from the client
+        run: |
+          fail=0
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+
+          new_product() {
+            curl -s -X POST http://localhost:8080/api/products \
+              -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+              -d "{\"name\":\"Upload Safety Test Product $1\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'
+          }
+
+          # --- (C) content/extension mismatch: real HTML named *.pdf, with
+          # the client ALSO (falsely) declaring Content-Type: text/html —
+          # both the extension-spoofing and Content-Type-spoofing attack in
+          # one request. The upload-time magic-byte check (see
+          # app/core/upload_safety.py: content_matches_extension) must
+          # reject this outright — it must never reach storage at all, not
+          # merely get relabeled on the way out.
+          product_id=$(new_product html-as-pdf)
+          printf '<html><body><script>document.title="pwned"</script></body></html>' > /tmp/evil.pdf
+          code=$(curl -s -o /tmp/upload_resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F "file=@/tmp/evil.pdf;filename=evil.pdf;type=text/html")
+          echo "HTML content named evil.pdf -> $code"; cat /tmp/upload_resp.json; echo
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting HTML content named .pdf, got $code"; fail=1; }
+
+          # It must not have been stored either — the product still has no
+          # file attached at all.
+          code=$(curl -s -o /tmp/no_file.json -w '%{http_code}' "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token")
+          echo "file-url after rejected upload -> $code"
+          [ "$code" = "404" ] || { echo "FAIL: expected 404 (no file attached) after a rejected upload, got $code"; cat /tmp/no_file.json; fail=1; }
+
+          # --- (C) image extension with non-image (garbage) content.
+          product_id=$(new_product garbage-as-png)
+          printf 'this is not image data at all, just plain garbage bytes' > /tmp/evil.png
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" -F "file=@/tmp/evil.png;filename=evil.png;type=image/png")
+          echo "garbage content named evil.png -> $code"
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting non-image content named .png, got $code"; cat /tmp/resp.json; fail=1; }
+
+          # --- (C) a real image renamed to a DIFFERENT image extension —
+          # still a content/extension mismatch even though both are "real"
+          # image formats.
+          product_id=$(new_product jpeg-as-png)
+          printf '\xff\xd8\xffJFIFrealjpegbytesnotpng' > /tmp/evil2.png
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" -F "file=@/tmp/evil2.png;filename=evil2.png;type=image/png")
+          echo "real JPEG bytes named .png -> $code"
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting JPEG content named .png, got $code"; cat /tmp/resp.json; fail=1; }
+
+          # --- (C)/(D) an executable (ELF header) renamed with an allowed
+          # image extension — "executable disguised as an image".
+          product_id=$(new_product elf-as-jpg)
+          printf '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00restofbinary' > /tmp/evil.jpg
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" -F "file=@/tmp/evil.jpg;filename=evil.jpg;type=image/jpeg")
+          echo "ELF binary named evil.jpg -> $code"
+          [ "$code" = "400" ] || { echo "FAIL: expected 400 rejecting an ELF binary named .jpg, got $code"; cat /tmp/resp.json; fail=1; }
+
+          # --- (D) filename attacks: path traversal and an unusual/Unicode
+          # filename, both with genuinely legitimate PDF content — these
+          # must be ACCEPTED (the content is fine) but the object key must
+          # never contain the raw traversal/unicode filename, only the
+          # sanitized form (see _sanitize_filename in products.py).
+          product_id=$(new_product path-traversal)
+          printf '%%PDF-1.4 legitimate test content' > /tmp/traversal.pdf
+          resp=$(curl -s -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F 'file=@/tmp/traversal.pdf;filename=../../../etc/passwd.pdf;type=application/pdf')
+          echo "path-traversal filename upload -> $resp"
+          echo "$resp" | grep -q '\.\./' && { echo "FAIL: object key preserved path-traversal segments: $resp"; fail=1; }
+          echo "$resp" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert "image_object_key" in d and ".." not in d["image_object_key"]' \
+            || { echo "FAIL: unexpected/missing image_object_key for sanitized traversal filename"; fail=1; }
+
+          product_id=$(new_product unicode-filename)
+          printf '%%PDF-1.4 legitimate test content' > /tmp/unicode.pdf
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F 'file=@/tmp/unicode.pdf;filename=报告™_日本語.pdf;type=application/pdf')
+          echo "unicode filename upload -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: a legitimate PDF with a unicode filename was rejected"; cat /tmp/resp.json; fail=1; }
+
+          # --- (D) double extension: a legitimate PDF whose filename ends
+          # in a second, disallowed extension. The FINAL extension governs
+          # (matches the documented, tested behavior of _extension()) — so
+          # this is treated as an unrecognized-extension upload (safe,
+          # opaque octet-stream), not as a PDF and not rejected outright.
+          product_id=$(new_product double-extension)
+          printf '%%PDF-1.4 legitimate test content' > /tmp/double.pdf
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F 'file=@/tmp/double.pdf;filename=invoice.pdf.exe;type=application/pdf')
+          echo "double-extension (invoice.pdf.exe) upload -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: a real-PDF-content upload with a double extension was unexpectedly rejected"; cat /tmp/resp.json; fail=1; }
+          file_url_double=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
+          served=$(curl -s -o /dev/null -D - "$file_url_double" | tr -d '\r' | grep -i '^Content-Type:' | head -1)
+          echo "double-extension served -> $served"
+          echo "$served" | grep -qi 'application/pdf' && { echo "FAIL: invoice.pdf.exe must NOT be served as application/pdf (its real extension is .exe)"; fail=1; }
+
+          # --- (A)/(E) SVG (a real, correctly-typed image format that can
+          # still carry <script>) has no fixed binary signature to check,
+          # so it's accepted — but must come back forced to download, not
+          # opened inline, regardless of its (safe) Content-Type.
+          product_id=$(new_product svg-script)
+          printf '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' > /tmp/evil.svg
+          code=$(curl -s -o /tmp/upload_resp2.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F "file=@/tmp/evil.svg;filename=evil.svg;type=image/svg+xml")
+          [ "$code" = "200" ] || { echo "FAIL: a real SVG upload was rejected (SVG isn't a mismatch, just always force-downloaded)"; cat /tmp/upload_resp2.json; fail=1; }
+
+          file_url2=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
+          disposition=$(curl -s -o /dev/null -D - "$file_url2" | tr -d '\r' | grep -i '^Content-Disposition:' | head -1)
+          echo "svg served -> $disposition"
+          if ! echo "$disposition" | grep -qi 'attachment'; then
+            echo "FAIL: expected Content-Disposition: attachment for an SVG upload, got: $disposition"
+            fail=1
+          fi
+
+          # --- (A)/(E) a normal legitimate upload must still work
+          # end-to-end, including the real signed round trip through MinIO
+          # (not just a non-502 connectivity check).
+          product_id=$(new_product legit-pdf)
+          printf '%%PDF-1.4 legitimate test content' > /tmp/legit.pdf
+          code=$(curl -s -o /tmp/legit_resp.json -w '%{http_code}' -X POST "http://localhost:8080/api/products/$product_id/file" \
+            -H "Authorization: Bearer $token" \
+            -F "file=@/tmp/legit.pdf;filename=quote.pdf;type=application/pdf")
+          echo "legitimate PDF upload -> $code"
+          [ "$code" = "200" ] || { echo "FAIL: a legitimate PDF upload was rejected"; cat /tmp/legit_resp.json; fail=1; }
+
+          file_url=$(curl -s "http://localhost:8080/api/products/$product_id/file-url" -H "Authorization: Bearer $token" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])')
+          echo "presigned url: $file_url"
+          served_code=$(curl -s -o /tmp/served.bin -w '%{http_code}' -D /tmp/served_headers.txt "$file_url")
+          served_content_type=$(tr -d '\r' < /tmp/served_headers.txt | grep -i '^Content-Type:' | head -1)
+          echo "legitimate PDF served -> $served_code / $served_content_type"
+          [ "$served_code" = "200" ] || { echo "FAIL: presigned download of a legitimately-uploaded PDF failed (got $served_code)"; cat /tmp/served_headers.txt; fail=1; }
+          if ! echo "$served_content_type" | grep -qi 'application/pdf'; then
+            echo "FAIL: expected application/pdf (derived from the .pdf extension), got: $served_content_type"
+            fail=1
+          fi
+
+          exit $fail
+
+      - name: Acceptance — cookie-based refresh-token rotation, replay rejection, and logout
+        run: |
+          fail=0
+          jar=/tmp/cookies.txt
+          rm -f "$jar"
+
+          # Invalid credentials must be rejected before anything else.
+          bad_login_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"definitely-wrong"}')
+          echo "login with wrong password -> $bad_login_code"
+          [ "$bad_login_code" = "401" ] || { echo "FAIL: expected 401 for invalid credentials, got $bad_login_code"; fail=1; }
+
+          # Login sets the HttpOnly refresh cookie in the jar, and its
+          # Set-Cookie header carries the real cookie attributes (curl's
+          # cookie-jar file format loses flags like HttpOnly/Secure, so
+          # check the raw response header, not just the jar).
+          login_headers=$(curl -s -D - -o /tmp/login_body.json -c "$jar" -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}')
+          login_body=$(cat /tmp/login_body.json)
+          access_token_1=$(echo "$login_body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          grep -q refresh_token "$jar" || { echo "FAIL: no refresh_token cookie set by login"; fail=1; }
+
+          set_cookie_line=$(echo "$login_headers" | tr -d '\r' | grep -i '^set-cookie:' | grep -i refresh_token)
+          echo "refresh cookie attributes -> $set_cookie_line"
+          echo "$set_cookie_line" | grep -qi 'HttpOnly' || { echo "FAIL: refresh_token cookie is missing HttpOnly"; fail=1; }
+          echo "$set_cookie_line" | grep -qi 'SameSite=Lax' || { echo "FAIL: refresh_token cookie is missing SameSite=Lax"; fail=1; }
+          # This CI stack runs as ENVIRONMENT=development over plain HTTP
+          # (see .env.example) — Secure must be OFF here (an unconditional
+          # Secure flag would make the browser silently refuse to ever
+          # send the cookie back over http://, breaking dev/CI entirely).
+          # Task 6's own auth-service unit tests separately force
+          # ENVIRONMENT=production and assert Secure IS present there.
+          echo "$set_cookie_line" | grep -qi 'Secure' && { echo "FAIL: refresh_token cookie has Secure set in a plain-http dev/CI environment"; fail=1; }
+          # The access token must never itself be set as a cookie — it's
+          # JSON-body-only, kept in JS memory on the frontend, never
+          # persisted or exposed via a cookie a script could also read.
+          echo "$login_headers" | tr -d '\r' | grep -i '^set-cookie:' | grep -qi "$access_token_1" && { echo "FAIL: access token leaked into a Set-Cookie header"; fail=1; }
+
+          # A legitimate refresh (silent re-auth) works and rotates the token.
+          refresh1_code=$(curl -s -o /tmp/refresh1.json -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/refresh)
+          echo "first refresh -> $refresh1_code"
+          [ "$refresh1_code" = "200" ] || { echo "FAIL: legitimate refresh rejected"; cat /tmp/refresh1.json; fail=1; }
+          access_token_2=$(python3 -c 'import json; print(json.load(open("/tmp/refresh1.json"))["access_token"])')
+          [ "$access_token_1" != "$access_token_2" ] || { echo "FAIL: refresh did not issue a new access token"; fail=1; }
+
+          # (G) Integration: the newly-ROTATED access token must actually
+          # work for a real authenticated request through Nginx's
+          # auth_request flow, not just be returned by /refresh.
+          authed_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/products \
+            -H "Authorization: Bearer $access_token_2")
+          echo "authenticated request with rotated access token -> $authed_code"
+          [ "$authed_code" = "200" ] || { echo "FAIL: the access token issued by /refresh did not work for a real API call"; fail=1; }
+
+          # Replay check: a separate login/cookie-jar so it doesn't interfere
+          # with $jar above. Capture the cookie right after login, rotate it
+          # once via a normal refresh, then re-present the ORIGINAL
+          # (now-rotated-away) cookie value and confirm it's rejected.
+          jar2=/tmp/cookies2.txt
+          rm -f "$jar2"
+          curl -s -c "$jar2" -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' > /dev/null
+          cp "$jar2" /tmp/cookies2_original.txt
+          curl -s -o /dev/null -b "$jar2" -c "$jar2" -X POST http://localhost:8080/api/auth/refresh
+          replay_code=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/cookies2_original.txt -X POST http://localhost:8080/api/auth/refresh)
+          echo "replay of rotated-away refresh token -> $replay_code"
+          [ "$replay_code" = "401" ] || { echo "FAIL: expected 401 replaying a rotated refresh token, got $replay_code"; fail=1; }
+
+          # Logout revokes the (still-current, un-replayed) session's refresh token.
+          logout_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/logout)
+          echo "logout -> $logout_code"
+          [ "$logout_code" = "204" ] || { echo "FAIL: expected 204 from logout, got $logout_code"; fail=1; }
+
+          after_logout_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -X POST http://localhost:8080/api/auth/refresh)
+          echo "refresh after logout -> $after_logout_code"
+          [ "$after_logout_code" = "401" ] || { echo "FAIL: expected 401 refreshing after logout, got $after_logout_code"; fail=1; }
+
+          # No refresh cookie at all -> rejected.
+          no_cookie_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/refresh)
+          echo "refresh with no cookie -> $no_cookie_code"
+          [ "$no_cookie_code" = "401" ] || { echo "FAIL: expected 401 with no cookie, got $no_cookie_code"; fail=1; }
+
+          # A fresh login still works end-to-end after all of the above.
+          relogin_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}')
+          echo "fresh login after logout -> $relogin_code"
+          [ "$relogin_code" = "200" ] || { echo "FAIL: a fresh login after logout should still work"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — CORS policy (trusted/untrusted origins, preflight, headers, credentials)
+        run: |
+          fail=0
+          trusted="http://localhost:8080"
+          untrusted="http://evil.example.com"
+
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+
+          # --- (preflight, trusted origin, PROTECTED endpoint) ---
+          # A real browser preflight never carries Authorization — this
+          # must succeed WITHOUT one, proving it's answered before this
+          # location's auth_request ever runs (see infra/nginx/cors.conf).
+          preflight_headers=$(curl -s -D - -o /dev/null -X OPTIONS http://localhost:8080/api/products \
+            -H "Origin: $trusted" \
+            -H 'Access-Control-Request-Method: GET' \
+            -H 'Access-Control-Request-Headers: authorization,content-type')
+          preflight_code=$(echo "$preflight_headers" | head -1 | tr -d '\r')
+          echo "preflight (trusted origin, no auth) -> $preflight_code"
+          echo "$preflight_headers" | grep -qi '^HTTP/.* 204' || { echo "FAIL: expected 204 for a trusted-origin preflight, got: $preflight_code"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -qi "^access-control-allow-origin: $trusted\$" \
+            || { echo "FAIL: preflight response missing/wrong Access-Control-Allow-Origin for trusted origin"; echo "$preflight_headers"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -qi '^access-control-allow-credentials: true$' \
+            || { echo "FAIL: preflight response missing Access-Control-Allow-Credentials: true"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -i '^access-control-allow-methods:' | grep -q 'GET' \
+            || { echo "FAIL: Access-Control-Allow-Methods missing GET"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -i '^access-control-allow-methods:' | grep -qi 'PUT' \
+            && { echo "FAIL: Access-Control-Allow-Methods advertises PUT, which the frontend never uses"; fail=1; }
+          echo "$preflight_headers" | tr -d '\r' | grep -i '^access-control-allow-headers:' | grep -qi 'Authorization' \
+            || { echo "FAIL: Access-Control-Allow-Headers missing Authorization"; fail=1; }
+
+          # --- (preflight, UNTRUSTED origin) ---
+          untrusted_preflight=$(curl -s -D - -o /dev/null -X OPTIONS http://localhost:8080/api/products \
+            -H "Origin: $untrusted" \
+            -H 'Access-Control-Request-Method: GET' \
+            -H 'Access-Control-Request-Headers: authorization,content-type')
+          echo "untrusted preflight -> $(echo "$untrusted_preflight" | head -1 | tr -d '\r')"
+          echo "$untrusted_preflight" | tr -d '\r' | grep -qi "^access-control-allow-origin: $untrusted\$" \
+            && { echo "FAIL: an UNTRUSTED origin was granted Access-Control-Allow-Origin"; fail=1; }
+          echo "$untrusted_preflight" | tr -d '\r' | grep -qi '^access-control-allow-origin: \*$' \
+            && { echo "FAIL: wildcard Access-Control-Allow-Origin used"; fail=1; }
+
+          # --- (actual request, trusted origin) ---
+          trusted_resp=$(curl -s -D - -o /dev/null http://localhost:8080/api/products \
+            -H "Authorization: Bearer $token" -H "Origin: $trusted")
+          echo "GET /api/products, trusted origin -> $(echo "$trusted_resp" | head -1 | tr -d '\r')"
+          echo "$trusted_resp" | tr -d '\r' | grep -qi "^access-control-allow-origin: $trusted\$" \
+            || { echo "FAIL: a real request from the trusted origin did not get Access-Control-Allow-Origin"; fail=1; }
+          # No duplicate/conflicting header (Nginx AND a FastAPI-level
+          # CORS layer both emitting one, or Nginx emitting it twice).
+          dup_count=$(echo "$trusted_resp" | tr -d '\r' | grep -ci '^access-control-allow-origin:')
+          [ "$dup_count" = "1" ] || { echo "FAIL: expected exactly 1 Access-Control-Allow-Origin header, got $dup_count"; fail=1; }
+
+          # --- (actual request, untrusted origin — must still succeed for
+          # a non-browser client like curl; what matters is the response
+          # never grants that origin CORS access, exactly like the
+          # preflight check above) ---
+          untrusted_resp=$(curl -s -D - -o /dev/null http://localhost:8080/api/products \
+            -H "Authorization: Bearer $token" -H "Origin: $untrusted")
+          echo "GET /api/products, untrusted origin -> $(echo "$untrusted_resp" | head -1 | tr -d '\r')"
+          echo "$untrusted_resp" | tr -d '\r' | grep -qi "^access-control-allow-origin: $untrusted\$" \
+            && { echo "FAIL: an UNTRUSTED origin's real request was granted Access-Control-Allow-Origin"; fail=1; }
+
+          # --- (login/refresh/logout still work normally with a trusted
+          # Origin header present — CORS must not interfere with any of
+          # this task's existing Task 6 flows) ---
+          jar=/tmp/cors_cookies.txt
+          rm -f "$jar"
+          login_with_origin=$(curl -s -D - -o /tmp/cors_login.json -c "$jar" -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -H "Origin: $trusted" -d '{"username":"admin","password":"CHANGE_ME"}')
+          echo "login with Origin header -> $(echo "$login_with_origin" | head -1 | tr -d '\r')"
+          echo "$login_with_origin" | tr -d '\r' | grep -qi "^access-control-allow-origin: $trusted\$" \
+            || { echo "FAIL: login response missing CORS header for trusted origin"; fail=1; }
+          grep -q refresh_token "$jar" || { echo "FAIL: login with Origin header did not set the refresh cookie"; fail=1; }
+
+          refresh_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/refresh \
+            -H "Origin: $trusted")
+          echo "refresh with Origin header -> $refresh_code"
+          [ "$refresh_code" = "200" ] || { echo "FAIL: refresh with a trusted Origin header was rejected"; fail=1; }
+
+          logout_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" -X POST http://localhost:8080/api/auth/logout \
+            -H "Origin: $trusted")
+          echo "logout with Origin header -> $logout_code"
+          [ "$logout_code" = "204" ] || { echo "FAIL: logout with a trusted Origin header was rejected"; fail=1; }
+
+          # --- (service-to-service traffic is unaffected — same
+          # direct-to-backend check pattern as Task 4, no Origin header
+          # involved at all, since non-browser clients never send one) ---
+          direct_code=$(docker run --rm --network infra_default curlimages/curl -s -o /dev/null -w '%{http_code}' \
+            -H "X-Internal-Secret: local_dev_internal_secret_change_me" \
+            http://catalogue-service:8000/health)
+          echo "direct-to-backend health check (no Origin header at all) -> $direct_code"
+          [ "$direct_code" = "200" ] || { echo "FAIL: service-to-service traffic broke after adding CORS to Nginx"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — security headers, version disclosure, CSP integrity, no duplicates
+        run: |
+          fail=0
+
+          check_header_once() {
+            # $1 = header name, $2 = response headers text, $3 = label,
+            # $4 = substring the value must contain
+            name="$1"; headers="$2"; label="$3"; expected="$4"
+            count=$(echo "$headers" | tr -d '\r' | grep -ci "^${name}:")
+            [ "$count" = "1" ] || { echo "FAIL: expected exactly 1 '$name' header on $label, got $count"; fail=1; return; }
+            line=$(echo "$headers" | tr -d '\r' | grep -i "^${name}:")
+            echo "$label $name -> $line"
+            if [ -n "$expected" ]; then
+              echo "$line" | grep -qF "$expected" || { echo "FAIL: $label $name missing expected value '$expected' -- got: $line"; fail=1; }
+            fi
+          }
+
+          # --- (1) the frontend page: full header set, exactly once each ---
+          index_headers=$(curl -s -D - -o /tmp/index_body.html http://localhost:8080/)
+          server_line=$(echo "$index_headers" | tr -d '\r' | grep -i '^server:')
+          echo "Server header on / -> $server_line"
+          echo "$server_line" | grep -qE '[0-9]' && { echo "FAIL: Server header discloses a version number: $server_line"; fail=1; }
+
+          check_header_once "X-Content-Type-Options" "$index_headers" "/" "nosniff"
+          check_header_once "Referrer-Policy" "$index_headers" "/" "strict-origin-when-cross-origin"
+          check_header_once "X-Frame-Options" "$index_headers" "/" "SAMEORIGIN"
+          check_header_once "Permissions-Policy" "$index_headers" "/" "camera=()"
+          check_header_once "Content-Security-Policy" "$index_headers" "/" "frame-ancestors 'self'"
+
+          # --- (2) Task 9/10: script-src is the long-term 'self' (no
+          # per-edit hash to maintain, no unsafe-inline) -- app.js is an
+          # external same-origin file, not an inline <script> block.
+          csp_line=$(echo "$index_headers" | tr -d '\r' | grep -i '^content-security-policy:')
+          echo "$csp_line" | grep -oE "script-src[^;]*" | grep -qx "script-src 'self'" \
+            || { echo "FAIL: expected script-src 'self' exactly, got: $(echo "$csp_line" | grep -oE "script-src[^;]*")"; fail=1; }
+          echo "$csp_line" | grep -qi "script-src[^;]*unsafe-inline" && { echo "FAIL: script-src still allows 'unsafe-inline'"; fail=1; }
+          echo "$csp_line" | grep -qi "script-src[^;]*sha256-" && { echo "FAIL: script-src still depends on a hardcoded SHA-256 hash"; fail=1; }
+          grep -qi '<script>' /tmp/index_body.html && { echo "FAIL: index.html still contains an inline <script> block"; fail=1; }
+          grep -qF '<script src="/js/app.js"></script>' /tmp/index_body.html \
+            || { echo "FAIL: index.html does not reference the external /js/app.js"; fail=1; }
+
+          # --- app.js is reachable, correctly typed (X-Content-Type-Options:
+          # nosniff makes an incorrect Content-Type here a silent script
+          # failure in the browser, not a loud error -- see nginx.conf.template's
+          # comment on why include mime.types was added), and its content
+          # actually IS this app's JS (not an empty file / a 404 fallback
+          # to index.html via try_files).
+          appjs_headers=$(curl -s -D - -o /tmp/app.js -w '%{http_code}' http://localhost:8080/js/app.js)
+          appjs_code=$(echo "$appjs_headers" | head -1 | tr -d '\r')
+          echo "GET /js/app.js -> $appjs_code"
+          echo "$appjs_code" | grep -q ' 200 ' || { echo "FAIL: expected 200 for /js/app.js, got: $appjs_code"; fail=1; }
+          appjs_content_type=$(echo "$appjs_headers" | tr -d '\r' | grep -i '^content-type:')
+          echo "/js/app.js Content-Type -> $appjs_content_type"
+          echo "$appjs_content_type" | grep -qiE 'javascript|ecmascript' \
+            || { echo "FAIL: /js/app.js served with a non-JavaScript Content-Type: $appjs_content_type"; fail=1; }
+          grep -q "const API_BASE = '/api'" /tmp/app.js \
+            || { echo "FAIL: /js/app.js does not look like this app's actual script (marker string missing)"; fail=1; }
+          check_header_once "Content-Security-Policy" "$appjs_headers" "/js/app.js" "script-src 'self'"
+
+          # --- (3) an unauthenticated request to a PROTECTED endpoint
+          # (401, via Nginx's own auth_request gate -- this is Nginx's
+          # OWN error response, not a proxied backend body) still carries
+          # the full header set, and does not disclose Nginx's version.
+          unauth_headers=$(curl -s -D - -o /tmp/401_body.html http://localhost:8080/api/documents)
+          unauth_code=$(echo "$unauth_headers" | head -1 | tr -d '\r')
+          echo "unauthenticated /api/documents -> $unauth_code"
+          echo "$unauth_code" | grep -q ' 401 ' || { echo "FAIL: expected 401 for an unauthenticated protected request, got: $unauth_code"; fail=1; }
+          check_header_once "X-Content-Type-Options" "$unauth_headers" "401 /api/documents" "nosniff"
+          check_header_once "Content-Security-Policy" "$unauth_headers" "401 /api/documents" ""
+          grep -qi 'nginx/[0-9]' /tmp/401_body.html && { echo "FAIL: 401 error body discloses the Nginx version"; fail=1; }
+
+          # --- (4) a genuinely Nginx-generated error page (413, request
+          # body over client_max_body_size -- Nginx rejects this itself,
+          # before ever proxying anywhere) never discloses the version
+          # either, proving server_tokens off covers Nginx's own
+          # generated error pages, not just the Server header on normal
+          # responses.
+          dd if=/dev/zero of=/tmp/toolarge.bin bs=1M count=26 status=none
+          big_headers=$(curl -s -D - -o /tmp/413_body.html -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/octet-stream' --data-binary @/tmp/toolarge.bin)
+          big_code=$(echo "$big_headers" | head -1 | tr -d '\r')
+          echo "oversized request body -> $big_code"
+          echo "$big_code" | grep -q ' 413 ' || { echo "FAIL: expected 413 for a request over client_max_body_size, got: $big_code"; fail=1; }
+          grep -qi 'nginx/[0-9]' /tmp/413_body.html && { echo "FAIL: 413 error body discloses the Nginx version"; fail=1; }
+          rm -f /tmp/toolarge.bin
+
+          # --- (5) MinIO-proxied responses: nosniff present, MinIO's own
+          # Server header hidden (proxy_hide_header) -- Task 3's
+          # connectivity-only check never inspected response headers.
+          minio_headers=$(curl -s -D - -o /dev/null http://localhost:8080/documents/no-such-key)
+          echo "MinIO passthrough headers -> $(echo "$minio_headers" | tr -d '\r' | grep -iE '^(server|x-content-type-options):')"
+          echo "$minio_headers" | tr -d '\r' | grep -qi '^x-content-type-options: nosniff$' \
+            || { echo "FAIL: MinIO-proxied response missing X-Content-Type-Options"; fail=1; }
+          echo "$minio_headers" | tr -d '\r' | grep -i '^server:' | grep -qi 'minio' \
+            && { echo "FAIL: MinIO's own Server header leaked through the proxy"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — company/director restructuring (director gets own contact info, company keeps its Supplier fields, support_phone removed)
+        run: |
+          fail=0
+          token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          auth=(-H "Authorization: Bearer $token")
+
+          # --- (1)-(6) company create still accepts/returns
+          # position/address/contact_no/support_email (position is kept for
+          # signer/signature use, not shown in the Supplier block — verified
+          # via the export below), but never support_phone (removed, unused).
+          company_json=$(curl -s -X POST http://localhost:8080/api/companies "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Restructure Test Co.","short_name":"RTC","position":"Director","address":"Company HQ, Yangon","contact_no":"+95911111111","support_email":"supplier@restructuretest.example.com"}')
+          echo "created company: $company_json"
+          company_id=$(echo "$company_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          echo "$company_json" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(1 if 'support_phone' in d else 0)" \
+            || { echo "FAIL: CompanyOut still exposes removed field 'support_phone'"; fail=1; }
+          echo "$company_json" | python3 -c 'import sys, json; d = json.load(sys.stdin); assert d["name"] == "Restructure Test Co." and d["short_name"] == "RTC" and d["position"] == "Director" and d["address"] == "Company HQ, Yangon" and d["contact_no"] == "+95911111111" and d["support_email"] == "supplier@restructuretest.example.com"' \
+            || { echo "FAIL: company position/address/contact_no/support_email not round-tripped"; fail=1; }
+
+          # --- (3)/(4)/(5) multiple directors on one company, full contact
+          # fields on create, update works.
+          director_a_json=$(curl -s -X POST "http://localhost:8080/api/companies/$company_id/directors" "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Aung Aung","address":"Mayangon, Yangon","contact_no":"+95999999999","email":"aungaung@gmail.com"}')
+          echo "created director A: $director_a_json"
+          director_a_id=$(echo "$director_a_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          echo "$director_a_json" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["address"]=="Mayangon, Yangon" and d["contact_no"]=="+95999999999" and d["email"]=="aungaung@gmail.com"' \
+            || { echo "FAIL: director A contact fields not round-tripped on create"; fail=1; }
+
+          director_b_json=$(curl -s -X POST "http://localhost:8080/api/companies/$company_id/directors" "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Kyaw Kyaw","address":"Insein, Yangon","contact_no":"+95988888888","email":"kyawkyaw@gmail.com"}')
+          director_b_id=$(echo "$director_b_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          directors_list=$(curl -s "http://localhost:8080/api/companies/$company_id/directors" "${auth[@]}")
+          count=$(echo "$directors_list" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')
+          [ "$count" = "2" ] || { echo "FAIL: expected 2 directors on the company, got $count"; fail=1; }
+
+          updated_json=$(curl -s -X PATCH "http://localhost:8080/api/companies/$company_id/directors/$director_a_id" "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"contact_no":"+95900000001"}')
+          echo "$updated_json" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["contact_no"]=="+95900000001" and d["name"]=="Aung Aung" and d["address"]=="Mayangon, Yangon"' \
+            || { echo "FAIL: partial director update did not persist / clobbered other fields"; fail=1; }
+
+          # --- a second, unrelated company + director, for the
+          # cross-company rejection check below.
+          company2_json=$(curl -s -X POST http://localhost:8080/api/companies "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"name":"Other Restructure Co.","short_name":"ORC"}')
+          company2_id=$(echo "$company2_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          director_c_json=$(curl -s -X POST "http://localhost:8080/api/companies/$company2_id/directors" "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"name":"Cross Company Director"}')
+          director_c_id=$(echo "$director_c_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          # --- (10) a document can select a director belonging to the
+          # selected company.
+          doc_json=$(curl -s -X POST http://localhost:8080/api/documents "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$company_id\",\"director_id\":\"$director_a_id\",\"items\":[]}")
+          echo "created document: $doc_json"
+          doc_id=$(echo "$doc_json" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id",""))')
+          [ -n "$doc_id" ] || { echo "FAIL: could not create a document with a same-company director"; fail=1; echo "$doc_json"; }
+
+          # --- (11) cross-company director selection is rejected.
+          cross_code=$(curl -s -o /tmp/cross_company.json -w '%{http_code}' -X POST http://localhost:8080/api/documents "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$company_id\",\"director_id\":\"$director_c_id\",\"items\":[]}")
+          echo "cross-company create -> $cross_code: $(cat /tmp/cross_company.json)"
+          [ "$cross_code" = "400" ] || { echo "FAIL: expected 400 rejecting a director from a different company, got $cross_code"; fail=1; }
+
+          # same check on update: create a clean document with no
+          # director, then try to attach director_c (still cross-company).
+          doc2_json=$(curl -s -X POST http://localhost:8080/api/documents "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$company_id\",\"items\":[]}")
+          doc2_id=$(echo "$doc2_json" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          cross_update_code=$(curl -s -o /tmp/cross_update.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc2_id" "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"company_id\":\"$company_id\",\"director_id\":\"$director_c_id\",\"items\":[]}")
+          echo "cross-company update -> $cross_update_code: $(cat /tmp/cross_update.json)"
+          [ "$cross_update_code" = "400" ] || { echo "FAIL: expected 400 rejecting a cross-company director on update, got $cross_update_code"; fail=1; }
+
+          # --- (1)-(5) the generated Supplier block uses the COMPANY's own
+          # name/address/contact_no/support_email — never the director's
+          # (director_a's address/contact_no deliberately differ from the
+          # company's own, so this also proves they aren't leaking in) —
+          # and never company.position (kept out of the Supplier block).
+          # --- (8) the MD signature block still shows the SELECTED
+          # director's own name.
+          xlsx_code=$(curl -s -o /tmp/quotation.xlsx -w '%{http_code}' "http://localhost:8080/api/documents/$doc_id/export/quotation" "${auth[@]}")
+          echo "quotation export -> $xlsx_code"
+          [ "$xlsx_code" = "200" ] || { echo "FAIL: quotation export failed"; fail=1; }
+          # Search every XML member of the archive (not just xl/sharedStrings.xml
+          # by an assumed exact path) via Python's stdlib zipfile, so this
+          # doesn't depend on exactly how openpyxl laid out the workbook.
+          python3 -c 'import zipfile; z = zipfile.ZipFile("/tmp/quotation.xlsx"); text = "".join(z.read(n).decode("utf-8", "replace") for n in z.namelist() if n.endswith(".xml")); open("/tmp/xlsx_text.txt", "w").write(text)'
+          grep -q "Restructure Test Co\." /tmp/xlsx_text.txt || { echo "FAIL: exported quotation missing the company name"; fail=1; }
+          grep -q "Company HQ, Yangon" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation Supplier block missing the company's own address"; fail=1; }
+          grep -q "+95911111111" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation Supplier block missing the company's own contact number"; fail=1; }
+          grep -q "supplier@restructuretest.example.com" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation Supplier block missing the company's own support_email"; fail=1; }
+          grep -q "Aung Aung" /tmp/xlsx_text.txt || { echo "FAIL: exported quotation missing the selected director's name in the MD signature block"; fail=1; }
+          grep -q ">Director<" /tmp/xlsx_text.txt && { echo "FAIL: exported quotation leaks company.position ('Director') as its own shared string — must not appear in the Supplier block"; fail=1; }
+          grep -q "Mayangon, Yangon" /tmp/xlsx_text.txt && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's address instead of the company's"; fail=1; }
+          grep -q "+95900000001" /tmp/xlsx_text.txt && { echo "FAIL: exported quotation Supplier block leaked the DIRECTOR's contact number instead of the company's"; fail=1; }
+
+          # --- (14)/(15) existing document/company create+edit flows still
+          # work end to end (already exercised above — a 400 here would
+          # mean this whole step failed earlier).
+          patch_code=$(curl -s -o /tmp/company_patch.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/companies/$company_id" "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"short_name":"RTC2"}')
+          [ "$patch_code" = "200" ] || { echo "FAIL: company update no longer works ($patch_code)"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — User Control (Operation group, Editor/Viewer roles, admin-created users, no deletion, pending registration, Products access-level enforcement)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+
+          # --- Task 1: the Operation group exists (seeded idempotently on
+          # auth-service startup), and the superuser is NOT a member of it.
+          groups_json=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}")
+          operation_group_id=$(echo "$groups_json" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"] if g else "")')
+          [ -n "$operation_group_id" ] || { echo "FAIL: Operation group does not exist"; fail=1; }
+          echo "Operation group id -> $operation_group_id"
+
+          # --- Task 2: exactly two roles in Operation — Editor and Viewer.
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          role_names=$(echo "$roles_json" | python3 -c 'import sys,json; print(",".join(sorted(r["name"] for r in json.load(sys.stdin))))')
+          echo "Operation roles -> $role_names"
+          [ "$role_names" = "Editor,Viewer" ] || { echo "FAIL: expected exactly Editor,Viewer roles in Operation, got: $role_names"; fail=1; }
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          # --- Task 3: admin creates an Editor and a Viewer, both approved
+          # + active immediately, no is_superuser field reachable through
+          # this endpoint.
+          suffix=$RANDOM
+          editor_json=$(curl -s -o /tmp/create_editor.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"editor_uc_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}")
+          echo "create editor -> $editor_json"
+          [ "$editor_json" = "201" ] || { echo "FAIL: expected 201 creating an Editor, got $editor_json"; cat /tmp/create_editor.json; fail=1; }
+
+          viewer_json=$(curl -s -o /tmp/create_viewer.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"viewer_uc_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}")
+          echo "create viewer -> $viewer_json"
+          [ "$viewer_json" = "201" ] || { echo "FAIL: expected 201 creating a Viewer, got $viewer_json"; cat /tmp/create_viewer.json; fail=1; }
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_uc_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"viewer_uc_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          [ -n "$editor_token" ] || { echo "FAIL: created Editor could not log in immediately"; fail=1; }
+          [ -n "$viewer_token" ] || { echo "FAIL: created Viewer could not log in immediately"; fail=1; }
+          editor_auth=(-H "Authorization: Bearer $editor_token")
+          viewer_auth=(-H "Authorization: Bearer $viewer_token")
+
+          # --- Task 4: the users listing shows group/role/status for both.
+          users_json=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}")
+          echo "$users_json" | python3 -c "import sys, json; users = {u['username']: u for u in json.load(sys.stdin)}; e = users['editor_uc_$suffix']; v = users['viewer_uc_$suffix']; assert e['groups'] == ['Operation'] and e['roles'] == ['Editor'] and e['is_active'] and e['is_approved'], e; assert v['groups'] == ['Operation'] and v['roles'] == ['Viewer'] and v['is_active'] and v['is_approved'], v" \
+            || { echo "FAIL: /admin/users listing missing correct group/role/status for the created users"; fail=1; }
+
+          # --- Task 2/7: Editor can view+create on all 5 operational
+          # resources; Viewer can view but is rejected (403) creating on
+          # every one of them — enforced server-side, not just hidden in
+          # the UI. (documents/customers/projects/companies all share the
+          # "documents" service_name in nginx.conf.template; products has
+          # its own.)
+          check_resource_rw() {
+            resource="$1"; body="$2"
+            edit_code=$(curl -s -o /tmp/edit_create.json -w '%{http_code}' -X POST "http://localhost:8080/api/$resource" "${editor_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$body")
+            echo "Editor POST /api/$resource -> $edit_code"
+            case "$edit_code" in
+              200|201) ;;
+              *) echo "FAIL: Editor could not create a $resource (got $edit_code)"; cat /tmp/edit_create.json; fail=1 ;;
+            esac
+
+            view_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource" "${viewer_auth[@]}")
+            echo "Viewer GET /api/$resource -> $view_get_code"
+            [ "$view_get_code" = "200" ] || { echo "FAIL: Viewer could not view $resource (got $view_get_code)"; fail=1; }
+
+            view_create_code=$(curl -s -o /tmp/view_create.json -w '%{http_code}' -X POST "http://localhost:8080/api/$resource" "${viewer_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$body")
+            echo "Viewer POST /api/$resource -> $view_create_code"
+            [ "$view_create_code" = "403" ] || { echo "FAIL: Viewer was able to create a $resource (got $view_create_code, expected 403)"; cat /tmp/view_create.json; fail=1; }
+
+            # Direct-API bypass attempt: Viewer forges X-Access-Level: edit
+            # themselves. Nginx must overwrite it with the real value from
+            # /verify, so this must still 403, exactly the same as above.
+            forged_code=$(curl -s -o /tmp/forged.json -w '%{http_code}' -X POST "http://localhost:8080/api/$resource" "${viewer_auth[@]}" \
+              -H 'Content-Type: application/json' -H 'X-Access-Level: edit' -d "$body")
+            echo "Viewer POST /api/$resource with forged X-Access-Level: edit -> $forged_code"
+            [ "$forged_code" = "403" ] || { echo "FAIL: Viewer bypassed write restriction on $resource via a forged X-Access-Level header (got $forged_code)"; cat /tmp/forged.json; fail=1; }
+          }
+
+          check_resource_rw "companies" "{\"name\":\"UC Test Co $suffix\"}"
+          check_resource_rw "customers" "{\"name\":\"UC Test Customer $suffix\"}"
+          check_resource_rw "projects" "{\"name\":\"UC Test Project $suffix\"}"
+          check_resource_rw "products" "{\"name\":\"UC Test Product $suffix\"}"
+
+          # documents needs a company_id, created separately since its
+          # create body shape differs from the other four.
+          uc_company_id=$(curl -s -X POST http://localhost:8080/api/companies "${editor_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"UC Doc Co $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          doc_edit_code=$(curl -s -o /tmp/doc_create.json -w '%{http_code}' -X POST http://localhost:8080/api/documents "${editor_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"doc_type\":\"quotation\",\"company_id\":\"$uc_company_id\",\"items\":[]}")
+          echo "Editor POST /api/documents -> $doc_edit_code"
+          [ "$doc_edit_code" = "201" ] || { echo "FAIL: Editor could not create a document (got $doc_edit_code)"; cat /tmp/doc_create.json; fail=1; }
+          doc_view_code=$(curl -s -o /tmp/doc_view_create.json -w '%{http_code}' -X POST http://localhost:8080/api/documents "${viewer_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"doc_type\":\"quotation\",\"company_id\":\"$uc_company_id\",\"items\":[]}")
+          echo "Viewer POST /api/documents -> $doc_view_code"
+          [ "$doc_view_code" = "403" ] || { echo "FAIL: Viewer was able to create a document (got $doc_view_code)"; cat /tmp/doc_view_create.json; fail=1; }
+
+          # --- Task 5: no user deletion — DELETE returns 404/405, and the
+          # account still exists afterward.
+          editor_user_id=$(echo "$users_json" | python3 -c "import sys,json; print([u['id'] for u in json.load(sys.stdin) if u['username']=='editor_uc_$suffix'][0])")
+          delete_code=$(curl -s -o /tmp/delete_resp.json -w '%{http_code}' -X DELETE "http://localhost:8080/api/admin/users/$editor_user_id" "${admin_auth[@]}")
+          echo "DELETE /api/admin/users/{id} -> $delete_code"
+          case "$delete_code" in
+            404|405) ;;
+            *) echo "FAIL: expected 404/405 for user deletion, got $delete_code"; cat /tmp/delete_resp.json; fail=1 ;;
+          esac
+          still_there_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/admin/users/$editor_user_id "${admin_auth[@]}")
+          # (there's no GET /admin/users/{id} single-user endpoint — confirm
+          # via the list instead, which is the real UI-facing source of truth)
+          still_there=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}" | python3 -c "import sys,json; print('editor_uc_$suffix' in [u['username'] for u in json.load(sys.stdin)])")
+          [ "$still_there" = "True" ] || { echo "FAIL: the account disappeared after the DELETE attempt"; fail=1; }
+
+          # Task 5: deactivation blocks login, revokes refresh, blocks the
+          # already-issued access token on its very next protected call.
+          deactivate_code=$(curl -s -o /tmp/deactivate.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/admin/users/$editor_user_id/active" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"is_active": false}')
+          echo "deactivate editor -> $deactivate_code"
+          [ "$deactivate_code" = "200" ] || { echo "FAIL: could not deactivate the editor (got $deactivate_code)"; cat /tmp/deactivate.json; fail=1; }
+
+          relogin_code=$(curl -s -o /tmp/relogin.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+          echo "login after deactivation -> $relogin_code"
+          [ "$relogin_code" = "403" ] || { echo "FAIL: a deactivated user could still log in (got $relogin_code)"; fail=1; }
+
+          still_authed_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${editor_auth[@]}")
+          echo "deactivated user's still-live access token on a protected API -> $still_authed_code"
+          [ "$still_authed_code" = "403" ] || { echo "FAIL: a deactivated user's existing access token still worked (got $still_authed_code)"; fail=1; }
+
+          # Reactivate so it doesn't pollute anything else — not required by
+          # any acceptance criterion, just tidy.
+          curl -s -o /dev/null -X PATCH "http://localhost:8080/api/admin/users/$editor_user_id/active" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"is_active": true}'
+
+          # --- Task 6: self-registration still works, stays pending until
+          # approved, then group/role assignment brings it to a normal
+          # working Editor login — exactly the admin-created path's end
+          # state, reached via the other door.
+          register_code=$(curl -s -o /tmp/register.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/register \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\",\"requested_group_id\":\"$operation_group_id\"}")
+          echo "self-register -> $register_code"
+          [ "$register_code" = "201" ] || { echo "FAIL: self-registration failed (got $register_code)"; cat /tmp/register.json; fail=1; }
+
+          pending_login_code=$(curl -s -o /tmp/pending_login.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+          echo "login while pending -> $pending_login_code"
+          [ "$pending_login_code" = "403" ] || { echo "FAIL: a pending self-registered user could log in before approval (got $pending_login_code)"; fail=1; }
+
+          pending_user_id=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}" | python3 -c "import sys,json; print([u['id'] for u in json.load(sys.stdin) if u['username']=='pending_uc_$suffix'][0])")
+          approve_code=$(curl -s -o /tmp/approve.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/users/$pending_user_id/approve" "${admin_auth[@]}")
+          echo "approve pending user -> $approve_code"
+          [ "$approve_code" = "200" ] || { echo "FAIL: could not approve the pending user (got $approve_code)"; cat /tmp/approve.json; fail=1; }
+          added_to_group=$(python3 -c 'import json; print(json.load(open("/tmp/approve.json"))["added_to_group"])')
+          [ "$added_to_group" = "True" ] || { echo "FAIL: approval did not add the requested-group user to Operation (added_to_group=$added_to_group)"; cat /tmp/approve.json; fail=1; }
+
+          assign_code=$(curl -s -o /tmp/assign.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/assign" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\"}")
+          echo "assign Editor role to approved user -> $assign_code"
+          [ "$assign_code" = "201" ] || { echo "FAIL: could not assign a role to the newly-approved user (got $assign_code)"; cat /tmp/assign.json; fail=1; }
+
+          approved_login_code=$(curl -s -o /tmp/approved_login.json -w '%{http_code}' -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"pending_uc_$suffix\",\"password\":\"correct horse battery staple\"}")
+          echo "login after approval + role assignment -> $approved_login_code"
+          [ "$approved_login_code" = "200" ] || { echo "FAIL: the approved+role-assigned user still could not log in (got $approved_login_code)"; cat /tmp/approved_login.json; fail=1; }
+
+          # --- Task 7: superuser remains completely unrestricted (baseline
+          # sanity — already exercised throughout this whole workflow file,
+          # re-asserted here in the User Control context).
+          su_create_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/products "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"UC Superuser Product $suffix\"}")
+          echo "superuser POST /api/products -> $su_create_code"
+          [ "$su_create_code" = "201" ] || { echo "FAIL: the superuser was blocked creating a product (got $su_create_code)"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — User Control existing-data migration (pre-existing records stay accessible per role)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"CHANGE_ME"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          # --- "Legacy" data: created by the superuser BEFORE the Editor/
+          # Viewer below exist, simulating records that predate a user's
+          # Operation membership (and, in a real deployment, predate this
+          # migration ever running). Nothing here is created by or scoped
+          # to any Operation member.
+          legacy_company_id=$(curl -s -X POST http://localhost:8080/api/companies "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Co $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_customer_id=$(curl -s -X POST http://localhost:8080/api/customers "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Customer $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_project_id=$(curl -s -X POST http://localhost:8080/api/projects "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Project $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_product_id=$(curl -s -X POST http://localhost:8080/api/products "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Legacy Product $suffix\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          legacy_document_id=$(curl -s -X POST http://localhost:8080/api/documents "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"doc_type\":\"quotation\",\"company_id\":\"$legacy_company_id\",\"customer_id\":\"$legacy_customer_id\",\"project_id\":\"$legacy_project_id\",\"items\":[]}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          for id_var in legacy_company_id legacy_customer_id legacy_project_id legacy_product_id legacy_document_id; do
+            [ -n "${!id_var}" ] || { echo "FAIL: could not create legacy record ($id_var is empty) — setup itself failed"; fail=1; }
+          done
+
+          # --- Operation Editor/Viewer created AFTER the legacy data above,
+          # then the real migration is what's expected to make that legacy
+          # data visible to them (not any ownership/creation relationship,
+          # since neither of them created any of it).
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_editor_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_viewer_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}"
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_editor_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"legacy_viewer_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_auth=(-H "Authorization: Bearer $editor_token")
+          viewer_auth=(-H "Authorization: Bearer $viewer_token")
+
+          check_legacy_record() {
+            resource="$1"; record_id="$2"; patch_body="$3"
+
+            editor_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource/$record_id" "${editor_auth[@]}")
+            echo "Editor GET legacy $resource/$record_id -> $editor_get_code"
+            [ "$editor_get_code" = "200" ] || { echo "FAIL: Editor cannot see the pre-existing $resource (got $editor_get_code) — migration did not backfill visibility"; fail=1; }
+
+            editor_patch_code=$(curl -s -o /tmp/editor_patch.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/$resource/$record_id" "${editor_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$patch_body")
+            echo "Editor PATCH legacy $resource/$record_id -> $editor_patch_code"
+            [ "$editor_patch_code" = "200" ] || { echo "FAIL: Editor cannot edit the pre-existing $resource (got $editor_patch_code)"; cat /tmp/editor_patch.json; fail=1; }
+
+            viewer_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource/$record_id" "${viewer_auth[@]}")
+            echo "Viewer GET legacy $resource/$record_id -> $viewer_get_code"
+            [ "$viewer_get_code" = "200" ] || { echo "FAIL: Viewer cannot see the pre-existing $resource (got $viewer_get_code) — migration did not backfill visibility"; fail=1; }
+
+            viewer_patch_code=$(curl -s -o /tmp/viewer_patch.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/$resource/$record_id" "${viewer_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$patch_body")
+            echo "Viewer PATCH legacy $resource/$record_id -> $viewer_patch_code"
+            [ "$viewer_patch_code" = "403" ] || { echo "FAIL: Viewer was able to edit the pre-existing $resource (got $viewer_patch_code, expected 403)"; cat /tmp/viewer_patch.json; fail=1; }
+
+            admin_get_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/$resource/$record_id" "${admin_auth[@]}")
+            admin_patch_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/$resource/$record_id" "${admin_auth[@]}" \
+              -H 'Content-Type: application/json' -d "$patch_body")
+            echo "Superuser GET/PATCH legacy $resource/$record_id -> $admin_get_code / $admin_patch_code"
+            [ "$admin_get_code" = "200" ] && [ "$admin_patch_code" = "200" ] || { echo "FAIL: superuser is not unrestricted on pre-existing $resource"; fail=1; }
+          }
+
+          check_legacy_record "companies" "$legacy_company_id" "{\"short_name\":\"LGC\"}"
+          check_legacy_record "customers" "$legacy_customer_id" "{\"phone\":\"+95900000000\"}"
+          check_legacy_record "projects" "$legacy_project_id" "{\"description\":\"migrated visibility check\"}"
+          check_legacy_record "products" "$legacy_product_id" "{\"description\":\"migrated visibility check\"}"
+          check_legacy_record "documents" "$legacy_document_id" "{\"company_id\":\"$legacy_company_id\",\"items\":[]}"
+
+          exit $fail
+
+      - name: Acceptance — Operation Group UI simplification (removed UI gone, backend + full auth flow intact)
+        run: |
+          fail=0
+
+          # --- The removed controls must actually be gone from what's
+          # served, not just deleted from source and still cached/inlined
+          # somewhere. Fetch the real served page + script through Nginx.
+          index_html=$(curl -s http://localhost:8080/)
+          app_js=$(curl -s http://localhost:8080/js/app.js)
+
+          for removed_id in group-project-pool-card add-member-btn add-member-username add-member-is-admin new-member-username new-member-password new-member-is-admin create-member-btn group-members-tbody; do
+            if echo "$index_html" | grep -q "id=\"$removed_id\""; then
+              echo "FAIL: index.html still contains removed element #$removed_id"
+              fail=1
+            fi
+          done
+          for removed_fn in loadGroupMembers loadGroupProjectPool refreshMemberRolePickers; do
+            if echo "$app_js" | grep -q "$removed_fn"; then
+              echo "FAIL: app.js still references removed function $removed_fn"
+              fail=1
+            fi
+          done
+          echo "$index_html" | grep -q 'id="open-create-user-btn"' \
+            || { echo "FAIL: the + Create User button (User Management's replacement path) is missing"; fail=1; }
+          echo "$index_html" | grep -q 'id="edit-user-add-group-btn"' \
+            || { echo "FAIL: User Management's Add-to-group control (the replacement for group-page's Add existing user) is missing"; fail=1; }
+
+          # --- The underlying backend the removed UI used to call must
+          # still work when called directly — this task only removed a
+          # redundant UI, not the API or its authorization semantics.
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          # Full end-to-end authorization flow, exactly as an admin would
+          # now do it entirely through User Management: register a normal
+          # account, add it to Operation (the same POST /members endpoint
+          # the removed "Add existing user" form used to call — still
+          # live), assign it the Editor role, and confirm it actually
+          # works end to end through Nginx.
+          register_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/auth/register \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\",\"password\":\"correct horse battery staple\"}")
+          [ "$register_code" = "201" ] || { echo "FAIL: self-registration broke (got $register_code)"; fail=1; }
+          new_user_id=$(curl -s http://localhost:8080/api/admin/users "${admin_auth[@]}" | python3 -c "import sys,json; print([u['id'] for u in json.load(sys.stdin) if u['username']=='uism_editor_$suffix'][0])")
+
+          approve_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:8080/api/admin/users/$new_user_id/approve" "${admin_auth[@]}")
+          [ "$approve_code" = "200" ] || { echo "FAIL: approve broke (got $approve_code)"; fail=1; }
+
+          add_member_code=$(curl -s -o /tmp/add_member.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/members" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\"}")
+          echo "POST /admin/groups/{id}/members (backend behind the removed 'Add existing user' form) -> $add_member_code"
+          [ "$add_member_code" = "201" ] || { echo "FAIL: add-existing-member endpoint broke (got $add_member_code)"; cat /tmp/add_member.json; fail=1; }
+
+          assign_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/assign" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\"}")
+          [ "$assign_code" = "201" ] || { echo "FAIL: role assign broke (got $assign_code)"; fail=1; }
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"uism_editor_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          verify_code=$(curl -s -o /tmp/verify.json -w '%{http_code}' http://localhost:8080/api/documents -H "Authorization: Bearer $editor_token")
+          echo "Editor (added/assigned via the surviving backend endpoints) GET /api/documents -> $verify_code"
+          [ "$verify_code" = "200" ] || { echo "FAIL: end-to-end Operation Editor flow broke after the UI simplification (got $verify_code)"; cat /tmp/verify.json; fail=1; }
+
+          # GroupProjectAccess (the removed "Project access — Operation"
+          # pool's own backend) must also still work directly — kept
+          # deliberately, per this task's recommendation, as still-valid
+          # generic group RBAC provisioning for any future non-Operation
+          # group, even though no UI calls it anymore.
+          dummy_project_id="00000000-0000-0000-0000-000000000001"
+          pool_grant_code=$(curl -s -o /tmp/pool_grant.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/project-access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"project_id\":\"$dummy_project_id\"}")
+          echo "POST /admin/groups/{id}/project-access (backend behind the removed pool UI) -> $pool_grant_code"
+          [ "$pool_grant_code" = "201" ] || { echo "FAIL: group project-access pool endpoint broke (got $pool_grant_code)"; cat /tmp/pool_grant.json; fail=1; }
+          pool_revoke_code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://localhost:8080/api/admin/groups/$operation_group_id/project-access/$dummy_project_id" "${admin_auth[@]}")
+          [ "$pool_revoke_code" = "204" ] || { echo "FAIL: group project-access revoke endpoint broke (got $pool_revoke_code)"; fail=1; }
+
+          # Superuser remains completely unrestricted throughout.
+          su_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          [ "$su_code" = "200" ] || { echo "FAIL: superuser access broke (got $su_code)"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — Documents recycle bin deletion audit (Deleted by / Deleted at, real Nginx)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          # --- This step exercises recycle-bin deletion audit behavior
+          # (who/when a document was trashed), not the separate "Delete"
+          # permission gate itself (that's covered by its own acceptance
+          # step below) — grant the Editor role documents-delete so its
+          # trash calls here reflect a user who is allowed to delete,
+          # same as this step assumed before Delete became a distinct,
+          # opt-in permission.
+          delete_grant_code=$(curl -s -o /tmp/recyclebin_delete_grant.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_role_id/access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"service_name":"documents-delete"}')
+          echo "grant documents-delete to the Editor role (recycle bin step) -> $delete_grant_code"
+          [ "$delete_grant_code" = "201" ] || { echo "FAIL: could not grant documents-delete to Editor for recycle bin test (got $delete_grant_code)"; cat /tmp/recyclebin_delete_grant.json; fail=1; }
+
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_editor_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_viewer_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}"
+
+          editor_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_editor_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"recyclebin_viewer_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_auth=(-H "Authorization: Bearer $editor_token")
+          viewer_auth=(-H "Authorization: Bearer $viewer_token")
+
+          new_doc() {
+            curl -s -X POST http://localhost:8080/api/documents "$@" \
+              -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'
+          }
+
+          # --- Editor deletes their own document -> recycle bin shows that Editor.
+          editor_doc_id=$(new_doc "${editor_auth[@]}")
+          editor_trash_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$editor_doc_id/trash" "${editor_auth[@]}")
+          echo "Editor trash own document -> $editor_trash_code"
+          [ "$editor_trash_code" = "200" ] || { echo "FAIL: Editor could not trash a document (got $editor_trash_code)"; fail=1; }
+
+          trash_json=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          editor_deleted_by=$(echo "$trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$editor_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "recycle bin deleted_by for Editor's document -> $editor_deleted_by"
+          [ "$editor_deleted_by" = "recyclebin_editor_$suffix" ] || { echo "FAIL: recycle bin does not correctly show the Editor as deleted_by (got '$editor_deleted_by')"; fail=1; }
+          editor_deleted_at=$(echo "$trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$editor_doc_id']; print(bool(d and d[0]['deleted_at']))")
+          [ "$editor_deleted_at" = "True" ] || { echo "FAIL: recycle bin missing deleted_at for the Editor's document"; fail=1; }
+
+          # --- Viewer cannot delete — the document Editor creates here must
+          # still exist (not trashed) after the Viewer's attempt.
+          viewer_target_doc_id=$(new_doc "${editor_auth[@]}")
+          viewer_trash_code=$(curl -s -o /tmp/viewer_trash.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$viewer_target_doc_id/trash" "${viewer_auth[@]}")
+          echo "Viewer attempt to trash a document -> $viewer_trash_code"
+          [ "$viewer_trash_code" = "403" ] || { echo "FAIL: Viewer was able to trash a document (got $viewer_trash_code)"; cat /tmp/viewer_trash.json; fail=1; }
+          still_there_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/documents/$viewer_target_doc_id" "${admin_auth[@]}")
+          [ "$still_there_code" = "200" ] || { echo "FAIL: the document Viewer failed to delete is no longer reachable (got $still_there_code) — it may have been deleted anyway"; fail=1; }
+
+          # --- Admin/superuser deletes -> recycle bin shows Admin.
+          admin_doc_id=$(new_doc "${admin_auth[@]}")
+          admin_trash_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$admin_doc_id/trash" "${admin_auth[@]}")
+          echo "Superuser trash a document -> $admin_trash_code"
+          [ "$admin_trash_code" = "200" ] || { echo "FAIL: superuser could not trash a document (got $admin_trash_code)"; fail=1; }
+
+          trash_json=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          admin_deleted_by=$(echo "$trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$admin_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "recycle bin deleted_by for superuser's document -> $admin_deleted_by"
+          [ "$admin_deleted_by" = "admin" ] || { echo "FAIL: recycle bin does not correctly show the superuser as deleted_by (got '$admin_deleted_by')"; fail=1; }
+
+          # --- Restore still works, and clears deleted_by/deleted_at.
+          restore_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$editor_doc_id/restore" "${editor_auth[@]}")
+          echo "Editor restore their own document -> $restore_code"
+          [ "$restore_code" = "200" ] || { echo "FAIL: restore broke (got $restore_code)"; fail=1; }
+          restored_doc=$(curl -s "http://localhost:8080/api/documents/$editor_doc_id" "${admin_auth[@]}")
+          restored_deleted_by=$(echo "$restored_doc" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('deleted_by'))")
+          [ "$restored_deleted_by" = "None" ] || { echo "FAIL: deleted_by was not cleared on restore (got $restored_deleted_by)"; fail=1; }
+
+          # --- Deleted-by information persists after logout/login: a
+          # completely fresh session (new login, new access token, no
+          # relation to the token used to view the trash above) must see
+          # the exact same stored value — proving it's read from the
+          # document row, never inferred from "whoever is currently
+          # logged in and viewing" the recycle bin.
+          admin_token_2=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          trash_json_2=$(curl -s http://localhost:8080/api/documents/trash -H "Authorization: Bearer $admin_token_2")
+          admin_deleted_by_2=$(echo "$trash_json_2" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$admin_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "deleted_by after a fresh login -> $admin_deleted_by_2"
+          [ "$admin_deleted_by_2" = "admin" ] || { echo "FAIL: deleted_by did not persist across logout/login (got '$admin_deleted_by_2')"; fail=1; }
+
+          # --- Forged X-Username bypass attempt — a Viewer with edit access
+          # forged (from an earlier acceptance step's own proof that Nginx
+          # overwrites this) must not be able to attribute a deletion to
+          # someone else even if they could delete at all.
+          forged_code=$(curl -s -o /tmp/forged.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$viewer_target_doc_id/trash" "${editor_auth[@]}" -H 'X-Username: someone-else')
+          echo "Editor trash with forged X-Username header -> $forged_code"
+          [ "$forged_code" = "200" ] || { echo "FAIL: expected the Editor's own trash to still succeed (got $forged_code)"; fail=1; }
+          forged_trash_json=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          forged_deleted_by=$(echo "$forged_trash_json" | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$viewer_target_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "deleted_by after forged X-Username attempt -> $forged_deleted_by"
+          [ "$forged_deleted_by" = "recyclebin_editor_$suffix" ] || { echo "FAIL: forged X-Username header changed deleted_by (got '$forged_deleted_by', expected the real Editor) — Nginx is not overwriting client-supplied X-Username"; fail=1; }
+
+          # --- Revoke the documents-delete grant made above: it was only
+          # needed to let this step's own Editor trash documents, but it
+          # lives on the shared "Editor" role — leaving it granted would
+          # leak into every later step's Editor users too (they run
+          # sequentially against the same Postgres). The dedicated Delete
+          # permission acceptance step below assumes a *fresh* Editor
+          # (never granted documents-delete) to prove the "no Delete by
+          # default" behavior; without this revoke, its own grant call
+          # would be a no-op against an already-delete-capable role and
+          # its "Editor-without-delete" user would incorrectly inherit
+          # documents-delete from this step.
+          revoke_code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://localhost:8080/api/admin/roles/$editor_role_id/access/documents-delete" "${admin_auth[@]}")
+          echo "revoke documents-delete from the Editor role (recycle bin step cleanup) -> $revoke_code"
+          [ "$revoke_code" = "204" ] || { echo "FAIL: could not revoke documents-delete after the recycle bin test (got $revoke_code)"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — Documents API self-heals an older/pre-migration schema (reproduces and fixes the reported 500 regression)
+        working-directory: infra
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+
+          # --- Baseline, before simulating anything: both endpoints work,
+          # and put one real document into the recycle bin so we can prove
+          # it's still there AND still restorable after the schema is
+          # regressed and self-healed below.
+          baseline_list_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          baseline_trash_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          echo "baseline GET /api/documents -> $baseline_list_code, GET /api/documents/trash -> $baseline_trash_code"
+          [ "$baseline_list_code" = "200" ] && [ "$baseline_trash_code" = "200" ] || { echo "FAIL: baseline endpoints aren't even healthy before the regression test — can't proceed"; exit 1; }
+
+          heal_doc_id=$(curl -s -X POST http://localhost:8080/api/documents "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          curl -s -o /dev/null -X PATCH "http://localhost:8080/api/documents/$heal_doc_id/trash" "${admin_auth[@]}"
+
+          # --- Reproduce the EXACT reported bug: an already-running
+          # deployment whose `documents` table predates migration 0003 —
+          # drop the two columns it added and roll alembic_version back to
+          # 0002, the same state a real pre-existing database was in.
+          echo "Simulating a pre-migration-0003 schema (dropping deleted_by/deleted_at, rolling back alembic_version)…"
+          docker compose exec -T postgres psql -U docmgmt -d docmgmt -c \
+            "ALTER TABLE documents DROP COLUMN IF EXISTS deleted_by, DROP COLUMN IF EXISTS deleted_at;"
+          docker compose exec -T postgres psql -U docmgmt -d docmgmt -c \
+            "UPDATE alembic_version SET version_num = '0002_director_contact_fields';"
+
+          regressed_code=$(curl -s -o /tmp/regressed.json -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          echo "GET /api/documents against the simulated older schema (before restart) -> $regressed_code"
+          [ "$regressed_code" = "500" ] || { echo "FAIL: expected the simulated older schema to actually reproduce a 500 (got $regressed_code) — the repro setup itself is wrong"; cat /tmp/regressed.json; fail=1; }
+
+          # --- The fix under test: document-service's own startup now
+          # runs `alembic upgrade head` automatically, so simply
+          # restarting it (no manual migration command, nothing run by
+          # this CI script beyond a plain restart) must self-heal the
+          # schema before it starts serving again.
+          docker compose restart document-service
+          healed=0
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}" || echo 000)
+            if [ "$code" = "200" ]; then healed=1; break; fi
+            sleep 2
+          done
+          if [ "$healed" != "1" ]; then
+            echo "FAIL: document-service never came back healthy after restart"
+            docker compose logs document-service --tail=100
+            fail=1
+          fi
+
+          list_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents "${admin_auth[@]}")
+          trash_code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/documents/trash "${admin_auth[@]}")
+          echo "after self-heal: GET /api/documents -> $list_code, GET /api/documents/trash -> $trash_code"
+          [ "$list_code" = "200" ] || { echo "FAIL: GET /api/documents still broken after self-heal (got $list_code)"; fail=1; }
+          [ "$trash_code" = "200" ] || { echo "FAIL: GET /api/documents/trash still broken after self-heal (got $trash_code)"; fail=1; }
+
+          # --- Existing (trashed-before-the-regression) document is still
+          # there, still restorable — nothing was lost or corrupted.
+          restore_code=$(curl -s -o /tmp/heal_restore.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$heal_doc_id/restore" "${admin_auth[@]}")
+          echo "restore a document that was trashed before the simulated regression -> $restore_code"
+          [ "$restore_code" = "200" ] || { echo "FAIL: a document trashed before the regression is no longer restorable (got $restore_code)"; cat /tmp/heal_restore.json; fail=1; }
+
+          # --- The columns are back and working, not just present-but-broken.
+          new_doc_id=$(curl -s -X POST http://localhost:8080/api/documents "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          curl -s -o /dev/null -X PATCH "http://localhost:8080/api/documents/$new_doc_id/trash" "${admin_auth[@]}"
+          post_heal_deleted_by=$(curl -s http://localhost:8080/api/documents/trash "${admin_auth[@]}" \
+            | python3 -c "import sys,json; d=[x for x in json.load(sys.stdin) if x['id']=='$new_doc_id']; print(d[0]['deleted_by'] if d else '')")
+          echo "deleted_by for a document trashed after self-heal -> $post_heal_deleted_by"
+          [ "$post_heal_deleted_by" = "admin" ] || { echo "FAIL: deleted_by not recorded correctly after self-heal (got '$post_heal_deleted_by')"; fail=1; }
+
+          exit $fail
+
+      - name: Acceptance — Documents Delete permission (separate from Edit, real Nginx)
+        run: |
+          fail=0
+          admin_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"CHANGE_ME"}' \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          admin_auth=(-H "Authorization: Bearer $admin_token")
+          suffix=$RANDOM
+
+          operation_group_id=$(curl -s http://localhost:8080/api/admin/groups "${admin_auth[@]}" | python3 -c 'import sys,json; g=[x for x in json.load(sys.stdin) if x["name"]=="Operation"]; print(g[0]["id"])')
+          roles_json=$(curl -s "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}")
+          editor_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Editor"][0])')
+          viewer_role_id=$(echo "$roles_json" | python3 -c 'import sys,json; print([r["id"] for r in json.load(sys.stdin) if r["name"]=="Viewer"][0])')
+
+          # --- Two Editors: one with Delete, one without. RBAC here is
+          # role-based, not per-user — granting documents-delete to the
+          # shared "Editor" role would hand it to EVERY user on that
+          # role, including the one meant to prove Delete is NOT implied
+          # by Editor by default. So editor_del gets its own dedicated
+          # role (Editor's own documents:edit access, plus
+          # documents-delete); editor_nodel stays on the plain,
+          # never-touched-by-this-step "Editor" role.
+          editor_delete_role_id=$(curl -s -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/roles" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"name\":\"Editor+Delete_$suffix\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          docs_grant_code=$(curl -s -o /tmp/grant_docs.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_delete_role_id/access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"service_name":"documents","access_level":"edit"}')
+          echo "grant documents:edit to the dedicated Editor+Delete role -> $docs_grant_code"
+          [ "$docs_grant_code" = "201" ] || { echo "FAIL: could not grant documents:edit (got $docs_grant_code)"; cat /tmp/grant_docs.json; fail=1; }
+
+          grant_code=$(curl -s -o /tmp/grant_delete.json -w '%{http_code}' -X POST "http://localhost:8080/api/admin/roles/$editor_delete_role_id/access" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"service_name":"documents-delete"}')
+          echo "grant documents-delete to the dedicated Editor+Delete role -> $grant_code"
+          [ "$grant_code" = "201" ] || { echo "FAIL: could not grant documents-delete (got $grant_code)"; cat /tmp/grant_delete.json; fail=1; }
+
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_del_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_delete_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_nodel_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$editor_role_id\"}"
+          curl -s -o /dev/null -X POST "http://localhost:8080/api/admin/groups/$operation_group_id/users" "${admin_auth[@]}" \
+            -H 'Content-Type: application/json' -d "{\"username\":\"viewer_del_$suffix\",\"password\":\"correct horse battery staple\",\"role_id\":\"$viewer_role_id\"}"
+
+          editor_del_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_del_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_del_auth=(-H "Authorization: Bearer $editor_del_token")
+
+          # editor_nodel is on the plain "Editor" role, which this step
+          # never grants documents-delete to — it must read as False.
+          editor_nodel_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"editor_nodel_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          editor_nodel_auth=(-H "Authorization: Bearer $editor_nodel_token")
+
+          viewer_del_token=$(curl -s -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' -d "{\"username\":\"viewer_del_$suffix\",\"password\":\"correct horse battery staple\"}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+          viewer_del_auth=(-H "Authorization: Bearer $viewer_del_token")
+
+          # --- /admin/me reflects the permission (what the frontend uses
+          # to decide whether to render the Delete button at all).
+          editor_del_me=$(curl -s http://localhost:8080/api/admin/me "${editor_del_auth[@]}")
+          has_delete_in_me=$(echo "$editor_del_me" | python3 -c "import sys,json; print('documents-delete' in json.load(sys.stdin)['service_access'])")
+          echo "Editor-with-delete's /admin/me service_access includes documents-delete -> $has_delete_in_me"
+          [ "$has_delete_in_me" = "True" ] || { echo "FAIL: /admin/me does not reflect the granted documents-delete permission"; fail=1; }
+
+          editor_nodel_me=$(curl -s http://localhost:8080/api/admin/me "${editor_nodel_auth[@]}")
+          no_delete_in_me=$(echo "$editor_nodel_me" | python3 -c "import sys,json; print('documents-delete' in json.load(sys.stdin)['service_access'])")
+          echo "Editor-without-delete's /admin/me service_access includes documents-delete -> $no_delete_in_me"
+          [ "$no_delete_in_me" = "False" ] || { echo "FAIL: /admin/me reports documents-delete for an Editor that was never granted it"; fail=1; }
+
+          new_doc() {
+            curl -s -X POST http://localhost:8080/api/documents "$@" \
+              -H 'Content-Type: application/json' -d '{"doc_type":"quotation","items":[]}' \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'
+          }
+
+          # --- Editor + Delete -> DELETE (trash) succeeds.
+          doc_a=$(new_doc "${editor_del_auth[@]}")
+          code_a=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_a/trash" "${editor_del_auth[@]}")
+          echo "Editor+Delete trash a document -> $code_a"
+          [ "$code_a" = "200" ] || { echo "FAIL: Editor with Delete permission could not delete (got $code_a)"; fail=1; }
+
+          # --- Editor without Delete -> 403, and can still edit normally.
+          doc_b=$(new_doc "${editor_nodel_auth[@]}")
+          edit_code=$(curl -s -o /tmp/edit_ok.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_b" "${editor_nodel_auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"items":[]}')
+          echo "Editor-without-Delete can still edit -> $edit_code"
+          [ "$edit_code" = "200" ] || { echo "FAIL: Editor without Delete lost normal edit access too (got $edit_code)"; cat /tmp/edit_ok.json; fail=1; }
+          code_b=$(curl -s -o /tmp/nodel_trash.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_b/trash" "${editor_nodel_auth[@]}")
+          echo "Editor-without-Delete trash attempt -> $code_b"
+          [ "$code_b" = "403" ] || { echo "FAIL: Editor without Delete permission was able to delete (got $code_b)"; cat /tmp/nodel_trash.json; fail=1; }
+          still_there=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/documents/$doc_b" "${admin_auth[@]}")
+          [ "$still_there" = "200" ] || { echo "FAIL: the document from the rejected delete attempt is no longer reachable"; fail=1; }
+
+          # --- Viewer (never had Delete) -> 403 too (already view-only,
+          # re-confirmed here alongside the new permission).
+          doc_c=$(new_doc "${editor_del_auth[@]}")
+          code_c=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_c/trash" "${viewer_del_auth[@]}")
+          echo "Viewer trash attempt -> $code_c"
+          [ "$code_c" = "403" ] || { echo "FAIL: Viewer was able to delete a document (got $code_c)"; fail=1; }
+
+          # --- Forged X-Has-Document-Delete: true from a user who
+          # genuinely lacks it must still be rejected — Nginx must
+          # overwrite, not merge, this header exactly like the others.
+          forged_code=$(curl -s -o /tmp/forged_delete.json -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_b/trash" "${editor_nodel_auth[@]}" -H 'X-Has-Document-Delete: true')
+          echo "Editor-without-Delete + forged X-Has-Document-Delete: true -> $forged_code"
+          [ "$forged_code" = "403" ] || { echo "FAIL: forged X-Has-Document-Delete header bypassed the Delete permission check (got $forged_code)"; cat /tmp/forged_delete.json; fail=1; }
+
+          # --- Superuser remains completely unrestricted.
+          doc_d=$(new_doc "${admin_auth[@]}")
+          code_d=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_d/trash" "${admin_auth[@]}")
+          echo "Superuser trash -> $code_d"
+          [ "$code_d" = "200" ] || { echo "FAIL: superuser could not delete a document (got $code_d)"; fail=1; }
+
+          # --- Restore is unaffected by the new Delete gate (it was never
+          # a delete action) — re-confirm it still works for Editor+Delete.
+          restore_code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:8080/api/documents/$doc_a/restore" "${editor_del_auth[@]}")
+          echo "Editor+Delete restore a document -> $restore_code"
+          [ "$restore_code" = "200" ] || { echo "FAIL: restore broke for a user with Delete permission (got $restore_code)"; fail=1; }
+
+          exit $fail
+
+      - name: Dump logs on failure
+        if: failure()
+        working-directory: infra
+        run: docker compose logs --tail=300
+
+      - name: Tear down
+        if: always()
+        working-directory: infra
+        run: docker compose down -v

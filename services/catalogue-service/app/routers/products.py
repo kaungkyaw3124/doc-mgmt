@@ -19,9 +19,34 @@ from app.core.db import get_db
 from app.core.search_client import index_product, remove_product_from_index
 from app.core.storage import upload_file, get_presigned_url, download_file_bytes
 from app.core.document_client import get_visible_product_ids
+from app.core import duplicates as dup
+from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app import models, schemas
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _require_edit_access(x_access_level: str | None):
+    """Mirrors document-service/app/routers/companies.py's helper of the
+    same name — missing header defaults to "edit" (backward-compat,
+    restrictions are opt-in). A Viewer role's RoleAccess grant on
+    "products" sets X-Access-Level: view via Nginx's auth_request (see
+    infra/nginx/nginx.conf.template's /api/products location); this was
+    previously never checked anywhere in this router, so a Viewer could
+    write products despite the role model saying they shouldn't be able
+    to — see docs/SECURITY_HARDENING_LOG.md's User Control entry."""
+    if x_access_level == "view":
+        raise HTTPException(status_code=403, detail="your role has view-only access to products")
+
+
+def _sanitize_filename(filename: str | None) -> str:
+    """Strips directory components (blocks path traversal via the object
+    key) and collapses everything else to a safe character set — mirrors
+    document-service/app/routers/companies.py's helper of the same name."""
+    base = os.path.basename(filename or "") or "file"
+    return _SAFE_FILENAME_RE.sub("_", base)
 
 
 def _sub_item_counts_map(db: Session, product_ids: list) -> dict:
@@ -114,6 +139,21 @@ def _extract_archive_entries(filename: str | None, file_bytes: bytes):
     return _extract_zip_entries(file_bytes)
 
 
+def _raise_if_exact_duplicate(db: Session, name, description, x_allowed_projects: str | None, exclude_id=None):
+    """409 if another active product has the same normalized name AND
+    description. The block is catalogue-wide, but the existing product's
+    details are only included when the caller is allowed to see it."""
+    existing = dup.find_exact(db, name, description, exclude_id)
+    if existing is None:
+        return
+    visible_ids = get_visible_product_ids(x_allowed_projects)
+    shown = visible_ids is None or str(existing.id) in visible_ids
+    raise HTTPException(status_code=409, detail={
+        "message": "This item already exists",
+        "existing": {"id": str(existing.id), "sku": existing.sku, "name": existing.name} if shown else None,
+    })
+
+
 def _generate_sku(db: Session, category_name: str | None) -> str:
     """
     e.g. COM-0001 for a product in the "Computer" category — using that
@@ -140,7 +180,14 @@ def _generate_sku(db: Session, category_name: str | None) -> str:
 
 
 @router.post("", response_model=schemas.ProductOut, status_code=201)
-def create_product(payload: schemas.ProductCreate, db: Session = Depends(get_db)):
+def create_product(
+    payload: schemas.ProductCreate,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
+    _raise_if_exact_duplicate(db, payload.name, payload.description, x_allowed_projects)
     sku = payload.sku or _generate_sku(db, payload.category)
 
     existing = db.query(models.Product).filter_by(sku=sku).first()
@@ -181,6 +228,31 @@ def list_products(
     return _attach_sub_item_counts(db, query.order_by(models.Product.created_at.desc()).all())
 
 
+@router.get("/duplicate-check")
+def duplicate_check(
+    name: str = "",
+    description: str | None = None,
+    exclude_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    """Exact / same-name / similar active products for a name+description
+    about to be saved (the product form calls this before submitting)."""
+    products = dup.active_products(db, exclude_id, get_visible_product_ids(x_allowed_projects))
+    return {kind: [dup.brief(p) for p in matches] for kind, matches in dup.check(products, name, description).items()}
+
+
+@router.get("/duplicates")
+def list_duplicates(
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+):
+    """Groups of possible duplicates across the active catalogue, for the
+    "Possible duplicates" review page."""
+    products = dup.active_products(db, visible_ids=get_visible_product_ids(x_allowed_projects))
+    return {kind: [[dup.brief(p) for p in g] for g in gs] for kind, gs in dup.groups(products).items()}
+
+
 @router.get("/bulk-import-template")
 def download_product_bulk_import_template():
     """A blank spreadsheet with the right headers (plus one example row)
@@ -212,6 +284,7 @@ def bulk_import_products(
     excel_file: UploadFile = File(...),
     catalogue_zip: UploadFile | None = File(None),
     db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     """
     Creates many products at once from a spreadsheet, optionally matched
@@ -229,7 +302,15 @@ def bulk_import_products(
     "2" to the second, and so on. A blank/skipped row still "uses up"
     its number, so numbering always matches the row's position in the
     sheet, not the count of products actually created.
+
+    Duplicates: a row that is an exact duplicate (same normalized name and
+    description) of an active product, or of an earlier row in this file,
+    is skipped and listed in `skipped`; it still uses up its number like a
+    blank row. A row that only shares a name with a product is created, with
+    a {row, name, reason} entry in `warnings` (next to the existing
+    plain-text warnings).
     """
+    _require_edit_access(x_access_level)
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(excel_file.file.read()), data_only=True)
     except Exception:
@@ -273,7 +354,17 @@ def bulk_import_products(
             if stem.isdigit():
                 files_by_position[int(stem)] = (basename, data)
 
+    # Normalized (name, description) -> existing sku, and normalized name ->
+    # sku, both kept up to date as rows are created, so later rows in the
+    # same file are checked against earlier ones too.
+    existing = dup.active_products(db)
+    sku_by_key = {dup.key(p.name, p.description): p.sku for p in existing}
+    sku_by_name = {dup.norm(p.name): p.sku for p in existing}
+    row_by_key = {}
+
     created = []
+    skipped = []
+    name_warnings = []
     for position, row in enumerate(rows[1:], start=1):
         name = cell(row, name_idx)
         if not name:
@@ -294,12 +385,24 @@ def bulk_import_products(
         description = cell(row, description_idx)
         description = str(description).strip() if description else None
 
+        row_key = dup.key(name, description)
+        if row_key in sku_by_key:
+            reason = f"duplicate of row {row_by_key[row_key]}" if row_key in row_by_key else "already exists"
+            skipped.append({"row": position, "name": name, "reason": reason, "existing_sku": sku_by_key[row_key]})
+            continue  # still "uses up" this position number, like a blank row
+        if row_key[0] in sku_by_name:
+            name_warnings.append({"row": position, "name": name, "reason": f"same name as {sku_by_name[row_key[0]]}"})
+
         sku = _generate_sku(db, category)
         product = models.Product(sku=sku, name=name, category=category, unit_price=price, description=description)
         db.add(product)
         db.commit()
         db.refresh(product)
         index_product(product)
+
+        sku_by_key[row_key] = sku
+        sku_by_name.setdefault(row_key[0], sku)
+        row_by_key[row_key] = position
 
         entry = {"sku": sku, "name": name, "row": position, "has_file": False}
 
@@ -318,7 +421,7 @@ def bulk_import_products(
         leftover = ", ".join(str(k) for k in sorted(files_by_position.keys()))
         warnings.append(f"{len(files_by_position)} catalogue file(s) didn't match any spreadsheet row (numbers: {leftover})")
 
-    return {"created": created, "warnings": warnings}
+    return {"created": created, "skipped": skipped, "warnings": warnings + name_warnings}
 
 
 @router.get("/trash", response_model=list[schemas.ProductOut])
@@ -348,10 +451,12 @@ def trash_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     """Soft delete — hides it from the catalogue and main list, but keeps
     it recoverable via the recycle bin. For a permanent purge, use
     DELETE /{product_id} instead (only called from within the recycle bin)."""
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
@@ -367,11 +472,14 @@ def restore_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
     _check_product_visible(product, x_allowed_projects)
+    _raise_if_exact_duplicate(db, product.name, product.description, x_allowed_projects, exclude_id=product.id)
     product.is_deleted = False
     db.commit()
     db.refresh(product)
@@ -401,13 +509,23 @@ def update_product(
     payload: schemas.ProductUpdate,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
     _check_product_visible(product, x_allowed_projects)
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    new_name = changes.get("name", product.name)
+    new_description = changes.get("description", product.description)
+    # Only when the text changes: products that were already duplicates
+    # must still accept price/category/file edits.
+    if (new_name, new_description) != (product.name, product.description):
+        _raise_if_exact_duplicate(db, new_name, new_description, x_allowed_projects, exclude_id=product.id)
+
+    for field, value in changes.items():
         setattr(product, field, value)
 
     db.commit()
@@ -421,7 +539,9 @@ def delete_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
@@ -437,14 +557,33 @@ def upload_product_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
+    _require_edit_access(x_access_level)
     product = db.query(models.Product).filter_by(id=product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="product not found")
     _check_product_visible(product, x_allowed_projects)
 
-    object_key = f"{product.sku}/{file.filename}"
-    upload_file(file.file, object_key, content_type=file.content_type or "application/octet-stream")
+    sanitized_filename = _sanitize_filename(file.filename)
+
+    # Read only the leading bytes to check the file's actual content
+    # against what its extension claims — then rewind before streaming
+    # the full upload to storage. See app/core/upload_safety.py: this is
+    # a distinct check from Content-Type derivation below — it rejects
+    # the upload outright rather than just relabeling it.
+    head = file.file.read(4096)
+    file.file.seek(0)
+    if not content_matches_extension(sanitized_filename, head):
+        raise HTTPException(
+            status_code=400,
+            detail="file content does not match its extension",
+        )
+
+    object_key = f"{product.sku}/{sanitized_filename}"
+    # Content-Type is derived from the filename server-side, NEVER trusted
+    # from the client's upload — see app/core/upload_safety.py.
+    upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
 
     product.image_object_key = object_key
     db.commit()
@@ -461,7 +600,11 @@ def get_product_file_url(
     if not product or not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
     _check_product_visible(product, x_allowed_projects)
-    return {"url": get_presigned_url(product.image_object_key)}
+    return {
+        "url": get_presigned_url(
+            product.image_object_key, force_download=should_force_download(product.image_object_key)
+        )
+    }
 
 
 @router.get("/{product_id}/file-content")
@@ -536,7 +679,13 @@ def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/{product_id}/sub-items", response_model=schemas.SubItemOut, status_code=201)
-def add_sub_item(product_id: uuid.UUID, payload: schemas.SubItemAdd, db: Session = Depends(get_db)):
+def add_sub_item(
+    product_id: uuid.UUID,
+    payload: schemas.SubItemAdd,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     parent = db.query(models.Product).filter_by(id=product_id).first()
     if not parent:
         raise HTTPException(status_code=404, detail="product not found")
@@ -577,7 +726,13 @@ def add_sub_item(product_id: uuid.UUID, payload: schemas.SubItemAdd, db: Session
 
 
 @router.delete("/{product_id}/sub-items/{sub_item_id}", status_code=204)
-def remove_sub_item(product_id: uuid.UUID, sub_item_id: uuid.UUID, db: Session = Depends(get_db)):
+def remove_sub_item(
+    product_id: uuid.UUID,
+    sub_item_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
     sub_item = (
         db.query(models.ProductSubItem)
         .filter_by(id=sub_item_id, parent_product_id=product_id)

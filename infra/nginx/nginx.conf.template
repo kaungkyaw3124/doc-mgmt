@@ -1,0 +1,425 @@
+# This is a TEMPLATE, not a config Nginx reads directly — the nginx
+# container's entrypoint (infra/nginx/docker-entrypoint.sh, run by
+# infra/docker-compose.yml's `nginx` service) runs `envsubst` on it at
+# startup, substituting the placeholders for the internal shared secret
+# (see the X-Internal-Secret lines below) and the trusted CORS origin
+# (see the `map` block below) with their real values, and writing the
+# result to nginx.conf. envsubst is invoked with an explicit two-variable
+# list, so it does NOT touch Nginx's own $variables ($host, $uri,
+# $upstream_http_..., etc.) below — only those two placeholders are
+# replaced. (Not spelled out literally in this comment on purpose —
+# envsubst is a dumb text substitution and would replace it here too if
+# it appeared verbatim.)
+# njs (bundled with the official nginx image): computes the web UI's version
+# from app.js's mtime — see "Static UI caching" below.
+load_module modules/ngx_http_js_module.so;
+
+events {}
+
+http {
+    # This custom nginx.conf.template replaces the stock nginx.conf
+    # entirely (see the file header above) rather than extending it, so
+    # nothing here was ever pulling in the image's own
+    # /etc/nginx/mime.types — every static response fell back to
+    # nginx's compiled-in default_type (text/plain). That went unnoticed
+    # for index.html because top-level navigations aren't strictly
+    # nosniff-gated the way subresources are (browsers still apply their
+    # own HTML-detection heuristic when a document is what's being
+    # navigated to). It is NOT unnoticeable for web/js/app.js: a
+    # <script src> is a "script"-destination subresource, which Task 8's
+    # X-Content-Type-Options: nosniff (below) DOES strictly gate — served
+    # as text/plain, the browser would silently refuse to execute it
+    # rather than erroring loudly. Explicit and correct now for both.
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    js_import static_version from /etc/nginx/static-version.js;
+
+    # Task 8 — stop advertising the exact Nginx version. Applies to the
+    # `Server` response header AND Nginx's own auto-generated error
+    # pages (404, 500, etc. — both currently include the version in
+    # their footer; server_tokens off removes it from both at once).
+    # Does NOT, on its own, stop an upstream (auth-service/catalogue-
+    # service/document-service/search-service's uvicorn, or MinIO) from
+    # disclosing ITS OWN Server header through the proxy — see the
+    # `proxy_hide_header Server;` on every proxied location below for
+    # that half of the fix.
+    server_tokens off;
+
+    # Default is 1MB, which silently rejects any catalog file/PDF/logo over
+    # that size with a plain (non-JSON) error page before it even reaches
+    # the app — bump it so real uploads (spec sheets, brochures, etc.) work.
+    client_max_body_size 25m;
+
+    # Task 8 — slow-client protection. Conservative, generous timeouts
+    # (this app's own slowest legitimate operation, the catalogue
+    # export, already gets its own explicit 300s proxy_read_timeout
+    # below — these are just the defaults for everything else, previously
+    # left at Nginx's own built-in defaults of 60s, which is already
+    # reasonable but was never explicit).
+    client_body_timeout 30s;
+    client_header_timeout 30s;
+
+    # Task 7 — CORS. This app is same-origin end-to-end in its real
+    # deployment (Nginx serves both the static frontend and every API
+    # path from one origin — see web/index.html's API_BASE), so no
+    # legitimate normal use of this app is a cross-origin browser
+    # request at all; nothing here is required for login/refresh/logout/
+    # any authenticated API call to keep working. What this closes off
+    # is the *implicit* safety of "no CORS headers exist anywhere" —
+    # accidental, not policy — which is one dropped-in
+    # `allow_origins=["*"]` away from becoming a real hole. $http_origin
+    # is matched against exactly ONE configured trusted origin
+    # (CORS_ALLOWED_ORIGIN); anything else maps to the empty string,
+    # which infra/nginx/cors.conf then sends as-is — an unrecognized or
+    # absent Origin gets NO Access-Control-Allow-Origin header at all,
+    # so the browser blocks the response itself. Never a wildcard, never
+    # every Origin echoed back unconditionally.
+    map $http_origin $cors_allowed_origin {
+        default "";
+        "${CORS_ALLOWED_ORIGIN}" $http_origin;
+    }
+
+    server {
+        listen 80;
+        # HTTPS listener, same locations as the plain-HTTP one below —
+        # generate-self-signed-cert.sh (run by docker-entrypoint.sh
+        # before this config is even rendered) guarantees these two
+        # files exist by the time Nginx starts. A self-signed cert is
+        # expected here: this app has no public DNS name to get a real
+        # (Let's Encrypt) certificate for on a private VM — see that
+        # script's own comments for what SERVER_NAME controls and why
+        # browsers still show a one-time trust prompt regardless. Kept
+        # alongside plain HTTP (not a redirect) so existing dev/CI usage
+        # of the :80 origin is completely unaffected — this is additive.
+        listen 443 ssl;
+        ssl_certificate /etc/nginx/certs/fullchain.pem;
+        ssl_certificate_key /etc/nginx/certs/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+
+        # Serve the demo web UI as static files at the root
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Static UI caching. Without a Cache-Control header browsers cached
+        # web/ heuristically (from Last-Modified) and kept running an old
+        # js/app.js after an update until a hard refresh. Now every UI file
+        # is `no-cache`: the browser may keep a copy but revalidates it on
+        # each load (a cheap 304 when unchanged). add_header in a location
+        # replaces inherited ones, so each location here re-includes the
+        # security headers. /api/* and MinIO downloads are unaffected.
+        #
+        # index.html is served by infra/nginx/static-version.js: it writes
+        # app.js's mtime into the <script src> `?v=` placeholder, so a browser
+        # that still holds an old app.js under the bare URL fetches the new
+        # one on its next normal load, and it answers If-None-Match itself
+        # with an ETag covering both files.
+        location = /index.html {
+            include /etc/nginx/security-headers.conf;
+            add_header Cache-Control "no-cache" always;
+            js_content static_version.index;
+        }
+
+        location / {
+            include /etc/nginx/security-headers.conf;
+            add_header Cache-Control "no-cache" always;
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Presigned MinIO download URLs (see get_presigned_url() in
+        # document-service/catalogue-service's storage.py) are signed
+        # against MINIO_PUBLIC_ENDPOINT so the browser can fetch a file
+        # directly without MinIO's own port being published to the host —
+        # see infra/docker-compose.yml. Proxied with NO path rewrite and
+        # the original Host header preserved: both the path and the Host
+        # header are part of what was signed, so changing either here
+        # would make MinIO reject the (otherwise valid) signature. Bucket
+        # names ("documents", "products") double as the location prefix —
+        # MinIO's own S3 API already addresses objects at exactly this
+        # path (/<bucket>/<key>), so this is a transparent passthrough,
+        # not a rewrite. Still safe to expose unauthenticated: MinIO
+        # itself enforces the signature and its expiry on every request.
+        # MINIO_PUBLIC_ENDPOINT includes a port ("localhost:8080"), and
+        # that exact host:port is part of what boto3 signed — so this
+        # must forward $http_host (the client's raw Host header, port and
+        # all), NOT $host, which nginx defines to have the port already
+        # stripped off. Forwarding $host here silently breaks every
+        # presigned-URL signature check (SignatureDoesNotMatch / 403).
+        location /documents/ {
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            proxy_pass http://minio:9000;
+            proxy_set_header Host $http_host;
+        }
+
+        location /products/ {
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            proxy_pass http://minio:9000;
+            proxy_set_header Host $http_host;
+        }
+
+        # Internal-only location Nginx uses to check tokens + RBAC access via
+        # auth-service's /verify endpoint before letting a request through.
+        # $service_name is set per-location below and is visible here because
+        # it's part of the same client request's variable scope.
+        location = /_verify {
+            internal;
+            proxy_pass http://auth-service:8000/verify;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Service $service_name;
+        }
+
+        # Public: no auth required to log in
+        location /api/auth/login {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/auth/login$ /login break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+            # auth-service rate-limits /login by client IP — without this
+            # it would only ever see Nginx's own container IP.
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Public: no auth required to self-register (account stays pending
+        # approval until a superuser approves it — see /api/admin/users/pending)
+        location /api/auth/register {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/auth/register$ /register break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+        }
+
+        # Public: lets the registration form offer "which group are you
+        # requesting to join?" without requiring a login first.
+        location /api/auth/groups-public {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/auth/groups-public$ /groups-public break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+        }
+
+        # Public: authenticates via the HttpOnly refresh cookie itself
+        # (see auth-service/app/routers/auth.py), not a Bearer token, so
+        # no auth_request here — Nginx forwards the Cookie request header
+        # and the Set-Cookie response header by default, no extra
+        # directives needed for either.
+        location /api/auth/refresh {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/auth/refresh$ /refresh break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+        }
+
+        # Public: same reasoning as /refresh — authenticates via the
+        # refresh cookie, always succeeds either way.
+        location /api/auth/logout {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/auth/logout$ /logout break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+        }
+
+        # auth-service's own admin endpoints (users/groups/roles/access) check
+        # authorization themselves (superuser / group-admin logic), so these
+        # just pass through — no auth_request needed at the gateway for them.
+        location /api/auth/users {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/auth/users(.*)$ /users$1 break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
+        }
+
+        location /api/admin/ {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/admin/(.*)$ /admin/$1 break;
+            proxy_pass http://auth-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
+        }
+
+        # --- everything below requires a valid Bearer token AND service access ---
+
+        # NOTE on every document-service/catalogue-service location from
+        # here down: each one explicitly sets ALL of that service's trust
+        # headers — including ones THIS route's own handlers don't
+        # currently read — not just the ones it happens to need.
+        # proxy_set_header replaces whatever value nginx would otherwise
+        # forward (nginx forwards arbitrary client request headers
+        # upstream by default unless a location overrides that name), so
+        # a header this location has no auth_request_set value for is
+        # explicitly blanked (""), never left for a client-supplied copy
+        # to pass through. This is deliberately redundant with what each
+        # handler currently reads — it's what keeps a future handler
+        # change (e.g. a route starts reading X-Username for audit
+        # logging) from silently reopening a header-forgery gap just
+        # because nobody remembered to update Nginx too.
+        location /api/documents {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "documents";
+            auth_request /_verify;
+            auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
+            auth_request_set $access_level $upstream_http_x_access_level;
+            auth_request_set $has_audit_log $upstream_http_x_has_audit_log;
+            auth_request_set $has_document_delete $upstream_http_x_has_document_delete;
+            auth_request_set $current_username $upstream_http_x_username;
+            rewrite ^/api/documents(.*)$ /documents$1 break;
+            proxy_pass http://document-service:8000;
+            proxy_set_header Host $host;
+            # Proves to document-service that this request really came
+            # through Nginx (which just did the auth_request check above)
+            # rather than a client that reached document-service by some
+            # other path and set these trust headers itself — see
+            # services/document-service/app/core/gateway_auth.py.
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_set_header X-Allowed-Projects $allowed_projects;
+            proxy_set_header X-Access-Level $access_level;
+            proxy_set_header X-Has-Audit-Log $has_audit_log;
+            # Delete permission (see docs/SECURITY_HARDENING_LOG.md's
+            # "Delete permission" entry) is deliberately separate from
+            # X-Access-Level — a role can grant edit but not delete.
+            proxy_set_header X-Has-Document-Delete $has_document_delete;
+            proxy_set_header X-Username $current_username;
+            # The catalogue export can take a while — it makes several
+            # sequential calls to catalogue-service per document, and
+            # individual calls have been observed taking 30+ seconds each
+            # (see catalogue_client.py — worth investigating the root
+            # cause separately, but for now this needs enough headroom).
+            proxy_read_timeout 300s;
+        }
+
+        location /api/customers {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "documents";
+            auth_request /_verify;
+            auth_request_set $access_level $upstream_http_x_access_level;
+            rewrite ^/api/customers(.*)$ /customers$1 break;
+            proxy_pass http://document-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_set_header X-Access-Level $access_level;
+            proxy_set_header X-Allowed-Projects "";
+            proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Has-Document-Delete "";
+            proxy_set_header X-Username "";
+        }
+
+        location /api/companies {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "documents";
+            auth_request /_verify;
+            auth_request_set $access_level $upstream_http_x_access_level;
+            rewrite ^/api/companies(.*)$ /companies$1 break;
+            proxy_pass http://document-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_set_header X-Access-Level $access_level;
+            proxy_set_header X-Allowed-Projects "";
+            proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Has-Document-Delete "";
+            proxy_set_header X-Username "";
+        }
+
+        location /api/projects {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "documents";
+            auth_request /_verify;
+            auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
+            auth_request_set $access_level $upstream_http_x_access_level;
+            rewrite ^/api/projects(.*)$ /projects$1 break;
+            proxy_pass http://document-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_set_header X-Allowed-Projects $allowed_projects;
+            proxy_set_header X-Access-Level $access_level;
+            proxy_set_header X-Has-Audit-Log "";
+            proxy_set_header X-Has-Document-Delete "";
+            proxy_set_header X-Username "";
+        }
+
+        location /api/products {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "products";
+            auth_request /_verify;
+            auth_request_set $has_category_access $upstream_http_x_has_category_access;
+            auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
+            auth_request_set $access_level $upstream_http_x_access_level;
+            rewrite ^/api/products(.*)$ /products$1 break;
+            proxy_pass http://catalogue-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_set_header X-Has-Category-Access $has_category_access;
+            proxy_set_header X-Allowed-Projects $allowed_projects;
+            # Task 7/User Control gap fix: this was previously never
+            # captured or forwarded here, so Nginx left the client's own
+            # X-Access-Level header untouched instead of overwriting it —
+            # a Viewer could forge "X-Access-Level: edit" directly and
+            # products.py's _require_edit_access would trust it. See
+            # docs/SECURITY_HARDENING_LOG.md's User Control entry.
+            proxy_set_header X-Access-Level $access_level;
+        }
+
+        location /api/categories {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "products";
+            auth_request /_verify;
+            auth_request_set $has_category_access $upstream_http_x_has_category_access;
+            rewrite ^/api/categories(.*)$ /categories$1 break;
+            proxy_pass http://catalogue-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_set_header X-Has-Category-Access $has_category_access;
+            proxy_set_header X-Allowed-Projects "";
+            # Not read by categories.py today (it uses its own
+            # X-Has-Category-Access axis), but blanked anyway per this
+            # file's redundant-blanking policy — see the note above
+            # /api/documents.
+            proxy_set_header X-Access-Level "";
+        }
+
+        location /api/search {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "search";
+            auth_request /_verify;
+            auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
+            rewrite ^/api/search(.*)$ /search$1 break;
+            proxy_pass http://search-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_set_header X-Allowed-Projects $allowed_projects;
+        }
+    }
+}

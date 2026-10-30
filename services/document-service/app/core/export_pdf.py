@@ -46,8 +46,11 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
     customer_address = ""
     customer_dict = None
     if customer:
-        customer_dict = {"id": str(customer["id"]), "name": customer["name"]}
-        if customer.get("billing_address"):
+        customer_dict = {"id": str(customer["id"]), "name": customer["name"],
+                         "organization": customer.get("organization") or customer["name"]}
+        if customer.get("address"):  # one-time customer: typed as one block
+            customer_address = customer["address"]
+        elif customer.get("billing_address"):
             customer_address = ", ".join(str(v) for v in customer["billing_address"].values())
 
     categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}
@@ -58,7 +61,20 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
     catalogue_number = 0  # matches the Catalogue zip export's numbering — only product-based items count
     for item, product, sub_items in items_with_product:
         item_name = product["name"] if product else (item.description or "")
-        description = (product.get("description") if product else None) or item.description or ""
+        # item.description is also what item_name falls back to above (a
+        # manual line item has no separate name/description split, and a
+        # product-linked item defaults its description to the product's
+        # own name at creation time — see _process_items in
+        # routers/documents.py). Falling back to it unconditionally here
+        # (as this used to) printed that identical text a second time on
+        # the row, in regular weight right below the bold name, quietly
+        # doubling the row's height. Only treat it as a genuinely separate
+        # description when it actually differs from item_name — e.g. a
+        # product with its own description, or a line item whose
+        # description was deliberately customized away from the product
+        # name at creation.
+        item_description_override = item.description if item.description != item_name else None
+        description = (product.get("description") if product else None) or item_description_override or ""
         amount = float(item.quantity or 0) * float(item.unit_price or 0)
         total += amount
 
@@ -86,6 +102,24 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
             ],
         })
 
+    # `total` above is the sum of each line's quantity * unit_price — the
+    # pre-tax subtotal. The document's own stored subtotal/tax_total/total
+    # (kept in sync with its items on every create/update — see
+    # _process_items in routers/documents.py) are the authoritative source
+    # for the tax breakdown itself; falling back to the recomputed subtotal
+    # only covers a document saved before tax_total existed.
+    subtotal_value = float(document.subtotal) if document.subtotal is not None else total
+    tax_total_value = float(document.tax_total) if document.tax_total is not None else 0.0
+    grand_total_value = float(document.total) if document.total is not None else subtotal_value + tax_total_value
+    # Tax is a single rate applied uniformly to every line item (see the
+    # document-level "Tax rate %" field in web/js/app.js) — reading it off
+    # the first item mirrors how the app's own document-detail view labels
+    # it (`doc.items[0].tax_rate`), rather than recomputing a rate from
+    # amounts, which would divide by zero for a zero-subtotal document.
+    tax_rate_value = 0.0
+    if items_with_product and items_with_product[0][0].tax_rate is not None:
+        tax_rate_value = float(items_with_product[0][0].tax_rate)
+
     html_str = template.render(
         logo_data_uri=logo_data_uri,
         seal_data_uri=seal_data_uri,
@@ -99,7 +133,11 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         currency=document.currency,
         group_label=group_label,
         items=items,
-        total=f"{total:,.2f}",
+        subtotal=f"{subtotal_value:,.2f}",
+        tax_rate=f"{tax_rate_value:g}",
+        tax_total=f"{tax_total_value:,.2f}",
+        has_tax=tax_total_value > 0,
+        total=f"{grand_total_value:,.2f}",
         terms_text=document.terms_and_conditions or DEFAULT_TERMS,
     )
 

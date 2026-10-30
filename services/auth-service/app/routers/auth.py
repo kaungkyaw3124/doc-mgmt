@@ -1,18 +1,59 @@
 import uuid
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.db import get_db
 from app.core.jwt_utils import create_access_token, decode_access_token
 from app.core.security import hash_password, verify_password
 from app.core.deps import require_superuser
 from app.core.authz import user_has_service_access, get_user_allowed_project_ids, get_user_access_level
+from app.core.rate_limit import RateLimitExceeded, check_login_rate_limit, get_client_ip, record_failed_attempt
+from app.core.refresh_tokens import issue_refresh_token, revoke_refresh_token, rotate_refresh_token
 from app import models
 
 router = APIRouter(tags=["auth"])
+
+REFRESH_COOKIE_NAME = "refresh_token"
+# Root-scoped. This USED to be "/api/auth" on the theory that a browser
+# matches Cookie Path against the URL it actually requested — true, but
+# that URL is always /api/auth/* only via Nginx's rewrite (the frontend
+# only ever calls API_BASE + '/auth/...', see web/index.html); this
+# service's OWN routes are mounted at bare paths ("/login", "/refresh",
+# "/logout" — no "/api/auth" prefix inside the container, see main.py).
+# A caller that talks to those bare paths directly — this task's own
+# real end-to-end test suite, TestClient, being one — would never get
+# the cookie attached, since Path is a browser/HTTP-client-side
+# same-request-shape filter with no server-side enforcement at all
+# (this fix is what re-verifying Task 6 end-to-end, not just trusting
+# the design comment, actually caught). Scoping to "/" costs nothing
+# meaningful here: HttpOnly is what actually keeps this cookie away
+# from JavaScript, and every other endpoint in this single-origin app
+# simply never reads a cookie it doesn't look for.
+REFRESH_COOKIE_PATH = "/"
+
+
+def _set_refresh_cookie(response: Response, plaintext: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=plaintext,
+        max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
+        path=REFRESH_COOKIE_PATH,
+        httponly=True,
+        samesite="lax",
+        # Secure requires HTTPS — only turned on in production, where TLS
+        # termination is assumed (see docs/deployment.md). Forcing it on
+        # in dev (plain http://localhost:8080) would make the browser
+        # silently refuse to ever send the cookie back.
+        secure=(settings.environment == "production"),
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
 
 
 class LoginRequest(BaseModel):
@@ -92,9 +133,25 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(request)
+
+    try:
+        check_login_rate_limit(db, client_ip, payload.username)
+    except RateLimitExceeded as exc:
+        # Same 429 + generic message regardless of whether the account
+        # exists, and regardless of which of the three limits tripped —
+        # nothing here should let a caller distinguish "real account,
+        # rate-limited" from "no such account, rate-limited".
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
     user = db.query(models.User).filter_by(username=payload.username).first()
     if not user or not verify_password(payload.password, user.hashed_password):
+        record_failed_attempt(db, client_ip, payload.username)
         raise HTTPException(status_code=401, detail="invalid username or password")
 
     if not user.is_approved:
@@ -107,7 +164,47 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Your account has been disabled. Contact an administrator.")
 
     token = create_access_token(subject=str(user.id))
+    refresh_plaintext = issue_refresh_token(db, user)
+    _set_refresh_cookie(response, refresh_plaintext)
     return TokenResponse(access_token=token)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """
+    Mints a new access token from the HttpOnly refresh cookie, rotating
+    the refresh token in the process (the presented one is revoked, a new
+    one takes its place in the cookie) — called by the frontend on page
+    load (silent re-auth) and transparently when an API call gets a 401
+    for an expired access token. 401 if the cookie is missing, expired,
+    already-used (replayed), or belongs to a since-disabled/un-approved
+    user.
+    """
+    presented = request.cookies.get(REFRESH_COOKIE_NAME)
+    result = rotate_refresh_token(db, presented)
+    if result is None:
+        _clear_refresh_cookie(response)
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+
+    user, new_plaintext = result
+    _set_refresh_cookie(response, new_plaintext)
+    token = create_access_token(subject=str(user.id))
+    return TokenResponse(access_token=token)
+
+
+@router.post("/logout", status_code=204)
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Revokes the current refresh token server-side (not just a client-
+    side "forget the token" — the cookie's token can no longer be used to
+    mint a new access token even if it leaks) and clears the cookie.
+    Always succeeds, even with no/an already-invalid cookie."""
+    presented = request.cookies.get(REFRESH_COOKIE_NAME)
+    revoke_refresh_token(db, presented)
+    _clear_refresh_cookie(response)
 
 
 @router.get("/verify")
@@ -167,6 +264,7 @@ def verify(
         response.headers["X-Access-Level"] = get_user_access_level(db, user, x_service)
     response.headers["X-Has-Audit-Log"] = str(user_has_service_access(db, user, "audit-log")).lower()
     response.headers["X-Has-Category-Access"] = str(user_has_service_access(db, user, "categories")).lower()
+    response.headers["X-Has-Document-Delete"] = str(user_has_service_access(db, user, "documents-delete")).lower()
 
     return {"status": "ok"}
 

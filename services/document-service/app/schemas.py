@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class ProjectCreate(BaseModel):
@@ -31,11 +31,10 @@ class ProjectOut(BaseModel):
 class CompanyCreate(BaseModel):
     name: str
     short_name: Optional[str] = None  # e.g. "SS" for Swift Solution — used in doc numbers
-    position: Optional[str] = None
+    position: Optional[str] = None  # signer/signature title — not shown in the quotation Supplier block
     address: Optional[str] = None
     contact_no: Optional[str] = None
     support_email: Optional[str] = None
-    support_phone: Optional[str] = None
     is_primary: bool = False
 
 
@@ -46,7 +45,6 @@ class CompanyUpdate(BaseModel):
     address: Optional[str] = None
     contact_no: Optional[str] = None
     support_email: Optional[str] = None
-    support_phone: Optional[str] = None
     is_primary: Optional[bool] = None
 
 
@@ -59,7 +57,6 @@ class CompanyOut(BaseModel):
     address: Optional[str]
     contact_no: Optional[str]
     support_email: Optional[str]
-    support_phone: Optional[str]
     logo_object_key: Optional[str]
     seal_object_key: Optional[str]
     is_primary: bool
@@ -69,6 +66,18 @@ class CompanyOut(BaseModel):
 
 class CompanyDirectorCreate(BaseModel):
     name: str
+    address: Optional[str] = None
+    contact_no: Optional[str] = None
+    email: Optional[str] = None
+    position: Optional[str] = None
+
+
+class CompanyDirectorUpdate(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    contact_no: Optional[str] = None
+    email: Optional[str] = None
+    position: Optional[str] = None
 
 
 class CompanyDirectorOut(BaseModel):
@@ -76,29 +85,46 @@ class CompanyDirectorOut(BaseModel):
     id: uuid.UUID
     company_id: uuid.UUID
     name: str
+    address: Optional[str]
+    contact_no: Optional[str]
+    email: Optional[str]
+    position: Optional[str] = None  # None for directors created before the column existed
     seal_object_key: Optional[str]
     sort_order: int
     created_at: datetime
 
 
+def _blank_to_none(value):
+    """Trimmed; blank -> None, so the name is used as the organization."""
+    return (value or "").strip() or None
+
+
 class CustomerCreate(BaseModel):
     name: str
+    organization: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     billing_address: Optional[dict] = None
+
+
+    _organization = field_validator("organization")(_blank_to_none)
 
 
 class CustomerUpdate(BaseModel):
     name: Optional[str] = None
+    organization: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     billing_address: Optional[dict] = None
+
+    _organization = field_validator("organization")(_blank_to_none)
 
 
 class CustomerOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     name: str
+    organization: Optional[str] = None
     email: Optional[str]
     phone: Optional[str]
     billing_address: Optional[dict]
@@ -134,6 +160,13 @@ class DocumentCreate(BaseModel):
     due_date: Optional[date] = None
     doc_metadata: Optional[dict] = None
     terms_and_conditions: Optional[str] = None
+    # One-time customer for this document only (never saved as a Customer);
+    # mutually exclusive with customer_id — see documents._manual_end_user.
+    end_user_name: Optional[str] = None
+    end_user_organization: Optional[str] = None
+    end_user_address: Optional[str] = None
+    end_user_phone: Optional[str] = None
+    end_user_email: Optional[str] = None
     items: list[DocumentItemIn] = []
 
 
@@ -144,6 +177,13 @@ class DocumentUpdate(BaseModel):
     director_id: Optional[uuid.UUID] = None
     currency: Optional[str] = None  # omit to leave the document's existing currency unchanged
     terms_and_conditions: Optional[str] = None
+    # One-time customer for this document only (never saved as a Customer);
+    # mutually exclusive with customer_id — see documents._manual_end_user.
+    end_user_name: Optional[str] = None
+    end_user_organization: Optional[str] = None
+    end_user_address: Optional[str] = None
+    end_user_phone: Optional[str] = None
+    end_user_email: Optional[str] = None
     items: list[DocumentItemIn] = []
 
 
@@ -156,6 +196,11 @@ class DocumentOut(BaseModel):
     project_id: Optional[uuid.UUID]
     company_id: Optional[uuid.UUID]
     director_id: Optional[uuid.UUID]
+    end_user_name: Optional[str] = None
+    end_user_organization: Optional[str] = None
+    end_user_address: Optional[str] = None
+    end_user_phone: Optional[str] = None
+    end_user_email: Optional[str] = None
     status: str
     currency: str
     subtotal: Optional[Decimal]
@@ -169,4 +214,6 @@ class DocumentOut(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
+    deleted_by: Optional[str] = None
+    deleted_at: Optional[datetime] = None
     items: list[DocumentItemOut] = []

@@ -3,6 +3,7 @@
 ## 1. Summary
 - **Status**: DONE | BLOCKED | NEEDS_DECISION
 - **Goal**: <copied from PLAN.md>
+- **Ponytail skill loaded**: yes / no (the `ponytail` skill in `.claude/skills/`, loaded with the Skill tool at the start)
 - **Branch / commit**: `loop/iter-<N>-...` @ `<short sha>`
 - **One-paragraph summary**: what was built/changed and whether it works.
 

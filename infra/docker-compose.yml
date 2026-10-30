@@ -10,25 +10,42 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d   # creates the "catalogue" DB on first boot
-    ports:
-      - "5432:5432"   # exposed for now so you can inspect with psql/DBeaver while building; remove later
+    # Not published to the host — only reachable from other containers on
+    # this compose network (see docs/operations.md for how to get admin
+    # access to it when you need to, without leaving it open permanently).
+    expose:
+      - "5432"
     restart: unless-stopped
 
   minio:
-    image: minio/minio
+    # Overridable because upstream minio/minio has been removed from Docker
+    # Hub ("repository does not exist"), so a fresh machine can no longer
+    # pull it. scripts/verify.sh points this at a drop-in community build;
+    # the default is left unchanged so existing deployments (which have the
+    # image cached) are not switched to a different build silently.
+    image: ${MINIO_IMAGE:-minio/minio}
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - ./data/minio:/data
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console
+    # Not published to the host — only document-service/catalogue-service
+    # reach it (S3 API), over this compose network. See docs/operations.md
+    # for admin console access without leaving it open permanently.
+    expose:
+      - "9000"   # S3 API
+      - "9001"   # web console
     restart: unless-stopped
 
   document-service:
-    build: ../services/document-service
+    build:
+      context: ../services/document-service
+      # Only needed on networks where the default deb.debian.org (Fastly)
+      # is unreachable — see the ARG's comment in the Dockerfile. Leave
+      # unset for normal use; CI and most local dev never need this.
+      args:
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     env_file: ../services/document-service/.env
     depends_on:
       - postgres
@@ -40,7 +57,10 @@ services:
     restart: unless-stopped
 
   catalogue-service:
-    build: ../services/catalogue-service
+    build:
+      context: ../services/catalogue-service
+      args:
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     env_file: ../services/catalogue-service/.env
     depends_on:
       - postgres
@@ -60,8 +80,10 @@ services:
       MEILI_ENV: development
     volumes:
       - ./data/meili:/meili_data
-    ports:
-      - "7700:7700"
+    # Not published to the host — only document-service/catalogue-service/
+    # search-service reach it, over this compose network.
+    expose:
+      - "7700"
     restart: unless-stopped
 
   search-service:
@@ -75,7 +97,10 @@ services:
     restart: unless-stopped
 
   auth-service:
-    build: ../services/auth-service
+    build:
+      context: ../services/auth-service
+      args:
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     env_file: ../services/auth-service/.env
     depends_on:
       - postgres
@@ -85,14 +110,66 @@ services:
 
   nginx:
     image: nginx:alpine
+    environment:
+      # Must match INTERNAL_SHARED_SECRET in each of document-service/
+      # catalogue-service/search-service's .env — see
+      # infra/nginx/nginx.conf.template and each service's
+      # app/core/gateway_auth.py.
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:-local_dev_internal_secret_change_me}
+      # Task 7 (CORS): the single browser origin this deployment trusts
+      # for cross-origin requests — see infra/nginx/nginx.conf.template's
+      # `map` block and infra/nginx/cors.conf. Defaults to this stack's
+      # own published port, matching how it's actually reached in local
+      # dev/CI (http://localhost:8080) — see infra/nginx/
+      # validate-cors-config.sh for why this default can never pass as a
+      # production value.
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-http://localhost:8080}
+      # Gates infra/nginx/validate-cors-config.sh's production fail-fast
+      # check — same "development" default/meaning as every other
+      # service's ENVIRONMENT setting in this project.
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      # Host/IP clients actually use to reach this deployment — becomes
+      # the self-signed HTTPS certificate's Subject Alternative Name
+      # (see infra/nginx/generate-self-signed-cert.sh). A private VM's
+      # IP is the normal case here; set this in infra/.env to match it,
+      # or a real hostname wouldn't need a mismatch warning either way.
+      SERVER_NAME: ${SERVER_NAME:-localhost}
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./nginx/cors.conf:/etc/nginx/cors.conf:ro
+      - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
+      - ./nginx/static-version.js:/etc/nginx/static-version.js:ro
+      - ./nginx/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+      - ./nginx/validate-cors-config.sh:/validate-cors-config.sh:ro
+      - ./nginx/generate-self-signed-cert.sh:/generate-self-signed-cert.sh:ro
       - ../web:/usr/share/nginx/html:ro
+      # Persists the generated self-signed cert/key across container
+      # restarts — without this, every restart would regenerate them
+      # (generate-self-signed-cert.sh is only idempotent against files
+      # that actually still exist) and re-trigger every browser's
+      # one-time "new certificate" trust prompt for no reason.
+      - ./data/nginx-certs:/etc/nginx/certs
+    # Render the template (substituting ONLY $INTERNAL_SHARED_SECRET and
+    # $CORS_ALLOWED_ORIGIN — see the comment at the top of
+    # nginx.conf.template for why the variable list passed to envsubst
+    # must stay this explicit) into the real config, then start Nginx —
+    # see infra/nginx/docker-entrypoint.sh (also runs the Task 7
+    # production CORS-config fail-fast check, and generates a
+    # self-signed HTTPS cert if one doesn't already exist, before
+    # rendering).
+    entrypoint:
+      - /bin/sh
+      - /docker-entrypoint.sh
     ports:
       - "8080:80"
+      # HTTPS — see infra/nginx/nginx.conf.template's `listen 443 ssl`.
+      # Kept alongside :8080 (not a redirect), so existing dev/CI usage
+      # of the plain-HTTP origin is unaffected.
+      - "8443:443"
     depends_on:
       - document-service
       - catalogue-service
       - search-service
       - auth-service
+      - minio
     restart: unless-stopped

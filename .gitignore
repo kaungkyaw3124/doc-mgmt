@@ -6,3 +6,4 @@ __pycache__/
 infra/data/postgres/
 infra/data/minio/
 infra/data/redis/
+.venv-tests/

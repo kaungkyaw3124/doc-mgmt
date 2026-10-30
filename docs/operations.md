@@ -9,6 +9,24 @@ docker compose restart nginx  # required after ANY nginx.conf edit — no hot re
 docker compose down            # stop (bind-mounted data in ./data/ survives)
 ```
 
+## Updating a server
+
+```bash
+git pull
+docker compose -f infra/docker-compose.yml up -d --build
+docker compose -f infra/docker-compose.yml restart nginx
+```
+
+The nginx restart is required, not optional: nginx resolves the backends'
+hostnames once when it starts, and `up --build` recreates any backend whose
+image changed — with a possibly different internal IP — while nginx keeps
+running. Without the restart, nginx can send requests to the wrong service
+(seen as 401 "missing or invalid gateway credential" on `/api/auth/...`).
+
+Browsers pick up the new UI on their next normal page load: `web/` is served
+with `Cache-Control: no-cache`, and `index.html` loads `js/app.js?v=<its
+mtime>` (`infra/nginx/static-version.js`), so nobody needs a hard refresh.
+
 Full data reset (destructive — confirm before running against anything you
 care about):
 
@@ -76,6 +94,35 @@ for s in auth-service document-service catalogue-service search-service; do
 done
 ```
 
+## Running tests
+
+The black-box smoke suite in `tests/` talks to the real stack through the
+Nginx gateway (`http://localhost:8080/api`) only. One command boots the
+stack, waits for every service's `/health`, and runs it:
+
+```bash
+./scripts/verify.sh          # tears the stack down on success, leaves it up on failure
+./scripts/verify.sh --keep   # leave it running either way
+```
+
+It exits non-zero and prints `FAILED at step: <step>` on any failure.
+Missing `services/*/.env` files are created from each `.env.example`
+(test/dev placeholder values only; an existing `.env` is never touched).
+Test dependencies go into a gitignored `.venv-tests/`.
+
+Against an already-running stack:
+
+```bash
+pip install -r tests/requirements.txt
+BASE_URL=http://localhost:8080/api pytest tests/ -v
+```
+
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` override the seeded `admin` /
+`CHANGE_ME` login. Tests use uuid-suffixed names and clean up after
+themselves where an API exists, so they can be re-run without resetting
+the database. Categories have no delete endpoint, so a few `test-category-*`
+rows build up across runs.
+
 ## Seed / clear demo data
 
 Two standalone scripts, standard-library only (`urllib`), driven entirely
@@ -106,8 +153,8 @@ confirmation prompt built into the script itself.
 | Rotate `JWT_SECRET` | Update `services/auth-service/.env`, `docker compose up -d --build auth-service` (or restart). **Invalidates every existing token immediately** — every logged-in user is forced to re-login. |
 | Apply the optional performance indexes | `docker compose exec postgres psql -U docmgmt -d docmgmt -f /path/to/add_performance_indexes.sql` and again with `-d catalogue` — see [deployment.md](deployment.md#database-bootstrap). Safe to re-run (`IF NOT EXISTS`). |
 | Change the Meilisearch master key | Must be updated in **four** places consistently: `infra/.env` (`MEILI_MASTER_KEY` used by the `meilisearch` container) and each of `document-service/.env`, `catalogue-service/.env`, `search-service/.env` — there is no single source of truth (`infra/docker-compose.yml:56-58`). |
-| Inspect MinIO contents | MinIO console at `http://<host>:9001` (login: `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, default `minioadmin`/`minioadmin`). |
-| Inspect Postgres directly | `docker compose exec postgres psql -U docmgmt -d <docmgmt\|catalogue\|auth>`; port `5432` is also published to the host for external tools (DBeaver, psql). |
+| Inspect MinIO contents | `postgres`, `minio`, and `meilisearch` are **not** published to the host (see [deployment.md](deployment.md#containers)) — only reachable from other containers on the compose network. For a one-off look at the MinIO console, forward the port for just that session: `docker compose exec minio sh` for a shell inside the container, or temporarily run `docker run --rm --network infra_default -p 127.0.0.1:9001:9001 --name minio-console-tunnel alpine/socat TCP-LISTEN:9001,fork,reuseaddr TCP:minio:9001` from another terminal, browse `http://localhost:9001` (login: `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`), then `docker stop minio-console-tunnel` when done (same pattern with `9000`/`TCP:minio:9000` for the S3 API, or `7700`/`TCP:meilisearch:7700` for Meilisearch). Do not add `ports:` back to `infra/docker-compose.yml` for routine access — that reopens the same host exposure this was closed to prevent (see [known-issues.md](known-issues.md)). |
+| Inspect Postgres directly | `docker compose exec postgres psql -U docmgmt -d <docmgmt\|catalogue\|auth>` — works without any port forwarding since it runs a client inside the same compose network. For an external tool (DBeaver, a local `psql`), use the same temporary `alpine/socat` tunnel pattern as MinIO above (`TCP:postgres:5432`), not a permanently published port. |
 | Recover a soft-deleted document/product/customer/project/company | Via the UI's "Recycle bin" button on each list view, or `PATCH /api/<resource>/{id}/restore` directly. |
 | Force-remove a customer/project/company that a document still references | Not directly supported — the API returns `400` ("...reference this X... reassign or delete those documents first") by design (`IntegrityError` caught in each router's `DELETE` handler) rather than cascading. Reassign or delete the referencing document(s) first. |
 
@@ -118,7 +165,8 @@ confirmation prompt built into the script itself.
   `infra/data/` bind mounts as the only copy of production data.
 - **No monitoring/alerting** (no Prometheus/Grafana/health-check-based
   paging found).
-- **No rate limiting** on `/api/auth/login` or any other endpoint — see
+- **No rate limiting** on any endpoint other than `/api/auth/login` (rate
+  limited as of `docs/SECURITY_HARDENING_LOG.md` Task 1) — see
   [known-issues.md](known-issues.md).
 - **Nginx config changes require a manual restart** (see above) — easy to
   forget and ship a config change that silently doesn't take effect.
