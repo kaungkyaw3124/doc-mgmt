@@ -109,6 +109,26 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # the title avoids that.
     has_header_image = bool((logo_bytes and logo_mime != "image/svg+xml") or (seal_bytes and seal_mime != "image/svg+xml"))
 
+    banner_placed = False
+    if company and company.get("header_style") == "letterhead" and logo_bytes and logo_mime != "image/svg+xml":
+        # Letterhead banner (arrives in the logo slot; the company seal is
+        # dropped): one image across columns A:G, height from its own aspect
+        # ratio, with enough rows reserved under it that the title can't
+        # overlap it. On a bad image, falls through to the normal header.
+        try:
+            banner = XLImage(BytesIO(logo_bytes))
+            banner_w = sum(int((256 * w + 128 // 7) / 256 * 7) for w in col_widths)  # px width of A:G (Excel's own formula)
+            banner_h = round(banner.height * banner_w / banner.width)
+            banner.width, banner.height = banner_w, banner_h
+            ws.add_image(banner, f"A{row}")
+            row += -(-banner_h // 20) + 1  # default row height is 20px
+            banner_placed = True
+        except Exception:
+            pass
+    if banner_placed:
+        has_header_image = False
+        logo_bytes = seal_bytes = None
+
     if logo_bytes and logo_mime != "image/svg+xml":
         try:
             img = XLImage(BytesIO(logo_bytes))

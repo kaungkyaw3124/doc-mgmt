@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -28,6 +28,9 @@ class ProjectOut(BaseModel):
     created_at: datetime
 
 
+HeaderStyle = Literal["logo", "letterhead"]
+
+
 class CompanyCreate(BaseModel):
     name: str
     short_name: Optional[str] = None  # e.g. "SS" for Swift Solution — used in doc numbers
@@ -35,6 +38,7 @@ class CompanyCreate(BaseModel):
     address: Optional[str] = None
     contact_no: Optional[str] = None
     support_email: Optional[str] = None
+    header_style: HeaderStyle = "logo"
     is_primary: bool = False
 
 
@@ -45,6 +49,7 @@ class CompanyUpdate(BaseModel):
     address: Optional[str] = None
     contact_no: Optional[str] = None
     support_email: Optional[str] = None
+    header_style: Optional[HeaderStyle] = None
     is_primary: Optional[bool] = None
 
 
@@ -59,6 +64,8 @@ class CompanyOut(BaseModel):
     support_email: Optional[str]
     logo_object_key: Optional[str]
     seal_object_key: Optional[str]
+    header_style: Optional[str] = "logo"  # None (legacy row) is treated as "logo"
+    letterhead_object_key: Optional[str] = None
     is_primary: bool
     is_deleted: bool
     created_at: datetime

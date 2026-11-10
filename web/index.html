@@ -1201,12 +1201,24 @@
         </div>
         <div></div>
       </div>
-      <label for="company-logo">Logo (optional, .png, .jpg, or .svg)</label>
-      <input type="file" id="company-logo" accept="image/png,image/jpeg,image/svg+xml">
-      <div id="company-current-logo-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
-      <label for="company-seal">Company seal (optional, .png or .jpg)</label>
-      <input type="file" id="company-seal" accept="image/png,image/jpeg">
-      <div id="company-current-seal-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
+      <label for="company-header-style">Quotation header</label>
+      <select id="company-header-style">
+        <option value="logo">Logo (+ company seal)</option>
+        <option value="letterhead">Letterhead banner</option>
+      </select>
+      <div id="company-header-logo-fields">
+        <label for="company-logo">Logo (optional, .png, .jpg, or .svg)</label>
+        <input type="file" id="company-logo" accept="image/png,image/jpeg,image/svg+xml">
+        <div id="company-current-logo-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
+        <label for="company-seal">Company seal (optional, .png or .jpg)</label>
+        <input type="file" id="company-seal" accept="image/png,image/jpeg">
+        <div id="company-current-seal-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
+      </div>
+      <div id="company-header-letterhead-fields" style="display:none;">
+        <label for="company-letterhead">Letterhead banner (.png or .jpg — wide image, about 1500–2000px, shown full width at the top of the quotation)</label>
+        <input type="file" id="company-letterhead" accept="image/png,image/jpeg">
+        <div id="company-current-letterhead-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
+      </div>
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
         <label style="margin:0;">Managing Directors</label>

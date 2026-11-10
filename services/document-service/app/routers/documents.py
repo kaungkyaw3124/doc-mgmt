@@ -794,14 +794,26 @@ def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects:
             "address": company_row.address,
             "contact_no": company_row.contact_no,
             "support_email": company_row.support_email,
+            "header_style": "logo",
         }
-        if company_row.logo_object_key:
+        # Letterhead companies send the banner through the logo slot (the
+        # exports draw it full width) and drop the company seal; a company
+        # set to "letterhead" with no banner uploaded yet falls back to the
+        # normal logo + seal header rather than an empty one.
+        if company_row.header_style == "letterhead" and company_row.letterhead_object_key:
+            try:
+                logo_bytes = get_file_bytes(company_row.letterhead_object_key)
+                logo_mime = _guess_image_mime(company_row.letterhead_object_key)
+                company["header_style"] = "letterhead"
+            except Exception:
+                logo_bytes = None  # don't let a bad banner file block the export
+        if company["header_style"] != "letterhead" and company_row.logo_object_key:
             try:
                 logo_bytes = get_file_bytes(company_row.logo_object_key)
                 logo_mime = _guess_image_mime(company_row.logo_object_key)
             except Exception:
                 logo_bytes = None  # don't let a bad logo file block the export
-        if company_row.seal_object_key:
+        if company["header_style"] != "letterhead" and company_row.seal_object_key:
             try:
                 seal_bytes = get_file_bytes(company_row.seal_object_key)
                 seal_mime = _guess_image_mime(company_row.seal_object_key)

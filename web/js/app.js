@@ -1524,6 +1524,14 @@ document.getElementById('add-director-row-btn').addEventListener('click', () => 
   document.getElementById('director-rows').appendChild(buildDirectorRow(null));
 });
 
+// Show only the upload fields for the chosen header style (logo+seal, or the letterhead banner).
+function applyCompanyHeaderStyle() {
+  const letterhead = document.getElementById('company-header-style').value === 'letterhead';
+  document.getElementById('company-header-logo-fields').style.display = letterhead ? 'none' : '';
+  document.getElementById('company-header-letterhead-fields').style.display = letterhead ? '' : 'none';
+}
+document.getElementById('company-header-style').addEventListener('change', applyCompanyHeaderStyle);
+
 document.getElementById('toggle-company-form').addEventListener('click', () => {
   editingCompanyId = null;
   document.getElementById('company-form').reset();
@@ -1531,6 +1539,8 @@ document.getElementById('toggle-company-form').addEventListener('click', () => {
   document.getElementById('company-form-submit-btn').textContent = 'Create company';
   document.getElementById('company-current-logo-info').style.display = 'none';
   document.getElementById('company-current-seal-info').style.display = 'none';
+  document.getElementById('company-current-letterhead-info').style.display = 'none';
+  applyCompanyHeaderStyle();  // form.reset() put the style select back to "logo"
   resetDirectorRows(null);
   showBanner('company-modal-banner', '');
   document.getElementById('company-modal').classList.add('active');
@@ -1551,7 +1561,8 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     position: document.getElementById('company-position').value || null,
     address: document.getElementById('company-address').value || null,
     contact_no: document.getElementById('company-contact').value || null,
-    support_email: document.getElementById('company-email').value || null
+    support_email: document.getElementById('company-email').value || null,
+    header_style: document.getElementById('company-header-style').value
   };
   try {
     document.getElementById('company-form-submit-btn').disabled = true;
@@ -1579,6 +1590,29 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           // response wasn't JSON — stick with the generic message
         }
         showBanner('company-modal-banner', `Company saved, but the logo didn't upload: ${detail}`);
+        loadCompanies();
+        return;
+      }
+    }
+
+    const letterheadInput = document.getElementById('company-letterhead');
+    if (letterheadInput.files.length > 0) {
+      const formData = new FormData();
+      formData.append('file', letterheadInput.files[0]);
+      const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/letterhead', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: formData
+      });
+      if (!uploadResponse.ok) {
+        let detail = 'Letterhead upload failed.';
+        try {
+          const errBody = await uploadResponse.json();
+          if (errBody.detail) detail = errBody.detail;
+        } catch (parseErr) {
+          // response wasn't JSON — stick with the generic message
+        }
+        showBanner('company-modal-banner', `Company saved, but the letterhead didn't upload: ${detail}`);
         loadCompanies();
         return;
       }
@@ -1681,6 +1715,9 @@ function startEditCompany(company) {
 
   document.getElementById('company-logo').value = '';
   document.getElementById('company-seal').value = '';
+  document.getElementById('company-letterhead').value = '';
+  document.getElementById('company-header-style').value = company.header_style === 'letterhead' ? 'letterhead' : 'logo';
+  applyCompanyHeaderStyle();
 
   const logoInfo = document.getElementById('company-current-logo-info');
   if (company.logo_object_key) {
@@ -1689,6 +1726,15 @@ function startEditCompany(company) {
     logoInfo.querySelector('[data-view-current-logo]').addEventListener('click', () => viewCompanyImage(company.id, 'logo'));
   } else {
     logoInfo.style.display = 'none';
+  }
+
+  const letterheadInfo = document.getElementById('company-current-letterhead-info');
+  if (company.letterhead_object_key) {
+    letterheadInfo.innerHTML = 'A letterhead is already attached. <button type="button" class="link-btn-inline" data-view-current-letterhead="' + company.id + '">View it</button> — choosing a new file will replace it.';
+    letterheadInfo.style.display = 'block';
+    letterheadInfo.querySelector('[data-view-current-letterhead]').addEventListener('click', () => viewCompanyImage(company.id, 'letterhead'));
+  } else {
+    letterheadInfo.style.display = 'none';
   }
 
   const sealInfo = document.getElementById('company-current-seal-info');

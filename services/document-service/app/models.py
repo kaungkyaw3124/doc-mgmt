@@ -35,6 +35,8 @@ class Company(Base):
     support_email = Column(String(255))
     logo_object_key = Column(String(500))
     seal_object_key = Column(String(500))  # official company seal/stamp, shown on quotation exports
+    header_style = Column(String(20), default="logo", server_default="logo")  # "logo" (logo + seal row) or "letterhead" (one full-width banner) — NULL is treated as "logo"
+    letterhead_object_key = Column(String(500))  # the banner image, used when header_style == "letterhead"; kept when the style is switched back so no re-upload is needed
     is_primary = Column(Boolean, default=False, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

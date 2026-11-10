@@ -72,6 +72,10 @@
     /* No min-height: it reserved 100px of blank space above the heading even
        when the company has no logo/seal. The row is as tall as its images. */
   }
+  /* Letterhead banner: full content width, height follows the image's own
+     proportions (never stretched), capped so a tall image can't eat the page. */
+  .letterhead { margin-bottom: 8px; }
+  .letterhead img { display: block; width: 100%; height: auto; max-height: 45mm; object-fit: contain; object-position: left top; }
   .header-top img { display: block; }  /* no inline-baseline gap under the image */
   /* Header logo and company seal: 120px (was 130px). max-width/max-height
      (not fixed width+height) so any logo shrinks proportionally — aspect
@@ -183,7 +187,10 @@
   <thead><tr><td>
   <div class="pdf-header">
     {# Row only rendered when there is an image: an empty row still carried its 10px margin-bottom, a hidden gap that pushed QUOTATION below the 7.6mm top margin. #}
-    {% if logo_data_uri or seal_data_uri %}
+    {% if company and company.header_style == 'letterhead' and logo_data_uri %}
+    {# Letterhead banner: ONE full-width image in place of the logo/seal row (the exporter puts the banner in the logo slot and drops the company seal). #}
+    <div class="letterhead"><img src="{{ logo_data_uri }}"></div>
+    {% elif logo_data_uri or seal_data_uri %}
     <div class="header-top">
       <div>{% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
       <div>{% if seal_data_uri %}<img class="seal" src="{{ seal_data_uri }}">{% endif %}</div>
