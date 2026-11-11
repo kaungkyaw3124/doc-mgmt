@@ -105,11 +105,23 @@
   table.items td { border: 1px solid #999; padding: 6px; font-size: 9.5pt; vertical-align: top; }
   table.items td.num { text-align: right; }
   table.items tr { break-inside: avoid; page-break-inside: avoid; }
-  .group-header { font-style: italic; font-weight: bold; background: #fafafa; }
   .subtotal-row td { border-top: none; }
   .subtotal-row:first-of-type td { border-top: 1px solid #999; }
   .total-row td { font-weight: bold; border-top: 2px solid #333; }
   tr.sub-item td { font-size: 8.5pt; }
+  /* Loop iteration 14: keep the "tail" — last item row (+ its sub-item rows),
+     Subtotal / Tax / Total, Terms and the MD block — on one page, so Terms
+     and the signature never get a page of their own. Only adds keep-with-
+     next hints; the .terms / .md-block rules below are unchanged. */
+  /* Row-level break-after/-before: avoid between table rows was tried first
+     and WeasyPrint ignored it whenever the Total row was the one overflowing
+     the page (e.g. 29 items). A separate row group with break-inside: avoid
+     does work, and being the same table the columns line up by construction.
+     table.items' break-after: avoid chains the group to .terms, which is
+     already chained to .md-block. A tail taller than a page is split normally
+     (avoid is only a hint). */
+  tbody.tail { break-inside: avoid; page-break-inside: avoid; }
+  table.items { break-after: avoid; page-break-after: avoid; }
   tr.sub-item td.sub-label { text-align: right; }
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
@@ -226,8 +238,12 @@
       </tr>
     </thead>
     <tbody>
-      <tr class="group-header"><td colspan="7">{{ group_label }}</td></tr>
       {% for item in items %}
+      {# The last item group and the totals go in their own row group (see tbody.tail in the CSS). #}
+      {% if loop.last %}
+    </tbody>
+    <tbody class="tail">
+      {% endif %}
       <tr>
         <td class="num">{{ loop.index }}</td>
         <td><strong>{{ item.name }}</strong>{% if item.description %}<br>{{ item.description }}{% endif %}</td>

@@ -214,13 +214,6 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws.page_margins = PageMargins(top=0.3, left=0.5, right=0.5, bottom=0.5, header=0.2, footer=0.2)
     row += 1
 
-    categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}
-    group_label = categories.pop() if len(categories) == 1 else "Items"
-    ws.merge_cells(f"A{row}:G{row}")
-    ws[f"A{row}"] = group_label
-    ws[f"A{row}"].font = Font(name="Arial", bold=True, italic=True, size=10)
-    row += 1
-
     main_item_rows = []  # only these contribute to the Total — sub-item rows are informational, already covered by the parent's price
     catalogue_number = 0  # matches the Catalogue zip export's numbering — only product-based items count
     for idx, (item, product, sub_items) in enumerate(items_with_product, start=1):
