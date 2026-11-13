@@ -1,98 +1,71 @@
-# report.md — Iteration 14
+# report.md — Iteration 15
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Quotation PDF/XLSX: (1) remove the "Items" group row at the top of the items table; (2) the last item, the Subtotal/Tax/Total rows, the Terms and the MD signature always end up together on the LAST page, never stranded apart
+- **Goal**: A one-click **"Delete ALL products"** button on the Products page, for the user's development/testing stage. It is temporary and must be trivial to remove later
 - **Ponytail skill loaded**: yes (loaded with the Skill tool at the start)
 - **Branch / commit**: `dev` @ (this commit, see `git log`)
-- **One-paragraph summary**: The group row ("Items", or the single category name) is gone from both the PDF template and the XLSX exporter. The XLSX rows were already computed dynamically, so item 1 now sits right under the column titles and every formula, merge and print-title row follows on its own. For the tail, approach A (row-level `break-after/-before: avoid`) was tried first and only partly worked: WeasyPrint ignored it when the Total row was the row that overflowed (e.g. 29 items). The fix that works is half-way between A and B: the last item and its sub-items plus Subtotal/Tax/Total go in a **second `<tbody class="tail">` of the same table** with `break-inside: avoid`, and `table.items` gets `break-after: avoid`, which chains it to the existing `.terms` → `.md-block` pairing. Because it is the same table, the columns line up by construction (no `<col>` duplication needed). A tail taller than a page splits normally. No existing `.terms`/`.md-block` rule was touched, and all existing tests pass unchanged.
+- **One-paragraph summary**: `DELETE /products` (catalogue-service) permanently deletes every product, including the ones in the recycle bin. It removes their sub-item links first, because `sub_product_id` has no ON DELETE CASCADE, then removes each product from Meilisearch and makes a best-effort attempt to delete its stored file from MinIO. It returns `{"deleted": N}` and leaves categories alone. It returns 403 when `ENVIRONMENT=production` or the user has view-only access. A new `GET /products/dev-config` → `{"delete_all_enabled": bool}` tells the UI whether to show the red **Delete ALL products (dev)** button next to "+ New product". One click (no confirm) calls the endpoint, refreshes the list (and the recycle bin if it is open) and shows "Deleted N products". All code sits inside `DEV-ONLY: delete-all-products` markers. Nginx/auth-service needed no change: `/api/products` has no per-method rule, so the call gets the same `products` RBAC check as the existing single delete.
 
 ## 2. Baseline (before any change)
-Run on a clean worktree of HEAD `6d754c8` (an earlier baseline run was stopped and restarted there, because its Docker build could have picked up my first edit).
 ```
 $ ./scripts/verify.sh
-======================== 24 passed, 8 skipped in 5.16s =========================
+======================== 24 passed, 8 skipped in 5.50s =========================
 verify.sh: PASSED
-
-$ pytest services/document-service/tests      (inside the document-service image + requirements-dev + poppler-utils)
-212 passed, 16073 warnings in 69.35s (0:01:09)
 ```
+(the 8 skips are the Playwright UI tests — Playwright isn't installed in verify.sh's venv)
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | New tests pass | PASS | `pytest tests/test_quotation_tail_layout.py` → `9 passed in 81.61s`. On the code with only the group row removed (no tail fix): `4 failed` sweep cases (`plain, N=17: 'LASTROW 017' not on the final page 2`, `tax, N=15`, `seal, N=13`, `seal_tax_subs, N=8`). With approach A only: still `4 failed` (`plain, N=29`, `tax, N=27`, `seal, N=29`, `seal_tax_subs, N=24`) |
-| A2 | No regressions | PASS | `pytest services/document-service/tests` → `221 passed in 144.10s` (212 + 9 new, no existing test changed). `./scripts/verify.sh` → see §6 |
-| A3 | Proof: before | PASS | `loop/evidence/iter-14-before-p1.png` (14 items + "Items" row + Total on page 1), `iter-14-before-p2.png` (only Terms + Regards + seal). Also `iter-14-before-subs-p1/p2.png` (8 items, last one with 3 sub-items, tax) |
-| A4 | Proof: after | PASS | `loop/evidence/iter-14-after-p1.png` (items 1–13, no "Items" row), `iter-14-after-p2.png` (item 14 → Total → Terms → Regards + seal). Sub-items pair: `iter-14-after-subs-p1/p2.png` (item 8 + sub-items 0.1–0.3 → Subtotal/Tax/Total → Terms → seal on page 2). Director has a 300x300 PNG seal in all of them |
-| A5 | XLSX | PASS | dump below: header on row 11, item 1 on row 12, no "Items" row, Subtotal = sum of main item rows only, Tax/Total formulas correct |
-
-A5 output (5 items with tax 10%, last item has 3 sub-items; rows 1–25):
-```
- 1 | QUOTATION |  |  |  |  |  |
- 3 | Date: | 2026-01-01 |  |  |  |  |
- 5 | SUPPLIER: Acme Supplier Co., |  |  |  | END USER |  |
- 6 | Name | Zaw Zaw |  |  | Customer Name | Beta Customer Co., Ltd. |
- 7 | Position | Managing Director |  |  | Quotation ID | QT-0001 |
- 8 | Address | N/A |  |  | Organization | Beta Customer Co., Ltd. |
- 9 | Contact No | N/A |  |  | Address | No. 99, Customer Street, Man |
-11 | No | Item | Qty | Unit | Price (USD) | Amount (USD) | Remark
-12 | 1 | Widget 001\nWidget 001 | 1 | Nos | 100 | 100 |
-13 | 2 | Widget 002\nWidget 002 | 1 | Nos | 100 | 100 |
-14 | 3 | Widget 003\nWidget 003 | 1 | Nos | 100 | 100 |
-15 | 4 | Widget 004\nWidget 004 | 1 | Nos | 100 | 100 |
-16 | 5 | LASTROW 005\nLASTROW 005 | 1 | Nos | 100 | 100 |
-17 | 0.1 | SKU-1 — Sub part 1 | 1 | Nos | 5 | 5 |
-18 | 0.2 | SKU-2 — Sub part 2 | 1 | Nos | 5 | 5 |
-19 | 0.3 | SKU-3 — Sub part 3 | 1 | Nos | 5 | 5 |
-20 | Subtotal: |  |  |  |  | =F12+F13+F14+F15+F16 |
-21 | Tax (10%): |  |  |  |  | =F20*10.0/100 |
-22 | Total: |  |  |  |  | =F20+F21 |
-24 | Terms and Conditions |  |  |  |  |  |
-25 | Price Validity: 30 Days |  |  |  |  |  |
-```
-(Empty rows 2, 4, 10, 23 left out. "0.x" sub-labels are because the test items have no `product_id`. The doubled name is a separate XLSX quirk, see §7.)
+| A1 | Catalogue unit tests pass | PASS | in the `infra-catalogue-service` image + `requirements-dev.txt`: `python -m pytest tests -q` → `80 passed, 99 warnings in 2.17s` (6 new in `tests/test_delete_all_products.py`) |
+| A2 | UI test passes | PASS | in `mcr.microsoft.com/playwright/python:v1.65.1-noble` (`--network host`, against the verify.sh stack): `pytest tests/test_ui_delete_all_products.py -v` → `2 passed in 5.78s`. The production case stubs `/api/products/dev-config` with `page.route`, because the test stack can't run with `ENVIRONMENT=production` (secrets_check refuses its placeholder secrets). The server-side 403 is unit-tested |
+| A3 | No regressions | PASS | `./scripts/verify.sh` → `24 passed, 9 skipped` (the 9th skip is the new UI test file, same Playwright reason); catalogue unit suite 80 passed |
+| A4 | Proof | PASS | `loop/evidence/iter-15-products-before.png` (3 products + red button), `loop/evidence/iter-15-products-after.png` (empty list + "Deleted 3 products"), taken by the UI test |
+| A5 | Removal steps | PASS | §4 below |
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/document-service/app/templates/quotation.html` | modified | removed the `group-header` row and its CSS; the last item group + totals now go in `<tbody class="tail">`; added `tbody.tail { break-inside: avoid }` and `table.items { break-after: avoid }` with a comment explaining why row-level rules were not enough |
-| `services/document-service/app/core/export_pdf.py` | modified | dropped the `group_label` calculation and template variable |
-| `services/document-service/app/core/export_quotation.py` | modified | dropped the merged A:G group row; item rows now start right under the header |
-| `services/document-service/tests/test_quotation_tail_layout.py` | added | sweep N=1..45 × {plain, tax, seal, seal+tax+3 sub-items}; no group row in PDF/XLSX (no category and one category); a tall tail with 25 sub-items |
-| `loop/evidence/iter-14-*.png` | added | A3/A4 |
-| `loop/history/report-iter-13.md` | moved | previous report (rename staged by the user) |
+| `services/catalogue-service/app/routers/products.py` L427–469 | added (DEV-ONLY block) | `GET /products/dev-config` + `DELETE /products`, placed above the `/trash` and `/{product_id}` routes |
+| `web/index.html` L690–692 | added (DEV-ONLY block) | the red button, hidden by default |
+| `web/js/app.js` L310 | added (one line, DEV-ONLY comment) | `initDeleteAllProducts()` call in `enterApp()` |
+| `web/js/app.js` L4398–4425 | added (DEV-ONLY block) | dev-config check + click handler |
+| `services/catalogue-service/tests/test_delete_all_products.py` | added | unit tests (SQLite harness from `test_duplicates.py`) |
+| `tests/test_ui_delete_all_products.py` | added | Playwright tests + A4 screenshots |
 
-`tests/test_quotation_xlsx_tax.py` needed no change: it finds rows by label, not by fixed row numbers.
+**To remove the feature later**:
+1. `grep -rn "DEV-ONLY: delete-all-products" services web` → delete each BEGIN…END block (products.py, index.html, app.js) and the single `initDeleteAllProducts(); // DEV-ONLY…` line in `web/js/app.js`.
+2. Delete `services/catalogue-service/tests/test_delete_all_products.py` and `tests/test_ui_delete_all_products.py`.
+3. `grep -rn "delete-all\|dev-config\|delete_all" services web tests` should return nothing. No migration, nginx or auth-service change to undo.
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | A1 `test_no_items_group_row_in_pdf` | `got '1Widget 001 1.0 ...'` | my test: pypdf joins the "No" cell to the item name | match `1\s*Widget 001` with a regex |
-| 1 | A1 sweep (all 4 variants) | `plain, N=17: 'LASTROW 017' not on the final page 2` | no tail rule yet (expected) | approach A: `break-after: avoid` on the last item/sub-item/subtotal rows, `break-before: avoid` on Total, `break-after: avoid` on the table |
-| 2 | A1 sweep (all 4 variants) | `plain, N=29: 'LASTROW 029' not on the final page 2` | WeasyPrint ignores row-to-row avoid when the overflowing row is the Total itself: item 29 stayed at the bottom of page 1 and Total went to page 2 | replaced the row rules with a separate `<tbody class="tail">` + `break-inside: avoid` → all 9 pass |
+| 1 | A2 (environment, not code) | `chrome-headless-shell: error while loading shared libraries: libnspr4.so` | host WSL has no Chromium system libs | ran the UI tests in `mcr.microsoft.com/playwright/python:v1.65.1-noble` with `--network host` against the running stack |
 
 ## 6. Final verification output
 ```
-$ ./scripts/verify.sh
-==> [verify] wait for health (timeout 180s)
-all services healthy
-...
-======================== 24 passed, 8 skipped in 4.85s =========================
-==> [verify] docker compose down
-verify.sh: PASSED
+$ ./scripts/verify.sh --keep
+======================== 24 passed, 9 skipped in 4.27s =========================
+verify.sh: PASSED (stack left running: --keep)
 ```
-Unit tests: `pytest services/document-service/tests` → `221 passed in 144.10s`.
+
+$ pytest tests/test_ui_delete_all_products.py -v     (Playwright image)
+tests/test_ui_delete_all_products.py::test_one_click_deletes_all_products PASSED [ 50%]
+tests/test_ui_delete_all_products.py::test_button_hidden_in_production PASSED [100%]
+============================== 2 passed in 5.78s ===============================
 
 ## 7. Found but not fixed (out of scope)
-- XLSX prints a manual item's name twice ("Widget 001\nWidget 001") when the product has no description: `export_quotation.py` falls back to `item.description` without the "only if it differs from the name" check that `export_pdf.py` got (see the comment around `item_description_override` in `export_pdf.py`). Found in the A5 dump. Fix: use the same check in the XLSX.
-- The Excel export has no page breaks of its own (plan: out of scope).
-- The document-service unit tests aren't part of `verify.sh` (it only runs the root `tests/` smoke suite). The host has Python 3.14 without WeasyPrint, so I ran them inside the document-service image (+ `requirements-dev.txt` + `poppler-utils`).
+- **Single `DELETE /products/{id}` probably fails with an FK error (500) for a product that is another product's sub-item**: `product_sub_items.sub_product_id` has no `ondelete` (`services/catalogue-service/app/models.py:59`), and `delete_product` (`products.py`) doesn't clear those links. I found this while writing delete-all, which works around it. Suggested fix: `ondelete="CASCADE"` plus a migration, or delete the links in `delete_product`.
+- **Single delete leaves the MinIO file behind**: `delete_product` never removes `image_object_key`. Delete-all does.
+- **Running the UI test wipes the stack's catalogue**: it is the feature, but anyone who runs `tests/test_ui_delete_all_products.py` against a local stack with real dev data loses that data. verify.sh skips it today only because Playwright isn't in its venv.
+- The extra header button pushes "+ New product" onto a second toolbar line at 1280px (see `iter-15-products-before.png`; `web/index.html` already warns about this). I left it, since the button is temporary and goes away when the feature is removed.
+- Delete-all ignores `X-Allowed-Projects` (the plan says every row), so in dev a user restricted to some projects can still wipe products they can't see.
 
 ## 8. Blockers / decisions needed
 None.
 
 ## 9. Suggestions for the next iteration
-- Check a real quotation with long item descriptions / product images: the sweep uses one-line items.
-- Fix the duplicated XLSX name from §7 (a few lines, reuse the PDF's check).
-- Consider adding the document-service unit tests to `verify.sh`, or a documented `docker run` target, so they can't be skipped by accident.
+- Fix the sub-item FK on single delete (see §7).
+- Remove this feature before the first production deploy.

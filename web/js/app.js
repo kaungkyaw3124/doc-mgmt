@@ -307,6 +307,7 @@ async function enterApp() {
   }
   loadDocuments();
   loadProducts();
+  initDeleteAllProducts(); // DEV-ONLY: delete-all-products
   loadCustomers();
   loadCompanies();
   loadProjects();
@@ -4393,3 +4394,32 @@ loadPublicGroups();
     }
   }
 })();
+
+// DEV-ONLY: delete-all-products BEGIN — temporary one-click catalogue wipe
+// (loop iteration 15). No confirm dialog, by request. The server refuses it
+// in production; dev-config only decides whether the button is rendered.
+async function initDeleteAllProducts() {
+  const btn = document.getElementById('delete-all-products-btn');
+  try {
+    const cfg = await apiFetch('/products/dev-config');
+    btn.style.display = cfg.delete_all_enabled ? '' : 'none';
+  } catch (e) {
+    btn.style.display = 'none';
+  }
+}
+
+document.getElementById('delete-all-products-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const res = await apiFetch('/products', { method: 'DELETE' });
+    await loadProducts();
+    if (document.getElementById('product-trash-modal').classList.contains('active')) loadProductTrash();
+    showBanner('products-banner', `Deleted ${res.deleted} products`, 'info');
+  } catch (err) {
+    showBanner('products-banner', err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+// DEV-ONLY: delete-all-products END
