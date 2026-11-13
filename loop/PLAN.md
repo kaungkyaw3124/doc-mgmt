@@ -2,94 +2,86 @@
 
 | Field | Value |
 |---|---|
-| Iteration | **14** |
-| Goal | Quotation PDF/XLSX: (1) remove the "Items" group row at the top of the items table; (2) the last item, the Subtotal/Tax/Total rows, the Terms and the MD signature always end up together on the LAST page, never stranded apart |
+| Iteration | **15** |
+| Goal | A one-click **"Delete ALL products"** button on the Products page, for the user's development/testing stage. It is temporary and must be trivial to remove later |
 | Attempt limit | 5 per failing check |
 | Branch | whichever the session opened on (`dev` / `security/auth-hardening`) |
 | Status | READY FOR CLAUDE CODE |
 
-## What the user wants (two screenshots)
-1. **Remove the "Items" text row.** The first row of the items table is a full-width
-   italic row reading "Items" (the user circled it). It is `group_label` in
-   `services/document-service/app/templates/quotation.html` (~line 229,
-   `<tr class="group-header">`) and in `app/core/export_quotation.py` (~line 218,
-   merged row A:G). Remove that whole row from **both** the PDF and the XLSX.
-   Do not just blank the text: no empty grey row may remain. If every item has the
-   same category, the row used to show the category name instead of "Items" —
-   remove it in that case too (the user wants no group row at all).
-2. **Don't strand the signature.** On a multi-page quotation the last page of items ends
-   with the Subtotal/Tax/Total rows, then Terms + "Regards," + the MD seal do not fit
-   under them, so Terms and the signature move to a new page by themselves (the seal
-   sometimes lands on a third page). The user wants the **last item row and the
-   Subtotal / Tax / Total rows moved down so they appear on that last page**, together
-   with Terms and Conditions and the MD signature. Page 1 (and any middle page) just
-   ends one row earlier.
+## What the user wants
+The user is still developing and wants to wipe the whole product catalogue between
+tests without clicking Delete on every row. Their words: "just 1 click", "I want to
+test and delete, after that I'm gonna remove that" (the button itself). Every row
+already has its own Delete button (moves the product to the recycle bin). Nothing new
+is needed on documents, projects, companies or customers — do **not** touch them.
 
-   Desired result on the last page, top to bottom: (repeated header) → the last item
-   (with its sub-item rows, if it has any) → Subtotal / Tax / Total → Terms and
-   Conditions → Regards + MD seal.
-
-## Why this is risky (read before touching CSS)
-The pagination rules in `quotation.html` and `tests/test_quotation_pdf_layout.py`
-(read the comment block at the top of that test file) are the result of several
-failed attempts: `.terms` has `break-inside/after: avoid` paired with `.md-block`
-`break-before: avoid`. **Do not remove or weaken those.** Also `tests/test_header_repeats.py`,
-`tests/test_page_margins.py` and `tests/test_md_regards.py` encode other layout decisions.
-Tackle task 2 only by *adding* keep-together rules and re-run the full suite after each try.
+## Decisions already made (do not ask the user again)
+- **One click, no confirm dialog, no typed word.** The user explicitly asked for this.
+- **Permanent delete** (not the recycle bin): the point is to clear the catalogue for
+  the next test. This includes products already sitting in the recycle bin.
+- **Dev-only guard (the one safety rail I'm adding)**: the button is rendered and the
+  endpoint answers only when `ENVIRONMENT` is not `production` (the catalogue service
+  already has `environment: str = "development"` in `app/core/config.py`; compose passes
+  `ENVIRONMENT: ${ENVIRONMENT:-development}`). In production the endpoint returns 403 and
+  the UI hides the button, so it cannot wipe the live VPS by accident. Do not add any other friction.
+- Same permission rule as the existing product delete (`_require_edit_access`); a view-only user gets 403.
 
 ## Tasks
-1. **Remove the group row** (PDF template + XLSX exporter). In the XLSX also shift the
-   following rows correctly (item rows start right under the header row, merged
-   cells / borders / freeze panes / print area still correct, tax and total rows
-   unchanged). Check `tests/test_quotation_xlsx_tax.py` — update only the row numbers
-   that moved because of this task, never the assertions about values.
-2. **Keep the tail together.** Make the last item *group* (the last item row plus its
-   `sub-item` rows), the Subtotal/Tax/Total rows, `.terms` and `.md-block` stay on one
-   page: if they do not all fit on the current page, the whole tail starts on the next
-   page. Try in this order and stop at the first that passes all tests:
-   - **A. CSS only**: `break-after: avoid` / `page-break-after: avoid` on the last
-     item row, on every sub-item row of the last item, and on the Subtotal/Tax rows;
-     `break-before: avoid` on the Total row; keep `.terms`/`.md-block` rules as they are.
-     (WeasyPrint's support for break rules between table rows is partial, so verify with
-     real renders, not by reading the CSS.)
-   - **B. Structure change** if A cannot work: split the table so the tail (last item
-     group + totals) is a separate block with `break-inside: avoid`, wrapped together with
-     `.terms` and `.md-block` in one container with `break-inside: avoid`. The tail must
-     keep the same column widths as the main table (use `table-layout: fixed` and shared
-     `<col>` widths) so the columns line up perfectly across the page break. If the tail
-     is ever taller than one page, it must fall back to normal flow (no infinite loop,
-     no clipped content).
-   Whatever approach: the header (logo/letterhead, QUOTATION, SUPPLIER/END USER) still
-   repeats on every page, and the footer still appears on every page.
-3. **No other layout changes.** Margins, fonts, colours, logo size, footer all stay as they are.
+1. **Endpoint** in `services/catalogue-service/app/routers/products.py`:
+   `DELETE /products` (collection, no id) — define it so it does not clash with
+   `DELETE /products/{product_id}` or with `/trash`, `/duplicate-check` etc. (put it
+   above the `/{product_id}` routes). It must:
+   - return 403 when `settings.environment == "production"` or the user has view-only access;
+   - delete every product row, including soft-deleted ones, and their sub-item links
+     (check the FK / cascade on `product_sub_items`; do not leave orphans or fail on FK errors);
+   - remove each product's Meilisearch entry (reuse `remove_product_from_index`, or one
+     bulk call if the index code has one) and best-effort delete the stored product
+     image/file from MinIO (never fail the request because a file is missing);
+   - return `{"deleted": <count>}`.
+   Categories are **not** deleted.
+2. **Gateway/auth**: check `infra/nginx/nginx.conf.template` and the auth-service RBAC
+   mapping so the call is allowed for the same users who can delete a product today and
+   is not blocked by a method/path rule. Document-service must not be affected.
+3. **Button** on the Products page (`web/index.html` next to the "+ New product" button,
+   ~line 690, handler in `web/js/app.js`): red danger button labelled
+   **"Delete ALL products (dev)"**. One click calls the endpoint, then refreshes the
+   products list (and the recycle bin list if it is visible) and shows a short banner
+   "Deleted N products". Hidden when the environment is production — expose the
+   environment to the UI with the smallest existing mechanism (e.g. a field on an
+   endpoint the UI already calls, or a small `GET /config`-style response); do not
+   hard-code a hostname check.
+4. **Easy to remove later**: wrap everything in clearly marked blocks so the user (or a
+   later iteration) can delete the feature in one go — `# DEV-ONLY: delete-all-products BEGIN/END`
+   in Python, `<!-- DEV-ONLY: delete-all-products -->` / `// DEV-ONLY ...` in the web files —
+   and put the endpoint in the smallest possible code block. List every touched file and
+   line range under "Changes made" in the report, plus the exact steps to remove it.
+5. Do not change existing delete/trash/restore behaviour, and do not touch documents,
+   projects, companies or customers.
 
-## Tests (add to `services/document-service/tests/test_quotation_tail_layout.py`, no Docker needed — use the same approach as `test_quotation_visual_style.py`: render with the real `generate_quotation_pdf`, read the WeasyPrint box tree or pypdf page text)
-1. **Sweep**: for every item count N from 1 to 45 (also with `with_tax`, and with a
-   director that has a seal, and with a director that has no seal, and with a last item
-   that has 3 sub-items) assert:
-   - the last item's text, "Total:" and "Terms and Conditions" and the "Regards," line are all on the **same, final page**;
-   - "Total:" never appears on a page that does not also contain the last item row;
-   - no page's body consists only of Terms/Regards (a final page must also contain at least the last item row);
-   - the page count is never more than one higher than the same render before this change (no explosion of pages).
-2. The text "Items" is not rendered as a table row in the PDF (render with category-less
-   products and with all-one-category products), and no empty row sits between the table
-   header and the first item. XLSX: the first cell under the header row is item 1.
-3. Tall-tail fallback: a last item with ~25 sub-items still renders, nothing clipped, no exception.
-4. All existing tests pass unchanged except the XLSX row-number shifts allowed in Task 1.
+## Tests
+- `services/catalogue-service/tests/` (follow the existing pattern there): with 3 products
+  (one in the recycle bin, one with sub-items) `DELETE /products` → 200 `{"deleted": 3}`, a
+  following `GET /products`, `/products/trash` are empty, sub-item rows are gone, the search
+  index removal was called for each product (mock), categories still exist; with
+  `ENVIRONMENT=production` → 403 and nothing deleted; view-only access → 403 and nothing deleted;
+  a MinIO error while deleting a file does not fail the request; an empty catalogue → `{"deleted": 0}`.
+- Playwright `tests/test_ui_delete_all_products.py`: create 3 products through the API, sign in,
+  open Products, click **Delete ALL products (dev)** once (no dialog may appear — fail if a
+  `confirm` dialog fires), the table shows the empty state and the banner says "Deleted 3 products";
+  a second test checks the button is absent when the environment is production (use whatever
+  switch the stack supports; if it can't be switched in the test stack, test the UI logic with
+  a stubbed response and say so in the report).
+- All existing tests still pass.
 
 ## Acceptance checks
 | # | Check | How to verify |
 |---|---|---|
-| A1 | New tests pass | `cd services/document-service && pytest tests/test_quotation_tail_layout.py -v` |
-| A2 | No regressions | `./scripts/verify.sh` passes (incl. `test_quotation_pdf_layout.py`, `test_header_repeats.py`, `test_page_margins.py`, `test_md_regards.py`) |
-| A3 | Proof: before | `loop/evidence/iter-14-before-p1.png`, `iter-14-before-p2.png` — a 14-item quotation rendered on the unchanged code (page 1 with totals, page 2 with only Terms/Regards) |
-| A4 | Proof: after | `loop/evidence/iter-14-after-p1.png`, `iter-14-after-p2.png` (same data: last item + totals + terms + seal together on the last page, no "Items" row) and one more pair with sub-items |
-| A5 | XLSX | open the generated .xlsx with openpyxl in the report: print rows 1–25 of the quotation sheet showing no "Items" row and correct totals |
-
-Render PDFs to PNG with `pdftoppm -r 70 -png`. Use a director **with** a seal image
-(a generated 300x300 PNG is fine) for the after-screenshots, since the seal is what
-used to overflow.
+| A1 | Catalogue unit tests pass | the new catalogue tests + the whole catalogue suite |
+| A2 | UI test passes | `pytest tests/test_ui_delete_all_products.py -v` |
+| A3 | No regressions | `./scripts/verify.sh` passes; catalogue service unit suite passes |
+| A4 | Proof | `loop/evidence/iter-15-products-before.png` (Products page with 3+ products and the red button), `iter-15-products-after.png` (empty list with the "Deleted N products" banner) |
+| A5 | Removal steps | the report lists every DEV-ONLY block and the exact steps to remove the feature |
 
 ## Out of scope — record under "Found but not fixed" if you notice them
-- The Excel export has no page breaks of its own; do not try to replicate the PDF page logic there.
-- Anything about letterhead/logo header style (separate branch `letterhead-header`).
+- Delete-all for documents, projects, companies, customers (the user did not ask).
+- Wiping the recycle bin for other item types.
