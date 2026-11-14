@@ -82,9 +82,14 @@ Stop and write the report when **one** of these is true:
    paste real command output (trimmed), not summaries like "tests pass".
 2. Commit with message `loop iter <N>: <short summary> [<STATUS>]` and push
    the current branch. Never merge into `main` — the user does that.
-3. Leave the Docker stack in a clean state
-   (`docker compose -f infra/docker-compose.yml down` unless the plan says
-   keep it running).
+3. Leave the app RUNNING for the user (do NOT run `down`). After the push:
+   - make sure each `services/<name>/.env` exists (copy from `.env.example` if missing);
+   - `docker compose -f infra/docker-compose.yml up -d --build`
+   - `docker compose -f infra/docker-compose.yml restart nginx` (nginx caches upstream IPs)
+   - wait until `curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/` returns 200
+     (retry up to ~2 minutes) and check `docker compose ... ps` shows all services up;
+   - put "App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)"
+     in the report, or the exact error if it would not start.
 
 ---
 
