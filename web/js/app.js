@@ -307,7 +307,7 @@ async function enterApp() {
   }
   loadDocuments();
   loadProducts();
-  initDeleteAllProducts(); // DEV-ONLY: delete-all-products
+  initDeleteAll(); // DEV-ONLY: delete-all
   loadCustomers();
   loadCompanies();
   loadProjects();
@@ -4395,31 +4395,39 @@ loadPublicGroups();
   }
 })();
 
-// DEV-ONLY: delete-all-products BEGIN — temporary one-click catalogue wipe
-// (loop iteration 15). No confirm dialog, by request. The server refuses it
-// in production; dev-config only decides whether the button is rendered.
-async function initDeleteAllProducts() {
-  const btn = document.getElementById('delete-all-products-btn');
+// DEV-ONLY: delete-all BEGIN — temporary one-click wipes (loop iteration 15).
+// No confirm dialog, by request. Both services refuse them in production;
+// dev-config only decides whether the buttons are rendered.
+const DELETE_ALL = [
+  // [button id, API path, banner id, reload, noun]
+  ['delete-all-products-btn', '/products', 'products-banner', () => loadProducts(), 'products'],
+  ['delete-all-documents-btn', '/documents', 'documents-banner', () => loadDocuments(), 'documents'],
+  ['delete-all-customers-btn', '/customers', 'customers-banner', () => loadCustomers(), 'customers'],
+  ['delete-all-projects-btn', '/projects', 'projects-banner', () => loadProjects(), 'projects'],
+  ['delete-all-companies-btn', '/companies', 'company-banner', () => loadCompanies(), 'companies'],
+];
+
+async function initDeleteAll() {
+  let enabled = false;
   try {
-    const cfg = await apiFetch('/products/dev-config');
-    btn.style.display = cfg.delete_all_enabled ? '' : 'none';
-  } catch (e) {
-    btn.style.display = 'none';
-  }
+    enabled = (await apiFetch('/products/dev-config')).delete_all_enabled; // one ENVIRONMENT drives both services
+  } catch (e) { /* hidden on any error */ }
+  DELETE_ALL.forEach(([id]) => { document.getElementById(id).style.display = enabled ? '' : 'none'; });
 }
 
-document.getElementById('delete-all-products-btn').addEventListener('click', async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  try {
-    const res = await apiFetch('/products', { method: 'DELETE' });
-    await loadProducts();
-    if (document.getElementById('product-trash-modal').classList.contains('active')) loadProductTrash();
-    showBanner('products-banner', `Deleted ${res.deleted} products`, 'info');
-  } catch (err) {
-    showBanner('products-banner', err.message);
-  } finally {
-    btn.disabled = false;
-  }
+DELETE_ALL.forEach(([id, path, banner, reload, noun]) => {
+  document.getElementById(id).addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const res = await apiFetch(path, { method: 'DELETE' });
+      await reload();
+      showBanner(banner, `Deleted ${res.deleted} ${noun}`, 'info');
+    } catch (err) {
+      showBanner(banner, err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 });
-// DEV-ONLY: delete-all-products END
+// DEV-ONLY: delete-all END

@@ -424,7 +424,7 @@ def bulk_import_products(
     return {"created": created, "skipped": skipped, "warnings": warnings + name_warnings}
 
 
-# DEV-ONLY: delete-all-products BEGIN — temporary tool for clearing the
+# DEV-ONLY: delete-all BEGIN — temporary tool for clearing the
 # catalogue between test runs (loop iteration 15). Remove this whole block
 # plus the matching DEV-ONLY blocks in web/index.html and web/js/app.js.
 @router.get("/dev-config")
@@ -466,7 +466,7 @@ def delete_all_products(
             except Exception:  # a missing/unreachable file must not fail the wipe — the rows are already gone
                 logging.getLogger(__name__).exception("could not delete %s from storage", object_key)
     return {"deleted": len(products)}
-# DEV-ONLY: delete-all-products END
+# DEV-ONLY: delete-all END
 
 
 @router.get("/trash", response_model=list[schemas.ProductOut])

@@ -656,6 +656,32 @@ def upload_document_file(
     return {"file_object_key": object_key}
 
 
+# DEV-ONLY: delete-all BEGIN — one-click wipe for dev testing (loop iteration 15)
+@router.delete("")
+def delete_all_documents(
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
+):
+    """Permanently deletes EVERY document (recycle bin included), its line
+    items and audit log, its search entry and its stored file."""
+    from app.core.dev_delete_all import refuse_in_production_or_view_only, delete_files
+
+    refuse_in_production_or_view_only(x_access_level)
+    _require_delete_access(x_has_document_delete)
+    docs = db.query(models.Document.id, models.Document.file_object_key).all()
+    # explicit, not FK cascade: a bulk delete skips the ORM cascade and SQLite doesn't enforce ON DELETE
+    db.query(models.LineItem).delete(synchronize_session=False)
+    db.query(models.AuditLogEntry).delete(synchronize_session=False)
+    db.query(models.Document).delete(synchronize_session=False)
+    db.commit()
+    for doc_id, _ in docs:
+        remove_document_from_index(doc_id)  # logs, never raises
+    delete_files(key for _, key in docs)
+    return {"deleted": len(docs)}
+# DEV-ONLY: delete-all END
+
+
 @router.delete("/{document_id}", status_code=204)
 def delete_document(
     document_id: uuid.UUID,

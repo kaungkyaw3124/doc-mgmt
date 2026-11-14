@@ -220,6 +220,30 @@ def restore_company(
     return company
 
 
+# DEV-ONLY: delete-all BEGIN — one-click wipe for dev testing (loop iteration 15)
+@router.delete("")
+def delete_all_companies(
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    """Permanently deletes EVERY company (recycle bin included), its MDs and
+    their logo/seal files. Documents are kept with company/MD cleared."""
+    from app.core.dev_delete_all import refuse_in_production_or_view_only, delete_files
+
+    refuse_in_production_or_view_only(x_access_level)
+    keys = [k for row in db.query(models.Company.logo_object_key, models.Company.seal_object_key) for k in row]
+    keys += [k for (k,) in db.query(models.CompanyDirector.seal_object_key)]
+    db.query(models.Document).update(
+        {models.Document.company_id: None, models.Document.director_id: None}, synchronize_session=False
+    )
+    db.query(models.CompanyDirector).delete(synchronize_session=False)
+    deleted = db.query(models.Company).delete(synchronize_session=False)
+    db.commit()
+    delete_files(keys)
+    return {"deleted": deleted}
+# DEV-ONLY: delete-all END
+
+
 @router.delete("/{company_id}", status_code=204)
 def delete_company(
     company_id: uuid.UUID,

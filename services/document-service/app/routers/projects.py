@@ -142,6 +142,24 @@ def restore_project(
     return project
 
 
+# DEV-ONLY: delete-all BEGIN — one-click wipe for dev testing (loop iteration 15)
+@router.delete("")
+def delete_all_projects(
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    """Permanently deletes EVERY project (recycle bin included). Documents
+    are kept; their project_id is cleared first so the FK can't block it."""
+    from app.core.dev_delete_all import refuse_in_production_or_view_only
+
+    refuse_in_production_or_view_only(x_access_level)
+    db.query(models.Document).update({models.Document.project_id: None}, synchronize_session=False)
+    deleted = db.query(models.Project).delete(synchronize_session=False)
+    db.commit()
+    return {"deleted": deleted}
+# DEV-ONLY: delete-all END
+
+
 @router.delete("/{project_id}", status_code=204)
 def delete_project(
     project_id: uuid.UUID,
