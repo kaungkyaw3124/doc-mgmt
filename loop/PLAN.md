@@ -2,86 +2,76 @@
 
 | Field | Value |
 |---|---|
-| Iteration | **15** |
-| Goal | A one-click **"Delete ALL products"** button on the Products page, for the user's development/testing stage. It is temporary and must be trivial to remove later |
+| Iteration | **15** (revised: now covers 5 pages) |
+| Goal | A one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later |
 | Attempt limit | 5 per failing check |
 | Branch | whichever the session opened on (`dev` / `security/auth-hardening`) |
 | Status | READY FOR CLAUDE CODE |
 
 ## What the user wants
-The user is still developing and wants to wipe the whole product catalogue between
-tests without clicking Delete on every row. Their words: "just 1 click", "I want to
-test and delete, after that I'm gonna remove that" (the button itself). Every row
-already has its own Delete button (moves the product to the recycle bin). Nothing new
-is needed on documents, projects, companies or customers — do **not** touch them.
+The user is still developing and wants to wipe data between tests without clicking Delete
+on every row. Their words: "just 1 click", "I want to test and delete, after that I'm gonna
+remove that" (the buttons themselves). Later request: "in delete all product, we also need
+to add delete all in documents, customers, projects, company."
+Every row already has its own Delete button; do not change those.
 
 ## Decisions already made (do not ask the user again)
 - **One click, no confirm dialog, no typed word.** The user explicitly asked for this.
-- **Permanent delete** (not the recycle bin): the point is to clear the catalogue for
-  the next test. This includes products already sitting in the recycle bin.
-- **Dev-only guard (the one safety rail I'm adding)**: the button is rendered and the
-  endpoint answers only when `ENVIRONMENT` is not `production` (the catalogue service
-  already has `environment: str = "development"` in `app/core/config.py`; compose passes
-  `ENVIRONMENT: ${ENVIRONMENT:-development}`). In production the endpoint returns 403 and
-  the UI hides the button, so it cannot wipe the live VPS by accident. Do not add any other friction.
-- Same permission rule as the existing product delete (`_require_edit_access`); a view-only user gets 403.
+- **Permanent delete** (not the recycle bin), including rows already in the recycle bin.
+- **Dev-only guard (the one safety rail)**: the button is shown and the endpoint answers only
+  when `ENVIRONMENT` is not `production` (both services have `environment: str = "development"`
+  in `app/core/config.py`; compose passes `ENVIRONMENT: ${ENVIRONMENT:-development}`).
+  In production every endpoint returns 403 and the UI hides the buttons. No other friction.
+- Same permission rule as the existing single delete on each entity; view-only user gets 403.
+- Button labels: **"Delete ALL products (dev)"**, **"Delete ALL documents (dev)"**,
+  **"Delete ALL customers (dev)"**, **"Delete ALL projects (dev)"**, **"Delete ALL companies (dev)"**.
+  Red danger style, next to each page's "+ New …" button
+  (`web/index.html`: `toggle-product-form` ~690, `toggle-doc-form` ~617, `toggle-customer-form` ~740,
+  `toggle-project-form` ~784, `toggle-company-form` ~829).
+- Each click calls its endpoint, refreshes that list, shows a banner "Deleted N <things>".
+- **Related data is never a blocker** (this is a wipe, not a safe delete):
+  - Documents: delete rows; `line_items` and `audit_log_entries` go by FK cascade (verify, add explicit deletes if the DB/SQLite does not cascade); remove each document from the search index (`search_client.remove_document_from_index`) and best-effort delete its stored files (PDF/attachments/MinIO) — never fail because a file is missing.
+  - Customers / Projects: first set `documents.customer_id` / `documents.project_id` to NULL, then delete. Documents are kept.
+  - Companies: first set `documents.company_id` and `documents.director_id` to NULL, delete the company's directors (CASCADE exists on `company_directors.company_id`; verify), best-effort delete logo/seal/letterhead files from MinIO, then delete companies. Documents are kept.
+  - Products: delete all rows including soft-deleted, and sub-item links (check FK on `product_sub_items`), remove each from Meilisearch, best-effort delete files. Categories are kept.
+  - Do NOT cross-delete: "Delete ALL customers" does not delete documents, and so on.
+- Documents/Customers/Projects/Companies live in **document-service**, Products in **catalogue-service**: two services, two guards, same pattern.
 
 ## Tasks
-1. **Endpoint** in `services/catalogue-service/app/routers/products.py`:
-   `DELETE /products` (collection, no id) — define it so it does not clash with
-   `DELETE /products/{product_id}` or with `/trash`, `/duplicate-check` etc. (put it
-   above the `/{product_id}` routes). It must:
-   - return 403 when `settings.environment == "production"` or the user has view-only access;
-   - delete every product row, including soft-deleted ones, and their sub-item links
-     (check the FK / cascade on `product_sub_items`; do not leave orphans or fail on FK errors);
-   - remove each product's Meilisearch entry (reuse `remove_product_from_index`, or one
-     bulk call if the index code has one) and best-effort delete the stored product
-     image/file from MinIO (never fail the request because a file is missing);
-   - return `{"deleted": <count>}`.
-   Categories are **not** deleted.
+1. **Endpoints**: `DELETE /products` (catalogue-service, `routers/products.py`),
+   `DELETE /documents`, `DELETE /customers`, `DELETE /projects`, `DELETE /companies`
+   (document-service routers). Collection routes with no id: define them above the
+   `/{id}` routes so they don't clash with `/trash`, `/duplicate-check`, etc. Each returns
+   403 in production or for view-only access, else `{"deleted": <count>}`.
 2. **Gateway/auth**: check `infra/nginx/nginx.conf.template` and the auth-service RBAC
-   mapping so the call is allowed for the same users who can delete a product today and
-   is not blocked by a method/path rule. Document-service must not be affected.
-3. **Button** on the Products page (`web/index.html` next to the "+ New product" button,
-   ~line 690, handler in `web/js/app.js`): red danger button labelled
-   **"Delete ALL products (dev)"**. One click calls the endpoint, then refreshes the
-   products list (and the recycle bin list if it is visible) and shows a short banner
-   "Deleted N products". Hidden when the environment is production — expose the
-   environment to the UI with the smallest existing mechanism (e.g. a field on an
-   endpoint the UI already calls, or a small `GET /config`-style response); do not
-   hard-code a hostname check.
-4. **Easy to remove later**: wrap everything in clearly marked blocks so the user (or a
-   later iteration) can delete the feature in one go — `# DEV-ONLY: delete-all-products BEGIN/END`
-   in Python, `<!-- DEV-ONLY: delete-all-products -->` / `// DEV-ONLY ...` in the web files —
-   and put the endpoint in the smallest possible code block. List every touched file and
-   line range under "Changes made" in the report, plus the exact steps to remove it.
-5. Do not change existing delete/trash/restore behaviour, and do not touch documents,
-   projects, companies or customers.
+   mapping so `DELETE` on these five collection paths is allowed for the same users who can
+   delete a single item today, and is not blocked by a method/path rule.
+3. **Buttons + handlers** in `web/index.html` and `web/js/app.js`, hidden in production.
+   Expose the environment to the UI with the smallest existing mechanism (a field on an
+   endpoint the UI already calls, or a tiny `GET /config`-style response); do not hard-code a hostname check.
+4. **Easy to remove later**: wrap everything in marked blocks —
+   `# DEV-ONLY: delete-all BEGIN/END` in Python, `<!-- DEV-ONLY: delete-all -->` and
+   `// DEV-ONLY: delete-all BEGIN/END` in web files. Keep each endpoint in the smallest block.
+   The report must list every touched file and line range and the exact removal steps.
+5. Do not change existing delete/trash/restore behaviour.
 
 ## Tests
-- `services/catalogue-service/tests/` (follow the existing pattern there): with 3 products
-  (one in the recycle bin, one with sub-items) `DELETE /products` → 200 `{"deleted": 3}`, a
-  following `GET /products`, `/products/trash` are empty, sub-item rows are gone, the search
-  index removal was called for each product (mock), categories still exist; with
-  `ENVIRONMENT=production` → 403 and nothing deleted; view-only access → 403 and nothing deleted;
-  a MinIO error while deleting a file does not fail the request; an empty catalogue → `{"deleted": 0}`.
-- Playwright `tests/test_ui_delete_all_products.py`: create 3 products through the API, sign in,
-  open Products, click **Delete ALL products (dev)** once (no dialog may appear — fail if a
-  `confirm` dialog fires), the table shows the empty state and the banner says "Deleted 3 products";
-  a second test checks the button is absent when the environment is production (use whatever
-  switch the stack supports; if it can't be switched in the test stack, test the UI logic with
-  a stubbed response and say so in the report).
+- Catalogue (`services/catalogue-service/tests/`) and document-service (`services/document-service/tests/`), following existing patterns. For each entity:
+  - several rows incl. related data → `DELETE` → 200 with correct count; list endpoints are empty afterwards; related rows handled as above (line items/audit gone; documents kept with NULL references for customers/projects/companies; directors gone; categories kept);
+  - `ENVIRONMENT=production` → 403, nothing deleted; view-only → 403, nothing deleted;
+  - a MinIO/search error does not fail the request; empty table → `{"deleted": 0}`.
+- Playwright `tests/test_ui_delete_all.py`: for each of the 5 pages create rows through the API, open the page, click the button once (fail if a `confirm` dialog fires), the list shows the empty state and the banner says "Deleted N …". One test checks buttons are absent when production (if the stack can't be switched, test the UI logic with a stubbed response and say so).
 - All existing tests still pass.
 
 ## Acceptance checks
 | # | Check | How to verify |
 |---|---|---|
-| A1 | Catalogue unit tests pass | the new catalogue tests + the whole catalogue suite |
-| A2 | UI test passes | `pytest tests/test_ui_delete_all_products.py -v` |
-| A3 | No regressions | `./scripts/verify.sh` passes; catalogue service unit suite passes |
-| A4 | Proof | `loop/evidence/iter-15-products-before.png` (Products page with 3+ products and the red button), `iter-15-products-after.png` (empty list with the "Deleted N products" banner) |
-| A5 | Removal steps | the report lists every DEV-ONLY block and the exact steps to remove the feature |
+| A1 | Catalogue + document-service unit tests pass | new tests + both whole suites |
+| A2 | UI test passes | `pytest tests/test_ui_delete_all.py -v` |
+| A3 | No regressions | `./scripts/verify.sh` passes |
+| A4 | Proof | `loop/evidence/iter-15-<page>-before.png` and `-after.png` for products, documents, customers, projects, companies |
+| A5 | Removal steps | the report lists every DEV-ONLY block and the exact removal steps |
 
 ## Out of scope — record under "Found but not fixed" if you notice them
-- Delete-all for documents, projects, companies, customers (the user did not ask).
-- Wiping the recycle bin for other item types.
+- Delete-all for categories, users, or the recycle bins of other types.
+- Changing the per-row delete buttons.
