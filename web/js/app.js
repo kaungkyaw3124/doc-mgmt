@@ -155,6 +155,30 @@ function showBanner(elId, message, type = 'error') {
   el.innerHTML = message ? `<div class="banner banner-${type}">${escapeHtml(message)}</div>` : '';
 }
 
+// Animated tick (success) / cross (failure) toast — CSS-drawn, no sound.
+function showTick(ok, message) {
+  const el = document.createElement('div');
+  el.className = 'tick-toast ' + (ok ? 'tick-ok' : 'tick-err');
+  el.setAttribute('role', 'status');
+  el.innerHTML = `<svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23" pathLength="100"/><path d="${ok ? 'M15 27l7 7 15-15' : 'M18 18l16 16M34 18L18 34'}" pathLength="100"/></svg>`;
+  if (message) el.append(message);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), ok ? 1600 : 2600);
+}
+const showSuccessTick = (message) => showTick(true, message);
+const showErrorCross = (message) => showTick(false, message);
+
+// Resolves once each saved image (by its *-url endpoint) loads back from storage.
+async function verifySavedImages(urlPaths) {
+  const urls = await Promise.all(urlPaths.map(p => apiFetch(p).then(d => d.url)));
+  await Promise.all(urls.map(src => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('Saved, but the uploaded image could not be loaded back.'));
+    img.src = src;
+  })));
+}
+
 // ---------- auth ----------
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -819,8 +843,10 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     document.getElementById('doc-number').disabled = false;
     editingDocumentId = null;
     loadDocuments();
+    showSuccessTick('Document saved');
   } catch (err) {
     showBanner('doc-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('doc-form-submit-btn').disabled = false;
   }
@@ -1259,6 +1285,7 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     document.getElementById('project-form-title').textContent = 'New project';
     document.getElementById('project-form-submit-btn').textContent = 'Create project';
     editingProjectId = null;
+    showSuccessTick('Project saved');
     await loadProjects();
 
     if (reopenDocModalAfterProject) {
@@ -1270,6 +1297,7 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     }
   } catch (err) {
     showBanner('project-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('project-form-submit-btn').disabled = false;
   }
@@ -1572,9 +1600,11 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       company = await apiFetch('/companies', { method: 'POST', body: JSON.stringify(payload) });
     }
 
+    const savedImages = [];
     if (logoInput.files.length > 0) {
       const formData = new FormData();
       formData.append('file', logoInput.files[0]);
+      savedImages.push('/companies/' + company.id + '/logo-url');
       const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/logo', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
@@ -1589,6 +1619,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           // response wasn't JSON — stick with the generic message
         }
         showBanner('company-modal-banner', `Company saved, but the logo didn't upload: ${detail}`);
+        showErrorCross(`The logo didn't upload`);
         loadCompanies();
         return;
       }
@@ -1597,6 +1628,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     if (sealInput.files.length > 0) {
       const formData = new FormData();
       formData.append('file', sealInput.files[0]);
+      savedImages.push('/companies/' + company.id + '/seal-url');
       const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/seal', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
@@ -1611,6 +1643,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           // response wasn't JSON — stick with the generic message
         }
         showBanner('company-modal-banner', `Company saved, but the seal didn't upload: ${detail}`);
+        showErrorCross(`The seal didn't upload`);
         loadCompanies();
         return;
       }
@@ -1636,6 +1669,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         });
         if (!created) {
           showBanner('company-modal-banner', 'Company saved, but one MD row failed to save.');
+          showErrorCross('An MD row failed to save');
           loadCompanies();
           return;
         }
@@ -1655,14 +1689,17 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           headers: { 'Authorization': 'Bearer ' + token },
           body: formData
         });
+        savedImages.push('/companies/' + company.id + '/directors/' + directorId + '/seal-url');
         if (!uploadResponse.ok) {
           showBanner('company-modal-banner', `Company saved, but a director's seal didn't upload.`);
+          showErrorCross("An MD seal didn't upload");
           loadCompanies();
           return;
         }
       }
     }
 
+    await verifySavedImages(savedImages);
     document.getElementById('company-form').reset();
     resetDirectorRows(null);
     document.getElementById('company-modal').classList.remove('active');
@@ -1670,8 +1707,10 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
     editingCompanyId = null;
     loadCompanies();
+    showSuccessTick('Company saved');
   } catch (err) {
     showBanner('company-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('company-form-submit-btn').disabled = false;
   }
@@ -1875,6 +1914,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
     document.getElementById('customer-form-title').textContent = 'New customer';
     document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
     editingCustomerId = null;
+    showSuccessTick('Customer saved');
     await loadCustomers();
 
     if (reopenDocModalAfterCustomer) {
@@ -1887,6 +1927,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
     }
   } catch (err) {
     showBanner('customer-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('customer-form-submit-btn').disabled = false;
   }
@@ -2265,8 +2306,10 @@ document.getElementById('create-category-btn').addEventListener('click', async (
     document.getElementById('product-category').value = name;
     document.getElementById('new-category-short-term').value = '';
     document.getElementById('category-modal').classList.remove('active');
+    showSuccessTick('Category saved');
   } catch (err) {
     showBanner('category-modal-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -2376,8 +2419,10 @@ document.getElementById('edit-category-save-btn').addEventListener('click', asyn
     });
     await loadCategories();
     document.getElementById('edit-category-modal').classList.remove('active');
+    showSuccessTick('Category saved');
   } catch (err) {
     showBanner('edit-category-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -2451,6 +2496,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
           // response wasn't JSON — stick with the generic message
         }
         showBanner('product-modal-banner', `Product saved, but the catalog file didn't upload: ${detail}`);
+        showErrorCross("The catalog file didn't upload");
         loadProducts();
         return;
       }
@@ -2465,6 +2511,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
           });
         } catch (err) {
           showBanner('product-modal-banner', `Product saved, but a sub-item ("${item.name}") failed to attach: ${err.message}`);
+          showErrorCross('A sub-item failed to attach');
           loadProducts();
           return;
         }
@@ -2479,9 +2526,11 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     editingProductId = null;
     pendingSubItems = [];
     loadProducts();
+    showSuccessTick('Product saved');
   } catch (err) {
     if (err.detail && err.detail.existing) showProductExistsBanner(err.detail.existing);  // 409 race
     else showBanner('product-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('product-form-submit-btn').disabled = false;
   }
@@ -2661,6 +2710,7 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
         // response wasn't JSON — stick with the generic message
       }
       showBanner('bulk-import-banner', detail);
+      showErrorCross(detail);
       resultsEl.innerHTML = '';
       return;
     }
@@ -2702,8 +2752,10 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
       ${warningText.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${warningText.join('<br>')}</p>` : ''}
     `;
     loadProducts();
+    showSuccessTick('Import finished');
   } catch (err) {
     showBanner('bulk-import-banner', err.message);
+    showErrorCross(err.message);
     resultsEl.innerHTML = '';
   } finally {
     submitBtn.disabled = false;
@@ -2795,6 +2847,7 @@ document.getElementById('category-bulk-import-submit-btn').addEventListener('cli
         // response wasn't JSON — stick with the generic message
       }
       showBanner('category-bulk-import-banner', detail);
+      showErrorCross(detail);
       resultsEl.innerHTML = '';
       return;
     }
@@ -2817,8 +2870,10 @@ document.getElementById('category-bulk-import-submit-btn').addEventListener('cli
       ${result.warnings.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${result.warnings.map(w => escapeHtml(w)).join('<br>')}</p>` : ''}
     `;
     loadCategories();
+    showSuccessTick('Import finished');
   } catch (err) {
     showBanner('category-bulk-import-banner', err.message);
+    showErrorCross(err.message);
     resultsEl.innerHTML = '';
   } finally {
     submitBtn.disabled = false;
@@ -3831,8 +3886,10 @@ document.getElementById('create-user-submit-btn').addEventListener('click', asyn
     }
     document.getElementById('create-user-modal').classList.remove('active');
     loadAllUsers();
+    showSuccessTick('User created');
   } catch (err) {
     showBanner('create-user-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('create-user-submit-btn').disabled = false;
   }
@@ -3849,8 +3906,10 @@ document.getElementById('edit-user-save-btn').addEventListener('click', async ()
     document.getElementById('edit-user-password').value = '';
     loadAllUsers();
     showBanner('edit-user-banner', 'Saved.', 'info');
+    showSuccessTick('User saved');
   } catch (err) {
     showBanner('edit-user-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -3976,8 +4035,10 @@ document.getElementById('create-group-btn').addEventListener('click', async () =
     await apiFetch('/admin/groups', { method: 'POST', body: JSON.stringify({ name }) });
     document.getElementById('new-group-name').value = '';
     loadAdminGroups();
+    showSuccessTick('Group created');
   } catch (err) {
     showBanner('admin-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -4072,8 +4133,10 @@ document.getElementById('create-role-btn').addEventListener('click', async () =>
     await apiFetch('/admin/groups/' + selectedGroupId + '/roles', { method: 'POST', body: JSON.stringify({ name }) });
     document.getElementById('new-role-name').value = '';
     loadGroupRoles();
+    showSuccessTick('Role created');
   } catch (err) {
     showBanner('admin-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -4282,8 +4345,10 @@ document.getElementById('edit-role-rename-btn').addEventListener('click', async 
     await apiFetch('/admin/roles/' + editingRoleId + '/rename', { method: 'PATCH', body: JSON.stringify({ name: newName }) });
     await renderEditRoleModal();
     loadGroupRoles();
+    showSuccessTick('Role renamed');
   } catch (err) {
     showBanner('edit-role-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
