@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Iteration | **15** (revised: now covers 5 pages) |
-| Goal | A one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later |
+| Goal | **Part A** — A one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later. **Part B** — modal headings with the Close button stay visible while the modal body scrolls (see "Part B" at the bottom) |
 | Attempt limit | 5 per failing check |
 | Branch | whichever the session opened on (`dev` / `security/auth-hardening`) |
 | Status | READY FOR CLAUDE CODE |
@@ -75,3 +75,45 @@ Every row already has its own Delete button; do not change those.
 ## Out of scope — record under "Found but not fixed" if you notice them
 - Delete-all for categories, users, or the recycle bins of other types.
 - Changing the per-row delete buttons.
+
+---
+
+## Part B — Sticky modal heading + Close button (do after Part A, same iteration)
+
+### What the user wants
+In pop-up windows (first seen in **Bulk import products**), when the user scrolls down a long
+result list, the heading and the **Close** button scroll out of view. The user chose: **keep the
+heading and Close button fixed at the top while the body scrolls** (not a "go to top" button).
+Pure CSS, no scroll listeners, no JS.
+
+### Decisions already made
+- Sticky header = the modal's `<h3>` title + the Close button, always visible.
+- In **Bulk import products** (and the category bulk-import modal if it has the same layout), the
+  result summary line ("Created N products · Skipped N duplicates · N warnings") and the
+  Import button area should also stay visible; only the long results table scrolls.
+  Keep it simple: if that needs more than a small CSS change, do only the header + Close and record the rest under "Found but not fixed".
+- Apply to **every** `.modal-box` modal in `web/index.html`, not just bulk import, using one shared
+  CSS rule (see `.modal-overlay`/`.modal-box`/`.modal-close` ~lines 431-446; `.modal-box-scrollbody`
+  ~448-475 already keeps its heading fixed, do not break it).
+- Suggested approach (use another if it is simpler/more robust): `.modal-box { padding-top:0 }`, wrap
+  heading + Close in a header bar with `position: sticky; top: 0; background: #fff; z-index: 1;
+  padding: 20px 0 12px; border-bottom: 1px solid <existing border colour>;` — the current Close is
+  `float:right` before the `<h3>`, so a small markup change per modal (or a CSS-only change
+  that makes `.modal-close` `position: sticky; top: 0; float: right` plus a sticky `h3`) is needed.
+  Check every modal still looks the same when it is short (no scrolling).
+
+### Tests
+- Playwright `tests/test_ui_modal_sticky_header.py`: open Bulk import products, import a spreadsheet
+  with 40+ rows (generate with openpyxl) so the result list overflows, scroll the modal body to the
+  bottom, assert the **Close** button's bounding box is inside the viewport and visible, click it and
+  assert the modal closes. Parametrize over at least 3 other modals (audit log, create user, edit role)
+  with `evaluate` to make the body taller than the box if they are short, asserting Close stays visible after scrolling.
+- Existing UI tests still pass.
+
+### Acceptance checks
+| # | Check | How to verify |
+|---|---|---|
+| B1 | Close/heading stay visible after scrolling | the Playwright test above |
+| B2 | Short modals unchanged | screenshots `loop/evidence/iter-15-modal-short-before/after.png` look identical |
+| B3 | Proof | `loop/evidence/iter-15-bulk-import-scrolled.png` (scrolled to the bottom with heading + Close visible) |
+| B4 | No regressions | `./scripts/verify.sh` passes |
