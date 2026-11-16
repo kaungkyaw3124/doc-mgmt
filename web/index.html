@@ -444,6 +444,15 @@
   .modal-box-wide { width: 950px; max-width: 94vw; }
   .modal-box h3 { margin-bottom: 16px; }
   .modal-close { float: right; }
+  /* Heading + Close stay pinned while a long modal body scrolls: the box's
+     top padding moves into the sticky h3 so its white background covers the
+     gap; Close (floated just before the h3) is sticky on top of it. */
+  .modal-box:not(.modal-box-scrollbody) { padding-top: 0; }
+  .modal-box:not(.modal-box-scrollbody) > h3 {
+    position: sticky; top: 0; z-index: 2; background: #fff;
+    padding-top: 28px; padding-bottom: 12px; margin-bottom: 4px;
+  }
+  .modal-box:not(.modal-box-scrollbody) > .modal-close { position: sticky; top: 28px; margin-top: 28px; z-index: 3; }
 
   /* Large, scrollable-body modal (e.g. the documents recycle bin) — the
      box itself is a fixed 80% of the viewport and does NOT scroll;

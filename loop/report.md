@@ -2,7 +2,7 @@
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: A one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later
+- **Goal**: **Part A** — a one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later. **Part B** — modal heading + Close stay visible while the modal body scrolls
 - **Ponytail skill loaded**: yes (the session-start hook loaded it, and this iteration followed it)
 - **Branch / commit**: `dev` @ (this commit, see `git log`). Before this, I rebased the earlier unpushed products-only commit onto the planner's revised PLAN.md. The rebase was clean.
 - **One-paragraph summary**: The products part was already built in the first pass (`DELETE /products`, `GET /products/dev-config`). This pass adds `DELETE /documents`, `/customers`, `/projects` and `/companies` to document-service. Each one permanently deletes every row, including rows in the recycle bin, and returns `{"deleted": N}`. Each returns 403 when `ENVIRONMENT=production` or the user has view-only access. Documents also needs the same `X-Has-Document-Delete` permission as the single delete.
@@ -11,6 +11,8 @@
   - **Companies** set `company_id`/`director_id` on documents to NULL, delete the MDs, then the companies. It makes a best-effort attempt to delete the logo, seal and MD-seal files.
   - The UI has five red "Delete ALL … (dev)" buttons, all driven by one generic JS block. One click, no confirm, then the list refreshes and a banner shows "Deleted N …". The buttons show when `/products/dev-config` says the feature is enabled. One `ENVIRONMENT` variable feeds both services through compose, and each service's endpoint still enforces its own guard.
   - Everything sits inside `DEV-ONLY: delete-all` markers. The first pass used `delete-all-products` markers; I renamed them to match the plan.
+
+- **Part B** (this session): one CSS block in `web/index.html` (no markup, no JS). The modal box's top padding moves into its `h3`, which becomes `position: sticky; top: 0` with a white background. The floated Close button (it always sits right before the h3) becomes `position: sticky; top: 28px` above it. The `.modal-box-scrollbody` modals (edit role, documents recycle bin) already had a fixed header, so the rule skips them with `:not(.modal-box-scrollbody)` and leaves them unchanged. It applies to all 26 other modals. Short modals render the same as before.
 
 ## 2. Baseline (before any change)
 ```
@@ -27,6 +29,10 @@ verify.sh: PASSED (stack left running: --keep)
 | A3 | No regressions | PASS | `./scripts/verify.sh --keep` → `24 passed, 9 skipped` (the skips are the Playwright UI tests, because Playwright isn't in verify.sh's venv) |
 | A4 | Proof | PASS | `loop/evidence/iter-15-{products,documents,customers,projects,companies}-{before,after}.png`, taken by the UI test |
 | A5 | Removal steps | PASS | §4 below |
+| B1 | Close/heading stay visible after scrolling | PASS | `pytest tests/test_ui_modal_sticky_header.py -v` → `5 passed in 9.46s`. It covers bulk import with 45 rows (results overflow, scrolled to the bottom, Close and h3 inside the viewport and not covered per `elementFromPoint`, then Close closes the modal) plus audit log, create user, customer and edit role, each padded to 3000px and scrolled. Before the CSS change: `4 failed, 1 passed`. Edit role already passed because it is a scrollbody modal. |
+| B2 | Short modals unchanged | PASS | `loop/evidence/iter-15-modal-short-{before,after}.png` (Create User, 480×492). They look identical. A pixel diff shows anti-aliasing changes only inside the heading/Close strip (bbox 28,31–450,46), because sticky elements get their own compositing layer. Layout and position are unchanged. |
+| B3 | Proof | PASS | `loop/evidence/iter-15-bulk-import-scrolled.png` |
+| B4 | No regressions | PASS | `./scripts/verify.sh --keep` → `24 passed, 10 skipped`. All Playwright UI tests: `21 passed, 6 skipped` (the 6 skips are the session tests, which need a stack started with short session values, as before) |
 
 Extra live-Postgres check: SQLite doesn't enforce FKs, so the unit tests can't prove the NULL-first ordering. Against the running stack I created a document linked to a customer, a project, a company and an MD, then called `DELETE /customers` → `200 {"deleted":1}`, `/projects` → 200, `/companies` → 200. The document survived with all four refs `None` and its 1 line item intact. `DELETE /documents` → `200 {"deleted":1}`.
 
@@ -45,6 +51,8 @@ Extra live-Postgres check: SQLite doesn't enforce FKs, so the unit tests can't p
 | `services/document-service/tests/test_delete_all.py` | added | 18 unit tests |
 | `tests/test_ui_delete_all.py` | added (replaces `tests/test_ui_delete_all_products.py`, deleted) | Playwright + screenshots |
 | `loop/history/report-iter-15-products.md` | moved | the first pass's report |
+| `web/index.html` L447–455 | added CSS (Part B) | sticky modal h3 + Close |
+| `tests/test_ui_modal_sticky_header.py` | added (Part B) | Playwright: bulk import + 4 other modals |
 
 Gateway/auth (Task 2): no change needed. In `infra/nginx/nginx.conf.template`, `/api/documents`, `/api/customers`, `/api/projects`, `/api/companies` and `/api/products` are prefix locations with no method rules. They get the same `_verify` RBAC check and the same headers as the single delete, and that includes `X-Has-Document-Delete` on `/api/documents`. The live UI test confirms this through nginx.
 
@@ -82,7 +90,18 @@ test_ui_delete_all.py::test_buttons_hidden_in_production PASSED          [100%]
 ============================== 6 passed in 21.52s ==============================
 ```
 
+Part B:
+```
+$ pytest tests/test_ui_modal_sticky_header.py -v     (Playwright image)
+============================== 5 passed in 9.46s ===============================
+$ ./scripts/verify.sh --keep
+======================== 24 passed, 10 skipped in 4.77s ========================
+$ pytest tests/test_ui_*.py     (Playwright image)
+21 passed, 6 skipped in 55.72s
+```
+
 ## 7. Found but not fixed (out of scope)
+- **Part B: the bulk-import summary line and the Import button still scroll away**; only the heading and Close are pinned. The plan's fallback allows this. Pinning them would mean restructuring that modal into the scrollbody layout, which is more than a small CSS change.
 - **The UI decides visibility from catalogue's `/products/dev-config` only.** If the two services ever ran with different `ENVIRONMENT` values, the document-service buttons could show while that service answers 403. That can't happen with the current compose, which passes one variable to both. The server guard is the real rail.
 - **Running `tests/test_ui_delete_all.py` wipes all five tables in the stack it targets.** That is the feature. verify.sh skips it today only because Playwright isn't in its venv.
 - **The single `DELETE /products/{id}` sub-item FK issue and the leftover MinIO file** are still open (see `loop/history/report-iter-15-products.md` §7). Single deletes of documents and companies also leave their MinIO files behind. Delete-all removes them.
