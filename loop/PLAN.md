@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Iteration | **15** (revised: now covers 5 pages) |
-| Goal | **Part A** — A one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later. **Part B** — modal headings with the Close button stay visible while the modal body scrolls (see "Part B" at the bottom) |
+| Goal | **Part A** — A one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later. **Part B** — modal headings with the Close button stay visible while the modal body scrolls (see "Part B" at the bottom). **Part C** — animated success tick after saves (see "Part C", do last) |
 | Attempt limit | 5 per failing check |
 | Branch | whichever the session opened on (`dev` / `security/auth-hardening`) |
 | Status | READY FOR CLAUDE CODE |
@@ -117,3 +117,48 @@ Pure CSS, no scroll listeners, no JS.
 | B2 | Short modals unchanged | screenshots `loop/evidence/iter-15-modal-short-before/after.png` look identical |
 | B3 | Proof | `loop/evidence/iter-15-bulk-import-scrolled.png` (scrolled to the bottom with heading + Close visible) |
 | B4 | No regressions | `./scripts/verify.sh` passes |
+
+---
+
+## Part C — Animated success tick after saves (do last, same iteration)
+
+### What the user wants
+When data is saved (product, company, logo, seal, letterhead, bulk import, …), confirm it with a
+small **animated check mark** like the iPhone's, instead of only text. **No sound at all** (the user
+said so — do not add audio, a sound toggle, or vibration). Must not hurt page performance.
+
+### Decisions already made
+- **CSS-only**: one small inline SVG check (circle + tick drawn with `stroke-dasharray` /
+  `stroke-dashoffset` keyframes). No library (no Lottie, no GIF, no JS animation loop). Total added code < ~1.5 KB.
+- One shared helper in `web/js/app.js`, e.g. `showSuccessTick(anchorEl, message?)`, and one shared CSS block.
+  Every existing "saved" confirmation calls it instead of / alongside the text banner (keep the text banner
+  for errors and for details such as bulk-import counts; the tick is the success signal).
+- Shown **only after the server confirms** (HTTP 2xx). For logo / seal / letterhead uploads show the tick only after the
+  saved image is loaded back (`img.onload` of the returned URL) so it proves the file is really there.
+- Failure: a small red cross with a short shake and the error text. Same helper, `showErrorCross(...)`.
+- Placement: small tick near the Save/Import button (or top-right toast), auto-fades after ~1.5 s,
+  never blocks clicks (`pointer-events: none`), removes its DOM node when done.
+- `@media (prefers-reduced-motion: reduce)`: show a static tick (no animation).
+- Bulk import: one tick plus the existing "Created N products" summary.
+- Do not change what gets saved or any API; this is UI feedback only.
+
+### Tasks
+1. Inspect `web/js/app.js` / `web/index.html` for every create/update/upload success path (products, categories, customers,
+   projects, companies incl. logo/seal/letterhead/MD seal, documents, users/roles, bulk imports) and list them in the report.
+2. Add the shared CSS + helper, wire all success paths and the matching failure paths.
+3. Make sure the page does not get heavier: report the size of added CSS/JS in bytes.
+
+### Tests
+- Playwright `tests/test_ui_success_tick.py`: create a product → the tick element appears, has the animation, disappears
+  after ~2 s and leaves no DOM node behind; a failing save (e.g. forced 400 via route interception) shows the cross, not the tick;
+  logo upload → tick only after the image loads; with `reduced_motion="reduce"` no animation is applied; no `<audio>`/`AudioContext` in the code (grep).
+- Existing UI tests still pass.
+
+### Acceptance checks
+| # | Check | How to verify |
+|---|---|---|
+| C1 | Tick on every success path, cross on failures | the Playwright test + the path list in the report |
+| C2 | No sound, no new dependency | grep shows no audio code; `package`/CDN list unchanged |
+| C3 | Weight | report states added bytes (< ~1.5 KB CSS+JS) |
+| C4 | Proof | `loop/evidence/iter-15-tick-*.png` (mid-animation + finished) |
+| C5 | No regressions | `./scripts/verify.sh` passes |
