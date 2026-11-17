@@ -48,9 +48,15 @@ def on_startup():
     # A restart means nothing is running in this container any more: clear a
     # maintenance flag or temp files a crash may have left behind, so the app
     # can never stay stuck at 503.
-    engine.maintenance(False)
-    shutil.rmtree(engine.tmp_root(), ignore_errors=True)
-    engine.tmp_root()
+    # Only when no CLI job (cron / backup.sh `exec`) holds the lock: its
+    # temp files and maintenance flag are live.
+    try:
+        with engine.locked():
+            engine.maintenance(False)
+            shutil.rmtree(engine.tmp_root(), ignore_errors=True)
+            engine.tmp_root()
+    except engine.BackupError:
+        pass
 
 
 @app.get("/health")

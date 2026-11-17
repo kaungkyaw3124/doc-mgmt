@@ -30,7 +30,7 @@ verify.sh: PASSED (stack left running: --keep)
 | A5 | Migration is a single clean head | PASS | `alembic heads` below + `test_migration_chains_after_0007_as_the_single_head`, `test_migration_upgrade_and_downgrade_on_sqlite` |
 | A6 | No regressions + data safety | PASS | verify 42 passed / 13 skipped; document-service units 265 passed; UI 30 passed / 6 skipped |
 
-**Data safety:** every test ran on the throwaway `loop-test` stack (ports 18080/18443, data under `infra/data-loop-test/`) or on SQLite/TestClient. Nothing ran against the user's stack. Before rebuilding the user's stack I backed it up with `./scripts/backup.sh`.
+**Data safety:** every test ran on the throwaway `loop-test` stack (ports 18080/18443, data under `infra/data-loop-test/`) or on SQLite/TestClient. Nothing ran against the user's stack. Before rebuilding the user's stack I backed it up (`backups/backup-2026-11-17-1546.tar.gz`). After the rebuild: documents 1, companies 1, customers 1, projects 1, products 100, users 20 (unchanged), document-service at `0008_company_letterhead`.
 
 XLSX anchor dump (generated from the real exporter):
 ```
@@ -65,6 +65,7 @@ PDF check in the UI test, using PyMuPDF rects on page 1 of the real exported PDF
 | `services/document-service/tests/test_letterhead_header.py` | rewritten for the new behaviour (26 tests) | Task 5 |
 | `tests/test_ui_letterhead_header.py` | added (Playwright + PyMuPDF) | Task 5 |
 | `docs/api.md`, `docs/data-model.md` | new endpoints/fields | Task 6 |
+| `services/backup-service/app/main.py`, `scripts/backup.sh`, `services/backup-service/tests/test_engine.py` | startup clean-up respects the lock; backup.sh waits for health; regression test | bug found during the pre-rebuild backup (attempt 6) |
 | `loop/evidence/iter-17-*.png` | evidence (3 files) | A1, A2, A4 |
 
 ## 5. Test → fix log
@@ -75,6 +76,7 @@ PDF check in the UI test, using PyMuPDF rects on page 1 of the real exported PDF
 | 3 | UI test skipped | `No module named 'playwright'` / `fitz` | the container's pip install line; `fitz` is the deprecated name | pinned `playwright==1.65.1`, `importorskip("pymupdf")` |
 | 4 | verify.sh collection error | `No module named 'PIL'` in tests venv | PIL imported before the skip guards | `importorskip("PIL")` after the Playwright/PyMuPDF guards |
 | 5 | UI suite collection error | `No module named 'openpyxl'` (existing `test_ui_duplicate_products.py`) | test-runner container missing the package, not a code bug | added `openpyxl` to the container's pip line |
+| 6 | pre-rebuild `./scripts/backup.sh` on the user's stack (LOOP §5) | `pg_dump: could not open output file "/backups/.tmp/…/db/docmgmt.dump": No such file or directory` | iteration-16 bug: backup-service's `on_startup` wipes `/backups/.tmp`; `up backup-service` + immediate `backup.sh` raced it and the startup clean-up deleted the running backup's work folder (`deploy.sh` has the same sequence). No data touched, the backup just failed | `on_startup` now cleans only while holding the backup lock (skips if a CLI job holds it); `backup.sh` waits for `/health` first. Regression test `test_startup_cleanup_leaves_a_running_cli_job_alone` (backup-service units 10 passed). Re-ran: recreate + immediate backup → `created backup-2026-11-17-1546.tar.gz` |
 
 ## 6. Final verification output
 ```

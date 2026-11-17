@@ -10,4 +10,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE=(docker compose -f "$REPO_ROOT/infra/docker-compose.yml" ${COMPOSE_OVERRIDE:+-f "$COMPOSE_OVERRIDE"})
 echo "$(date '+%F %T') backup starting"
+# A just-started container clears its temp folder on startup; wait until it is serving.
+for _ in $(seq 60); do
+    "${COMPOSE[@]}" exec -T backup-service python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" >/dev/null 2>&1 && break
+    sleep 1
+done
 "${COMPOSE[@]}" exec -T backup-service python -m app.engine backup --keep "${KEEP:-14}"

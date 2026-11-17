@@ -40,3 +40,24 @@ def test_lock_is_exclusive(tmp_path, monkeypatch):
         engine.acquire_lock()
     engine.release_lock(fd)
     engine.release_lock(engine.acquire_lock())
+
+
+def test_startup_cleanup_leaves_a_running_cli_job_alone(tmp_path, monkeypatch):
+    # Regression: backup.sh exec'd right after the container started, and the
+    # startup cleanup deleted the running backup's work folder.
+    from app import main
+
+    monkeypatch.setattr(engine, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(engine, "MAINTENANCE_FLAG", str(tmp_path / "maint" / "on"))
+    live = tmp_path / ".tmp" / "job" / "db"
+    live.mkdir(parents=True)
+    engine.maintenance(True)
+    fd = engine.acquire_lock()  # the CLI job
+    try:
+        main.on_startup()
+        assert live.is_dir() and os.path.exists(engine.MAINTENANCE_FLAG)
+    finally:
+        engine.release_lock(fd)
+    main.on_startup()  # nothing running: crash leftovers are cleared
+    assert not live.exists() and (tmp_path / ".tmp").is_dir()
+    assert not os.path.exists(engine.MAINTENANCE_FLAG)
