@@ -60,3 +60,16 @@ def remove_document_from_index(doc_id) -> None:
         _client.index(_INDEX_NAME).delete_document(str(doc_id))
     except Exception:
         logger.exception("Failed to remove document %s from Meilisearch", doc_id)
+
+
+def rebuild_index(rows) -> int:
+    """Empties the index and re-adds every row (used after a backup restore —
+    the index is not part of a backup). Meilisearch applies its tasks in
+    order, so the delete always lands before the adds."""
+    try:
+        _client.index(_INDEX_NAME).delete_all_documents()
+    except Exception:  # fail open like every indexing call here: data restore must not hinge on search
+        logger.exception("Failed to clear the %s index before rebuilding it", _INDEX_NAME)
+    for row in rows:
+        index_document(row)
+    return len(rows)

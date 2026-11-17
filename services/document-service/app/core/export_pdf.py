@@ -3,10 +3,11 @@ import os
 from datetime import date
 from io import BytesIO
 
+from PIL import Image
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
-from app.core.export_quotation import DEFAULT_TERMS
+from app.core.export_quotation import DEFAULT_TERMS, fit_inside, is_letterhead
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
 # autoescape=True: rendered fields include user-controlled document/company
@@ -26,6 +27,17 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
             logo_data_uri = f"data:{logo_mime};base64,{b64}"
         except Exception:
             logo_data_uri = None
+
+    # Letterhead banner box (mm), the same box .letterhead's max-width/height
+    # set in quotation.html: an explicit fitted size makes a small banner
+    # grow to fill it too; the CSS max-* alone only shrinks.
+    letterhead_size = None
+    if logo_data_uri and is_letterhead(company, logo_bytes, logo_mime):
+        try:
+            with Image.open(BytesIO(logo_bytes)) as img:
+                letterhead_size = fit_inside(img.width, img.height, 148 if seal_bytes else 184.6, 30)
+        except Exception:
+            letterhead_size = None  # the CSS max-width/max-height still keeps it in the box
 
     seal_data_uri = None
     if seal_bytes:
@@ -119,6 +131,7 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
 
     html_str = template.render(
         logo_data_uri=logo_data_uri,
+        letterhead_size=letterhead_size,
         seal_data_uri=seal_data_uri,
         director=director,
         director_seal_data_uri=director_seal_data_uri,

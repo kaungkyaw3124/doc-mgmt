@@ -2,65 +2,87 @@
 
 | Field | Value |
 |---|---|
-| Iteration | **16** |
-| Goal | Backup & Restore: (1) a server-side backup/restore engine + nightly job, (2) **Download backup** button in the web UI, (3) **Restore from file** in the web UI |
+| Iteration | **19** (part 1 of 2 — iteration 20 is queued in `loop/queue/`) |
+| Goal | **Department data separation.** Documents, products, customers and projects each belong to ONE group (department: Operations, CityMart, …). A user sees and can touch only their own group's records; anything a user creates is automatically owned by their group. Superusers see all |
 | Attempt limit | 5 per failing check |
 | Branch | whichever the session opened on (`dev` / `security/auth-hardening`) |
 | Status | READY FOR CLAUDE CODE |
 
 ## What the user wants
-The user lost data once (products vanished) and runs the app on a VM with real data. They want
-backups they can **download as a file (tar.gz) from the web UI** and **restore from the web UI**,
-plus automatic nightly backups on the VM.
+They run different departments in one app. "The operation user group can see only operations data — if an operation user
+creates a document, product, customer or project, only operation group users can see it. If another group like CityMart
+does the same, it stays in its own group." Records are put in the creator's group **automatically**. A superuser can later
+**move** records from one group to another (that is iteration 20).
 
 ## Decisions already made (do not ask the user again)
-- **What is in a backup**: the Postgres database(s) (pg_dump, custom or plain SQL — pick what restores most reliably, and say why), all MinIO objects (logos, seals, letterheads, product/catalogue files, document files), and `manifest.json` (app version/git commit, Alembic revision(s) per service, created-at, row counts, object count, file checksums).
-  **Not** in a web backup: `.env` files / secrets, the Meilisearch index (rebuild it from the database after restore — reuse the existing re-index code, or add a small one).
-- **Engine**: one reusable module/script (e.g. `scripts/backup.sh` + `scripts/restore.sh`, or a small `backup-service` container with `postgresql-client` and MinIO access — choose the smallest design that works inside the existing docker-compose; do not give any container the Docker socket). The web UI and the nightly cron both call the same engine.
-- **Nightly job**: cron-installable script (`scripts/install-backup-cron.sh`, prints what it will add, does not run without being called) writing `backup-YYYY-MM-DD-HHMM.tar.gz` into a host folder (default `./backups/`, git-ignored), keep the newest **14**, delete older ones.
-- **Pre-update backup**: add to `LOOP.md` finish step and to a `scripts/deploy.sh` (pull → backup → `up -d --build` → restart nginx) a backup taken BEFORE rebuilding. Never `down -v`.
-- **Web UI**: new Admin sub-page **"Backup & Restore"**, superuser only (check the RBAC/gateway so other roles get 403 and no menu entry):
-  - **Download backup** button → streams a `.tar.gz` (no loading the whole file in memory; progress/“preparing…” state).
-  - Optional **password** field: if filled, the download is encrypted (use a standard, well-supported method such as `age`/`openssl enc -aes-256-cbc -pbkdf2`, or AES zip — pick one, document how to decrypt it by hand). Empty = plain tar.gz.
-  - List of existing server-side backups (name, size, date) with download buttons; can also be taken from the nightly folder.
-  - **Restore**: upload a backup file (+ password if encrypted) → server validates (archive readable, manifest present, checksums OK, Alembic revision not newer than this app's — refuse newer with a clear message) → shows a summary ("backup from DATE: N products, N documents, N files") → user must type **RESTORE** to confirm (this is the real server, unlike the dev delete buttons).
-  - Restore steps: take an automatic **pre-restore backup** first (kept in the server list), put the app in maintenance mode ("Restoring… please wait", other API calls return 503 except the status endpoint), replace DB contents and MinIO objects, run migrations to current head, rebuild the search index, leave maintenance mode, report success/failure. If any step fails, say exactly which, keep maintenance mode off, and tell the user the pre-restore backup name for rollback (attempt automatic rollback only if it is simple and tested; otherwise document the manual command).
-  - Show the final result with a clear success/failure message (the animated tick from iteration 15 Part C may be reused if it exists; otherwise plain text is fine).
-- **Gateway**: raise nginx `client_max_body_size` and proxy timeouts for the restore upload/download routes only (not globally). Check `infra/nginx/nginx.conf.template`.
-- **Safety**: never log the password or the archive contents; temp files in a private dir and deleted afterwards; restore refuses if free disk space is clearly insufficient; only one backup/restore may run at a time.
-
-## Notes from the planner
-- Iteration 15 is accepted (PASS). Its report is in `loop/history/report-iter-15.md`.
-- The user's VM has its own **uncommitted** `infra/backup.sh` / `infra/restore.sh` that are not in git; do not depend on them. Build the engine fresh in this repo; if a file with those names already exists in the working tree when you start, do not overwrite it — use other names (`scripts/backup.sh`, `scripts/restore.sh`).
-- Run tests on a throwaway `loop-test` stack only (LOOP.md "Protect the user's data"). The user's stack at :8080 must come out of this iteration with its data intact.
-- The DEV-ONLY Delete ALL feature from iteration 15 stays for now; production sets `ENVIRONMENT=production`.
+- **Owner group on every top-level record**: add a nullable, indexed `group_id` (UUID, no FK across services; the value is a `groups.id` from auth-service) to
+  `documents`, `customers`, `projects` (document-service) and `products` (catalogue-service). Child rows inherit through their parent
+  (line items, audit entries, sub-item links, directors) — no column on them.
+- **Shared, NOT separated**: companies (supplier identities, logos, seals, MDs) and product categories stay global for all groups.
+- **Groups already exist** in auth-service (`Group`, `UserGroup` with `is_group_admin`, roles per group). Reuse them; do not create a new concept.
+- **Visibility rule** (applied on top of the existing role/service access and project-access rules — keep those working unchanged):
+  - superuser → all groups (and rows with no group);
+  - everyone else → only rows whose `group_id` is one of the groups they belong to (active groups only);
+  - a non-superuser in **no** active group sees nothing and cannot create (clear 403 message: "You are not in any group — ask an admin");
+  - rows with `group_id IS NULL` ("unassigned") are visible to superusers only.
+- **Auto-assign on create**: a new document/customer/project/product gets the creator's group. If the user belongs to exactly one group → that one.
+  If they belong to several → the request must carry a `group_id` they belong to (the forms show a "Group" select for multi-group users); missing → 422.
+  Superusers creating records must pick a group in the form (select, required; default = their first group if any).
+  Bulk imports (products, categories excluded) assign every created row to the importer's group the same way.
+- **No cross-group links**: a document's customer and project must be in the same group as the document; reject otherwise (422, clear message). Line items keep a
+  **snapshot** of the product name/description/price they were created with — verify this; a document must still render and export correctly for its group even if the product belongs to
+  another group or was deleted. If line items depend on live product rows, fix that first and report it. The product picker in a document only offers products of the document's group.
+- **Identity travels through the gateway**: auth-service's verify (auth_request) response also returns the user's active group ids and superuser flag; nginx forwards them as headers
+  (e.g. `X-Group-Ids: id1,id2` and `X-Is-Superuser: 1|0`, empty/overwritten on every route so a client can never spoof them — same pattern as `X-Allowed-Projects`). Services trust them only with the existing
+  `X-Internal-Secret`. Service-to-service calls (catalogue → document-service `visible-product-ids`, search indexing) must forward the scope or be explicitly superuser-scoped; fail **closed** if scope is missing.
+- **One choke point per service**: a single helper (e.g. `app/core/group_scope.py`) that returns the caller's scope and filters a SQLAlchemy query; every endpoint uses it. No endpoint may build its own filter.
+  Outside-scope records return **404** (not 403) for get/update/delete/restore so existence is not revealed.
+- **Search** (Meilisearch via search-service) must filter by group server-side: index `group_id` on documents/products, make `/search` apply the filter from the caller's headers (superuser = none), and re-index existing data after the migration. This is the easiest leak to miss — test it.
+- **Everything that reads these tables is in scope**: list, get, update, delete (soft/permanent/trash/restore), duplicate-check, duplicates review page, autocomplete/suggestions, document PDF/XLSX export,
+  document number sequences stay per company (unchanged), file/image URL endpoints (check group before returning a presigned URL), audit log (per-document and any global view), dashboards/counts, bulk import, and the DEV-ONLY
+  Delete ALL endpoints (they delete only rows in the caller's scope; superuser = all).
+- **Existing data**: the migration only adds the columns (NULL = unassigned, visible to superusers only). Provide the way to assign it:
+  `POST /admin/assign-unassigned` style superuser-only endpoint (or one per service) taking `{group_id}` that sets `group_id` on all rows where it is NULL (reports counts per entity), plus `scripts/assign-unassigned.sh <group-name>`
+  that calls it inside the stack and then triggers the search re-index. Nothing is auto-assigned silently. The UI for this is in iteration 20; for now API + script + docs (`docs/GROUPS.md`).
+- **The VM has an uncommitted, VM-only edit to `services/auth-service/app/core/authz.py`** (group project pools, non-superusers with no grants see no projects) plus scripts `seed-data-setup/scripts/seed_city_mart.py`, `migrate_projects_to_group.py`, `test_group_isolation.py`. They are NOT in git and you cannot see them.
+  Build the new rule from scratch on top of what is in this repo. Keep `get_user_allowed_project_ids` behaviour as it is in the repo (do not copy the VM's variant). Mention in the report that the VM must discard its local `authz.py` edit before pulling.
+- Backups (iteration 16) need no change: they copy whole databases, `group_id` comes along.
 
 ## Tasks
-1. Inspect the stack: databases (one or several), what MinIO buckets exist, how migrations run at startup, how search indexing is rebuilt. Write what you found in the report.
-2. Build the engine (backup + restore + manifest + verify) and test it from the command line first.
-3. Nightly cron installer + retention + `scripts/deploy.sh` with pre-update backup. Update `LOOP.md` accordingly.
-4. API endpoints (superuser only) + Admin page UI, per the decisions above.
-5. Maintenance mode + rebuild index + migration-to-head after restore.
-6. Docs: a short `docs/BACKUP_RESTORE.md` (how to back up, restore, decrypt by hand, restore on a fresh server).
+1. **Inspect** (write findings in the report): every endpoint of document-service and catalogue-service touching the four tables; how auth-service verify builds headers; nginx header handling; how search indexing/filters work; how line items store product data; where Alembic runs for each service.
+2. **Auth + gateway**: verify returns group ids/superuser flag; nginx forwards and always overwrites `X-Group-Ids` / `X-Is-Superuser`; add the check to the gateway auth tests.
+3. **Schema**: Alembic migrations adding `group_id` (nullable, indexed) to the four tables (single clean head per service; backfill nothing). SQLite-compatible for tests.
+4. **Scope helper + enforcement** in both services; auto-assign on create; same-group validation for document ↔ customer/project; scoped bulk import, duplicate checks, exports, file URLs, audit, delete-all.
+5. **Search**: index + filter by group; re-index command used by `assign-unassigned`.
+6. **Forms (minimal UI)**: a required "Group" select only when the user may choose (superuser or multi-group); show the group name as a small column/label in the four lists (read-only). No move UI yet.
+7. **Assign-unassigned** endpoint + script + `docs/GROUPS.md` (how groups/ownership work, how to assign old data, how to add a department).
+8. Tests and evidence (below).
 
-## Tests (run on a THROWAWAY stack, never on the user's data — see LOOP.md "Protect the user's data")
-- Engine round trip: seed products, companies (with logo/seal), customers, projects, documents (+ PDF/files) → backup → wipe DB and MinIO → restore → counts equal, files byte-identical (compare checksums), a generated quotation PDF still renders with logo/seal, search finds a product.
-- Manifest/validation: corrupt archive → refused; checksum mismatch → refused; newer-revision backup → refused with message; wrong/missing password → refused; unencrypted + encrypted both work.
-- API: non-superuser gets 403 on every backup/restore endpoint; download streams a valid tar.gz; restore without typing RESTORE → 400; during restore other endpoints return 503; a second concurrent backup/restore is rejected.
-- Retention: 20 fake backups → only newest 14 remain.
-- Playwright `tests/test_ui_backup_restore.py`: log in as admin → Admin → Backup & Restore → click Download (file arrives, valid archive) → create extra data → upload that backup → type RESTORE → data returns to the backed-up state, success message shown; a normal user cannot see the page.
-- All existing tests pass; `./scripts/verify.sh` passes.
+## Tests (throwaway `loop-test` stack ONLY — never the user's stack/volumes)
+Build one reusable fixture: groups **Operations** and **CityMart**, a user in each (editor role with access to documents/products), one user in both, one in no group, one superuser, plus company/categories shared.
+- **Isolation matrix** (parametrised over document, product, customer, project and over list / get / update / delete / restore / trash / duplicate-check / duplicates / export PDF+XLSX / file-url / audit / search):
+  an Operations user creates records; a CityMart user gets empty lists, **404** on direct id access, no hits in search, no suggestions; the reverse; superuser sees both; the no-group user sees nothing and gets 403 on create.
+- Auto-assign: created records carry the creator's group; multi-group user without `group_id` → 422, with a foreign `group_id` → 403/422; superuser must pass `group_id`.
+- No cross-group links: a document cannot use another group's customer/project (422); the product picker/list is scoped; a document whose product was deleted or is in another group still renders and exports correctly.
+- Header spoofing: a client sending its own `X-Group-Ids` / `X-Is-Superuser` through nginx gets them overwritten; direct service calls without `X-Internal-Secret` are refused (existing behaviour still holds).
+- Fail closed: if the scope headers are missing on a request that should have them, the service returns nothing / 403, never everything.
+- Migration: upgrade on a DB with existing rows leaves them NULL → only the superuser sees them; `assign-unassigned` assigns all (counts correct), re-index makes them searchable by the right group; running it twice is harmless.
+- Shared data: companies and categories visible to both groups; quotation numbering unaffected.
+- Playwright `tests/test_ui_group_isolation.py`: two users in two groups, each creates a product + customer + project + document in the UI → each sees only their own in all four lists and in Search; the Group select appears for the superuser and is required.
+- All existing tests still pass (update fixtures where tests assumed "everyone sees everything"); `./scripts/verify.sh` passes.
 
 ## Acceptance checks
 | # | Check | How to verify |
 |---|---|---|
-| A1 | Round-trip restore is lossless | the engine round-trip test output (counts + checksums) |
-| A2 | Validation / auth tests pass | listed tests |
-| A3 | UI flow works end to end | Playwright test + `loop/evidence/iter-16-backup-page.png`, `iter-16-restore-confirm.png`, `iter-16-restore-done.png` |
-| A4 | Nightly cron + retention + pre-update backup | test output, `scripts/deploy.sh` content in the report |
-| A5 | No regressions | `./scripts/verify.sh` |
-| A6 | Data safety | report states which stack the tests ran on and that the user's volumes were untouched |
+| A1 | Isolation matrix passes (4 entities × all operations incl. search/export/file URLs) | test output |
+| A2 | Auto-assign + validation rules | tests |
+| A3 | Gateway headers cannot be spoofed; fail-closed | tests |
+| A4 | Migration + assign-unassigned + re-index | tests + script output in the report |
+| A5 | UI: Group select + group label; two-user flow | Playwright + `loop/evidence/iter-19-*.png` (ops view, citymart view, superuser create form) |
+| A6 | No regressions | verify.sh, all service suites, UI suites; report states which stack tests ran on |
+| A7 | Endpoint inventory | report lists every endpoint touched and confirms none is left unscoped (grep proof that no router query on the four models bypasses the helper) |
 
 ## Out of scope — record under "Found but not fixed"
-- Off-site copy (rsync/rclone/cloud) — the user has not chosen a destination yet; only document how to point `backups/` at a mounted disk.
-- Point-in-time recovery, incremental backups.
+- Moving records between groups and the "Unassigned data" admin card (iteration 20).
+- Postgres row-level security as a second layer.
+- Per-group companies/categories.

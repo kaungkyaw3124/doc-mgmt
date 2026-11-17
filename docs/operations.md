@@ -12,7 +12,14 @@ docker compose down            # stop (bind-mounted data in ./data/ survives)
 ## Updating a server
 
 ```bash
+./scripts/deploy.sh    # git pull -> backup -> up -d --build -> restart nginx -> wait for :8080
+```
+
+By hand, the same steps are (take the backup first; see [BACKUP_RESTORE.md](BACKUP_RESTORE.md)):
+
+```bash
 git pull
+docker compose -f infra/docker-compose.yml up -d --build --no-deps backup-service && ./scripts/backup.sh
 docker compose -f infra/docker-compose.yml up -d --build
 docker compose -f infra/docker-compose.yml restart nginx
 ```

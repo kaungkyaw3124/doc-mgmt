@@ -99,6 +99,21 @@ http {
         ssl_ciphers HIGH:!aNULL:!MD5;
         ssl_prefer_server_ciphers on;
 
+        # Maintenance mode (backup restore in progress): backup-service
+        # creates /maintenance/on for the duration (and clears it on every
+        # start, so a crash can't leave it set). While it exists every API
+        # call and stored-file download gets a 503 — except the restore's own
+        # public status endpoint, which the UI polls for the outcome. The web
+        # UI itself (static files) keeps loading. nginx `if` can't AND
+        # conditions, hence the variable built up step by step.
+        set $maintenance "";
+        if (-f /maintenance/on) { set $maintenance "on"; }
+        if ($uri !~ ^/(api|documents|products)/) { set $maintenance ""; }
+        if ($uri = /api/backup/status) { set $maintenance ""; }
+        if ($maintenance = "on") {
+            return 503 '{"detail":"A backup is being restored. Please wait a minute and try again."}';
+        }
+
         # Serve the demo web UI as static files at the root
         root /usr/share/nginx/html;
         index index.html;
@@ -423,6 +438,54 @@ http {
             # file's redundant-blanking policy — see the note above
             # /api/documents.
             proxy_set_header X-Access-Level "";
+        }
+
+        # --- Backup & Restore (services/backup-service, superuser only) ---
+        # Public on purpose: the restore replaces the sessions table, so the
+        # admin watching it is signed out before it finishes and still needs
+        # to read the outcome. Returns only state/step/message.
+        location = /api/backup/status {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            proxy_pass http://backup-service:8000/backup/status;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+        }
+
+        # Download by single-use, 60-second ticket (issued below to a
+        # superuser), so the browser streams the file straight to disk with
+        # its own progress bar. Large file, so: no buffering, long timeout.
+        location ~ ^/api/backup/fetch/[A-Za-z0-9_-]+$ {
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            rewrite ^/api/backup/(.*)$ /backup/$1 break;
+            proxy_pass http://backup-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
+        # Everything else: superuser only (auth-service /verify refuses
+        # X-Service "backup" for anyone else). Raised body size and timeouts
+        # here only — for the restore upload and for creating a backup.
+        location /api/backup/ {
+            include /etc/nginx/cors.conf;
+            include /etc/nginx/security-headers.conf;
+            proxy_hide_header Server;
+            set $service_name "backup";
+            auth_request /_verify;
+            rewrite ^/api/backup/(.*)$ /backup/$1 break;
+            proxy_pass http://backup-service:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            client_max_body_size 20g;
+            client_body_timeout 300s;
+            proxy_request_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
         }
 
         location /api/search {

@@ -69,6 +69,16 @@ DEFAULT_TERMS = (
 )
 
 
+def fit_inside(width, height, box_width, box_height):
+    """Largest (w, h) with the image's aspect ratio that fits inside the box (scales up or down)."""
+    scale = min(box_width / width, box_height / height)
+    return width * scale, height * scale
+
+
+def is_letterhead(company, logo_bytes, logo_mime):
+    return bool(company and company.get("header_style") == "letterhead" and logo_bytes and logo_mime != "image/svg+xml")
+
+
 def generate_quotation_xlsx(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png", director=None, director_seal_bytes=None, director_seal_mime="image/png") -> BytesIO:
     """
     items_with_product: list of (LineItem, product_dict_or_None, sub_items_list) tuples.
@@ -108,6 +118,25 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # above them; reserving dedicated rows for the images before writing
     # the title avoids that.
     has_header_image = bool((logo_bytes and logo_mime != "image/svg+xml") or (seal_bytes and seal_mime != "image/svg+xml"))
+
+    banner_placed = False
+    if is_letterhead(company, logo_bytes, logo_mime):
+        # Letterhead banner (arrives in the logo slot) across the header rows
+        # from column A up to the seal in F (A:G when there is no seal), fitted
+        # inside the box keeping its proportions. Max 115px tall, so the 6
+        # rows (120px) reserved below for the logo/seal row still cover it.
+        # On a bad image, falls through to the normal logo header.
+        try:
+            banner = XLImage(BytesIO(logo_bytes))
+            col_px = [int((256 * w + 128 // 7) / 256 * 7) for w in col_widths]  # Excel's own px-per-column formula
+            box_w = sum(col_px[:5]) - 10 if seal_bytes and seal_mime != "image/svg+xml" else sum(col_px)
+            banner.width, banner.height = (round(v) for v in fit_inside(banner.width, banner.height, box_w, 115))
+            ws.add_image(banner, f"A{row}")
+            banner_placed = True
+        except Exception:
+            pass
+    if banner_placed:
+        logo_bytes = None  # the banner took the logo's place
 
     if logo_bytes and logo_mime != "image/svg+xml":
         try:

@@ -1,11 +1,13 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.db import Base, engine
+from app.core.db import Base, engine, get_db
+from app import models
 from app.core.storage import ensure_bucket_exists
-from app.core.search_client import _client as meili_client, _INDEX_NAME as MEILI_PRODUCTS_INDEX
+from app.core.search_client import _client as meili_client, _INDEX_NAME as MEILI_PRODUCTS_INDEX, rebuild_index
 from app.core.secrets_check import db_password_from_url, enforce_production_secrets, is_insecure
 from app.core.gateway_auth import verify_gateway_secret
 from app.routers import products, categories
@@ -61,3 +63,12 @@ def on_startup():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# Called only by backup-service (internal secret; nginx routes nothing here).
+@app.post("/internal/after-restore")
+def after_restore(db: Session = Depends(get_db)):
+    """After backup-service replaced the database: re-run the idempotent
+    startup (create_all, bucket) and rebuild the search index."""
+    on_startup()
+    return {"indexed": rebuild_index(db.query(models.Product).all())}

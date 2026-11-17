@@ -13,11 +13,14 @@
 #
 # Env overrides: BASE_URL (default http://localhost:8080/api),
 # HEALTH_TIMEOUT (seconds, default 180), PYTHON (default python3),
-# MINIO_IMAGE (default: a pinned pgsty/minio build, see below).
+# MINIO_IMAGE (default: a pinned pgsty/minio build, see below),
+# COMPOSE_OVERRIDE (an extra compose file, e.g. the throwaway test stack in
+# infra/docker-compose.loop-test.yml — use it with COMPOSE_PROJECT_NAME and
+# GATEWAY; see that file's header).
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE=(docker compose -f "$REPO_ROOT/infra/docker-compose.yml")
+COMPOSE=(docker compose -f "$REPO_ROOT/infra/docker-compose.yml" ${COMPOSE_OVERRIDE:+-f "$COMPOSE_OVERRIDE"})
 GATEWAY="${GATEWAY:-http://localhost:8080}"
 export BASE_URL="${BASE_URL:-$GATEWAY/api}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"

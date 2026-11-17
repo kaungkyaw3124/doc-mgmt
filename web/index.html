@@ -622,6 +622,10 @@
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
       Admin
     </div>
+    <div class="nav-item" data-view="backup" id="backup-nav-item" style="display:none;">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+      Backup &amp; Restore
+    </div>
     <div class="sidebar-footer">
       <div class="who">Signed in as<br><strong id="whoami-username">—</strong></div>
       <button class="link-btn" id="logout-btn">Sign out</button>
@@ -1004,6 +1008,62 @@
       </div>
     </div>
 
+    <!-- ---------- BACKUP & RESTORE VIEW (superuser only) ---------- -->
+    <div class="view" id="view-backup">
+      <div class="view-header">
+        <div>
+          <h2>Backup &amp; Restore</h2>
+          <p>Download a copy of all data, or put a backup back.</p>
+        </div>
+      </div>
+
+      <div id="backup-banner"></div>
+
+      <div class="card">
+        <h3>Download a backup</h3>
+        <p style="font-size:13px; color:var(--text-dim); margin-bottom:14px;">
+          Everything in the app: all records, users, and every logo, seal, product file and document file.
+          Not included: server settings and secrets (.env files). The search index is rebuilt after a restore.
+        </p>
+        <label for="backup-password">Password (optional)</label>
+        <input type="password" id="backup-password" autocomplete="new-password" placeholder="Leave empty for a plain .tar.gz">
+        <p style="font-size:12px; color:var(--text-dim); margin:-8px 0 14px;">With a password the file is encrypted (.tar.gz.enc). Keep the password safe — without it the backup can't be restored.</p>
+        <button class="btn-primary" id="backup-download-btn">Download backup</button>
+        <span id="backup-progress" role="status" style="margin-left:12px; font-size:13px; color:var(--text-dim);"></span>
+      </div>
+
+      <div class="card">
+        <h3>Backups on the server</h3>
+        <p style="font-size:13px; color:var(--text-dim); margin-bottom:14px;">Nightly backups (newest 14 kept), backups made here, and the automatic pre-restore copies.</p>
+        <table>
+          <thead><tr><th>Name</th><th>Size</th><th>Date</th><th>Download</th></tr></thead>
+          <tbody id="backup-list-tbody">
+            <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Restore from a file</h3>
+        <p style="font-size:13px; color:var(--text-dim); margin-bottom:14px;">
+          Replaces <strong>all</strong> current data with the backup. A copy of the current data is saved on the server first.
+          Everyone is signed out afterwards.
+        </p>
+        <label for="restore-file">Backup file</label>
+        <input type="file" id="restore-file" accept=".gz,.enc">
+        <label for="restore-password">Password (only if the file is encrypted)</label>
+        <input type="password" id="restore-password" autocomplete="off">
+        <button class="btn-secondary" id="restore-check-btn">Check file</button>
+        <div id="restore-confirm-wrap" style="display:none; margin-top:16px;">
+          <div class="banner banner-info" id="restore-summary"></div>
+          <label for="restore-confirm">Type RESTORE to replace all data with this backup</label>
+          <input type="text" id="restore-confirm" autocomplete="off" spellcheck="false">
+          <button class="btn-primary" id="restore-start-btn" style="background:var(--danger);" disabled>Restore</button>
+        </div>
+        <div id="restore-result" role="status" style="margin-top:16px;"></div>
+      </div>
+    </div>
+
     <!-- ---------- SEARCH VIEW ---------- -->
     <div class="view" id="view-search">
       <div class="view-header">
@@ -1244,9 +1304,16 @@
         </div>
         <div></div>
       </div>
-      <label for="company-logo">Logo (optional, .png, .jpg, or .svg)</label>
-      <input type="file" id="company-logo" accept="image/png,image/jpeg,image/svg+xml">
+      <label for="company-header-style">Quotation header</label>
+      <select id="company-header-style">
+        <option value="logo">Logo</option>
+        <option value="letterhead">Letterhead banner</option>
+      </select>
+      <label for="company-logo">Logo / banner image (optional, .png, .jpg, .webp or .svg, max 10 MB — "Quotation header" above decides whether it is used as a square logo or as a wide banner left of the seal)</label>
+      <input type="file" id="company-logo" accept="image/png,image/jpeg,image/webp,image/svg+xml">
       <div id="company-current-logo-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>
+      <div id="company-banner-hint" class="hint" style="display:none;">Re-upload your banner image once — the saved logo was squared.</div>
+      <img id="company-logo-preview" alt="Saved logo / banner" style="display:none; max-width:100%; max-height:90px; border:1px solid #ddd; margin:0 0 10px;">
       <label for="company-seal">Company seal (optional, .png or .jpg)</label>
       <input type="file" id="company-seal" accept="image/png,image/jpeg">
       <div id="company-current-seal-info" style="display:none; font-size:13px; margin:4px 0 10px;"></div>

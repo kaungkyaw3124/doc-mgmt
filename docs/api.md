@@ -203,7 +203,9 @@ unit="Nos", quantity, unit_price?, tax_rate=0}]}`.
 | `PATCH /companies/{id}` | PATCH | setting `is_primary=true` unsets all others |
 | `PATCH /companies/{id}/trash` \| `/restore` | PATCH | soft delete/restore |
 | `DELETE /companies/{id}` | DELETE | `400` if referenced by a document |
-| `POST /companies/{id}/logo` \| `/seal` | POST | multipart `file`; resized/padded to a fixed pixel size via Pillow (400×200 logo, 300×300 seal) unless SVG; stored as `standardized.png` |
+| `POST /companies/{id}/logo` | POST | multipart `file`; PNG/JPG/WebP/SVG, max 10 MB (else 400). One upload stores two variants: the logo stretched to 300×300 PNG (`company-logos/{id}/standardized.png`, SVG kept as is) and, for PNG/JPG/WebP, a proportional banner (downscaled only if wider than 2000px, `company-letterheads/{id}/letterhead.png`). `header_style` picks which one quotations use. Response: `logo_object_key`, `letterhead_object_key` (null + `note` when no banner variant could be made) |
+| `POST /companies/{id}/seal` | POST | multipart `file`; stretched to 300×300 PNG via Pillow unless SVG; stored as `standardized.png` |
+| `GET /companies/{id}/letterhead-url` | GET | presigned URL of the proportional banner variant (404 if none) |
 | `GET /companies/{id}/logo-url` \| `/seal-url` | GET | presigned URL; `force_download=true` for SVGs (prevents inline-rendering a stored SVG in the browser's own origin) |
 
 ### `/projects` (`app/routers/projects.py`)

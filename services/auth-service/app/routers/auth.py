@@ -283,6 +283,11 @@ def verify(
 
     require_live_session(db, user_id, payload)
 
+    # Backup & restore can read or replace ALL data: superusers only, and
+    # deliberately not a service a role can grant (not in VALID_SERVICES).
+    if x_service == "backup" and not user.is_superuser:
+        raise HTTPException(status_code=403, detail="superuser privileges required")
+
     if x_service and not user_has_service_access(db, user, x_service):
         raise HTTPException(status_code=403, detail=f"user does not have access to '{x_service}'")
 

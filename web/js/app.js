@@ -7,7 +7,7 @@ const API_BASE = '/api';
 // with stale data. Each list gets a counter: every load bumps it and
 // captures its own number, then only applies its result if no newer load
 // has started in the meantime — otherwise it just discards itself.
-const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0, groupMembers: 0, groupRoles: 0 };
+const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0, groupMembers: 0, groupRoles: 0, backups: 0 };
 function startLoad(key) {
   loadSeq[key] += 1;
   return loadSeq[key];
@@ -289,7 +289,7 @@ async function enterApp() {
   // Defence in depth (logout reloads the page anyway): start from "nothing
   // permission-gated is shown, Documents view", then let /admin/me show
   // what this user may see.
-  ['admin-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
+  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
     .forEach(id => { document.getElementById(id).style.display = 'none'; });
   currentUserIsSuperuser = false;
   currentUserCanDeleteDocuments = false;
@@ -318,6 +318,8 @@ async function enterApp() {
     }
     if (me.is_superuser) {
       document.getElementById('new-group-form-wrap').style.display = 'block';
+      // Superuser only — the gateway refuses /api/backup/* to anyone else too.
+      document.getElementById('backup-nav-item').style.display = 'block';
     }
     const canManageCategories = me.is_superuser || (me.service_access && me.service_access.includes('categories'));
     document.getElementById('category-split-btn-wrap').style.display = canManageCategories ? 'inline-flex' : 'none';
@@ -1471,6 +1473,7 @@ function refreshProjectBudgetYearFilter() {
 
 // ---------- company ----------
 let editingCompanyId = null;
+let editingCompany = null;  // the saved row, for the logo/banner preview and hint
 
 function buildDirectorRow(director) {
   const div = document.createElement('div');
@@ -1563,13 +1566,35 @@ document.getElementById('add-director-row-btn').addEventListener('click', () => 
   renumberDirectorRows();
 });
 
+// One image serves both header styles: the select only switches which saved
+// variant is previewed (squared logo or proportional banner).
+function applyCompanyHeaderStyle() {
+  const banner = document.getElementById('company-header-style').value === 'letterhead';
+  const c = editingCompany;
+  document.getElementById('company-banner-hint').style.display =
+    banner && c && c.logo_object_key && !c.letterhead_object_key ? 'block' : 'none';  // uploaded before both variants were kept
+  const preview = document.getElementById('company-logo-preview');
+  preview.style.display = 'none';
+  preview.dataset.wanted = '';
+  const key = c && (banner ? c.letterhead_object_key : c.logo_object_key);
+  if (!key || key.toLowerCase().endsWith('.svg')) return;
+  const wanted = '/companies/' + c.id + (banner ? '/letterhead-url' : '/logo-url');
+  preview.dataset.wanted = wanted;
+  apiFetch(wanted)
+    .then(d => { if (preview.dataset.wanted === wanted) { preview.src = d.url; preview.style.display = 'block'; } })
+    .catch(() => {});  // the "View it" link still works
+}
+document.getElementById('company-header-style').addEventListener('change', applyCompanyHeaderStyle);
+
 document.getElementById('toggle-company-form').addEventListener('click', () => {
   editingCompanyId = null;
+  editingCompany = null;
   document.getElementById('company-form').reset();
   document.getElementById('company-form-title').textContent = 'New company';
   document.getElementById('company-form-submit-btn').textContent = 'Create company';
   document.getElementById('company-current-logo-info').style.display = 'none';
   document.getElementById('company-current-seal-info').style.display = 'none';
+  applyCompanyHeaderStyle();  // form.reset() put the style select back to "logo"
   resetDirectorRows(null);
   showBanner('company-modal-banner', '');
   document.getElementById('company-modal').classList.add('active');
@@ -1589,8 +1614,21 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     short_name: document.getElementById('company-short-name').value.trim().toUpperCase() || null,
     address: document.getElementById('company-address').value || null,
     contact_no: document.getElementById('company-contact').value || null,
-    support_email: document.getElementById('company-email').value || null
+    support_email: document.getElementById('company-email').value || null,
+    header_style: document.getElementById('company-header-style').value
   };
+  const logoFile = logoInput.files[0];
+  // Same rule as the server (routers/companies.py): checked before anything is saved.
+  if (logoFile && !['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'].includes(logoFile.type)) {
+    showBanner('company-modal-banner', 'Logo must be a PNG, JPG, WebP or SVG image.');
+    showErrorCross('Logo must be a PNG, JPG, WebP or SVG image');
+    return;
+  }
+  if (logoFile && logoFile.size > 10 * 1024 * 1024) {
+    showBanner('company-modal-banner', 'Image is too large (max 10 MB).');
+    showErrorCross('Image is too large');
+    return;
+  }
   try {
     document.getElementById('company-form-submit-btn').disabled = true;
     let company;
@@ -1601,10 +1639,10 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     }
 
     const savedImages = [];
-    if (logoInput.files.length > 0) {
+    let logoNote = '';
+    if (logoFile) {
       const formData = new FormData();
-      formData.append('file', logoInput.files[0]);
-      savedImages.push('/companies/' + company.id + '/logo-url');
+      formData.append('file', logoFile);
       const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/logo', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
@@ -1623,6 +1661,11 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         loadCompanies();
         return;
       }
+      // Tick only once the variant this header style uses loads back.
+      const saved = await uploadResponse.json();
+      const asBanner = payload.header_style === 'letterhead' && saved.letterhead_object_key;
+      savedImages.push('/companies/' + company.id + (asBanner ? '/letterhead-url' : '/logo-url'));
+      if (payload.header_style === 'letterhead' && !saved.letterhead_object_key) logoNote = saved.note || '';
     }
 
     if (sealInput.files.length > 0) {
@@ -1706,8 +1749,9 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     document.getElementById('company-form-title').textContent = 'New company';
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
     editingCompanyId = null;
+    editingCompany = null;
     loadCompanies();
-    showSuccessTick('Company saved');
+    showSuccessTick(logoNote ? 'Company saved — ' + logoNote : 'Company saved');
   } catch (err) {
     showBanner('company-modal-banner', err.message);
     showErrorCross(err.message);
@@ -1718,6 +1762,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
 
 function startEditCompany(company) {
   editingCompanyId = company.id;
+  editingCompany = company;
   document.getElementById('company-modal').classList.add('active');
   document.getElementById('company-form-title').textContent = 'Edit company — ' + company.name;
   document.getElementById('company-form-submit-btn').textContent = 'Save changes';
@@ -1729,10 +1774,12 @@ function startEditCompany(company) {
 
   document.getElementById('company-logo').value = '';
   document.getElementById('company-seal').value = '';
+  document.getElementById('company-header-style').value = company.header_style === 'letterhead' ? 'letterhead' : 'logo';
+  applyCompanyHeaderStyle();
 
   const logoInfo = document.getElementById('company-current-logo-info');
   if (company.logo_object_key) {
-    logoInfo.innerHTML = 'A logo is already attached. <button type="button" class="link-btn-inline" data-view-current-logo="' + company.id + '">View it</button> — choosing a new file will replace it.';
+    logoInfo.innerHTML = 'An image is already attached. <button type="button" class="link-btn-inline" data-view-current-logo="' + company.id + '">View it</button> — choosing a new file will replace it.';
     logoInfo.style.display = 'block';
     logoInfo.querySelector('[data-view-current-logo]').addEventListener('click', () => viewCompanyImage(company.id, 'logo'));
   } else {
@@ -4419,6 +4466,149 @@ async function viewAuditLog(documentId, docNumber) {
     content.innerHTML = `<p style="color:var(--danger); font-size:13px;">${escapeHtml(err.message)}</p>`;
   }
 }
+
+// ---------- backup & restore (superuser only) ----------
+function formatBytes(n) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + ' ' + units[i];
+}
+
+async function loadBackups() {
+  const seq = startLoad('backups');
+  const tbody = document.getElementById('backup-list-tbody');
+  try {
+    const rows = await apiFetch('/backup/list');
+    if (isStaleLoad('backups', seq)) return;
+    tbody.innerHTML = rows.length ? rows.map(b => `
+      <tr>
+        <td class="mono">${escapeHtml(b.name)}</td>
+        <td>${escapeHtml(formatBytes(b.size))}</td>
+        <td>${escapeHtml(new Date(b.created).toLocaleString())}</td>
+        <td><button class="link-btn-inline" data-backup-name="${escapeHtml(b.name)}">Download</button></td>
+      </tr>`).join('') : '<tr class="empty-row"><td colspan="4">No backups yet.</td></tr>';
+    tbody.querySelectorAll('[data-backup-name]').forEach(btn => btn.addEventListener('click', () =>
+      downloadBackup(btn.dataset.backupName).catch(err => showBanner('backup-banner', err.message))));
+  } catch (err) {
+    if (!isStaleLoad('backups', seq)) showBanner('backup-banner', err.message);
+  }
+}
+
+// A single-use, 60-second ticket turns the download into a plain link, so the
+// browser streams the file to disk with its own progress bar instead of this
+// page holding the whole backup in memory.
+async function downloadBackup(name) {
+  const password = document.getElementById('backup-password').value;
+  const ticket = await apiFetch('/backup/download-ticket', { method: 'POST', body: JSON.stringify({ name, password }) });
+  const a = document.createElement('a');
+  a.href = ticket.url;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+document.getElementById('backup-nav-item').addEventListener('click', loadBackups);
+
+document.getElementById('backup-download-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('backup-download-btn');
+  const progress = document.getElementById('backup-progress');
+  showBanner('backup-banner', '');
+  btn.disabled = true;
+  progress.textContent = 'Preparing backup… this can take a few minutes for a lot of files.';
+  try {
+    const created = await apiFetch('/backup/create', { method: 'POST' });
+    await downloadBackup(created.name);
+    progress.textContent = `Downloading ${created.name} — your browser shows the progress.`;
+    showSuccessTick('Backup ready');
+    loadBackups();
+  } catch (err) {
+    progress.textContent = '';
+    showBanner('backup-banner', err.message);
+    showErrorCross('Backup failed');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+let restoreUploadId = null;
+
+document.getElementById('restore-check-btn').addEventListener('click', async () => {
+  const fileInput = document.getElementById('restore-file');
+  const wrap = document.getElementById('restore-confirm-wrap');
+  showBanner('backup-banner', '');
+  document.getElementById('restore-result').innerHTML = '';
+  wrap.style.display = 'none';
+  restoreUploadId = null;
+  if (!fileInput.files.length) { showBanner('backup-banner', 'Choose a backup file first.'); return; }
+  const btn = document.getElementById('restore-check-btn');
+  btn.disabled = true;
+  btn.textContent = 'Uploading and checking…';
+  try {
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('password', document.getElementById('restore-password').value);
+    // Multipart upload: apiFetch would force a JSON Content-Type (same as the logo upload).
+    const res = await fetch(API_BASE + '/backup/restore/validate', {
+      method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: formData,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(formatApiErrorDetail(body.detail) || 'The file could not be checked.');
+    const s = body.summary;
+    restoreUploadId = body.upload_id;
+    document.getElementById('restore-summary').textContent =
+      `Backup from ${new Date(s.created_at).toLocaleString()}: ${s.products} products, ${s.documents} documents, ` +
+      `${s.companies} companies, ${s.customers} customers, ${s.projects} projects, ${s.users} users, ${s.files} files.`;
+    document.getElementById('restore-confirm').value = '';
+    document.getElementById('restore-start-btn').disabled = true;
+    wrap.style.display = 'block';
+  } catch (err) {
+    showBanner('backup-banner', err.message);
+    showErrorCross('Not a usable backup');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Check file';
+  }
+});
+
+document.getElementById('restore-confirm').addEventListener('input', (e) => {
+  document.getElementById('restore-start-btn').disabled = e.target.value !== 'RESTORE';
+});
+
+document.getElementById('restore-start-btn').addEventListener('click', async () => {
+  const result = document.getElementById('restore-result');
+  showBanner('backup-banner', '');
+  try {
+    await apiFetch('/backup/restore', { method: 'POST', body: JSON.stringify({
+      upload_id: restoreUploadId, confirm: document.getElementById('restore-confirm').value }) });
+  } catch (err) {
+    showBanner('backup-banner', err.message);
+    showErrorCross('Restore did not start');
+    return;
+  }
+  // The restore replaces the sessions table (this session included) and the
+  // API answers 503 meanwhile: stop the idle/refresh timer so it can't sign
+  // out mid-way and hide the outcome.
+  clearInterval(sessionTimer);
+  document.getElementById('restore-confirm-wrap').style.display = 'none';
+  ['restore-check-btn', 'backup-download-btn'].forEach(id => { document.getElementById(id).disabled = true; });
+  let st = { state: 'running', step: 'starting' };
+  while (st.state === 'running') {
+    result.innerHTML = `<div class="banner banner-info">Restoring… please wait (${escapeHtml(st.step || '')}). Don't close this page.</div>`;
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      // Public endpoint, no token on purpose: this session ends during the restore.
+      st = await (await fetch(API_BASE + '/backup/status')).json();
+    } catch (e) { /* gateway hiccup — keep polling */ }
+  }
+  const ok = st.state === 'done';
+  result.innerHTML = `<div class="banner banner-${ok ? 'info' : 'error'}">${escapeHtml(st.message || (ok ? 'Restore complete.' : 'Restore failed.'))}` +
+    (ok ? ' Everyone has been signed out.' : '') + '</div>' +
+    '<button class="btn-primary" id="restore-signin-btn">Sign in again</button>';
+  document.getElementById('restore-signin-btn').addEventListener('click', () => doLogout(''));
+  if (ok) showSuccessTick('Restore complete'); else showErrorCross('Restore failed');
+});
 
 // ---------- boot ----------
 addLineItem(); // start with one blank line item row
