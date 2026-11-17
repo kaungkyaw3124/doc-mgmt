@@ -1473,6 +1473,7 @@ function refreshProjectBudgetYearFilter() {
 
 // ---------- company ----------
 let editingCompanyId = null;
+let editingCompany = null;  // the saved row, for the logo/banner preview and hint
 
 function buildDirectorRow(director) {
   const div = document.createElement('div');
@@ -1565,23 +1566,34 @@ document.getElementById('add-director-row-btn').addEventListener('click', () => 
   renumberDirectorRows();
 });
 
-// Show only the upload field for the chosen header style (logo or letterhead banner); the seal is shown for both.
+// One image serves both header styles: the select only switches which saved
+// variant is previewed (squared logo or proportional banner).
 function applyCompanyHeaderStyle() {
-  const letterhead = document.getElementById('company-header-style').value === 'letterhead';
-  document.getElementById('company-header-logo-fields').style.display = letterhead ? 'none' : '';
-  document.getElementById('company-header-letterhead-fields').style.display = letterhead ? '' : 'none';
+  const banner = document.getElementById('company-header-style').value === 'letterhead';
+  const c = editingCompany;
+  document.getElementById('company-banner-hint').style.display =
+    banner && c && c.logo_object_key && !c.letterhead_object_key ? 'block' : 'none';  // uploaded before both variants were kept
+  const preview = document.getElementById('company-logo-preview');
+  preview.style.display = 'none';
+  preview.dataset.wanted = '';
+  const key = c && (banner ? c.letterhead_object_key : c.logo_object_key);
+  if (!key || key.toLowerCase().endsWith('.svg')) return;
+  const wanted = '/companies/' + c.id + (banner ? '/letterhead-url' : '/logo-url');
+  preview.dataset.wanted = wanted;
+  apiFetch(wanted)
+    .then(d => { if (preview.dataset.wanted === wanted) { preview.src = d.url; preview.style.display = 'block'; } })
+    .catch(() => {});  // the "View it" link still works
 }
 document.getElementById('company-header-style').addEventListener('change', applyCompanyHeaderStyle);
 
 document.getElementById('toggle-company-form').addEventListener('click', () => {
   editingCompanyId = null;
+  editingCompany = null;
   document.getElementById('company-form').reset();
   document.getElementById('company-form-title').textContent = 'New company';
   document.getElementById('company-form-submit-btn').textContent = 'Create company';
   document.getElementById('company-current-logo-info').style.display = 'none';
   document.getElementById('company-current-seal-info').style.display = 'none';
-  document.getElementById('company-current-letterhead-info').style.display = 'none';
-  document.getElementById('company-letterhead-preview').style.display = 'none';
   applyCompanyHeaderStyle();  // form.reset() put the style select back to "logo"
   resetDirectorRows(null);
   showBanner('company-modal-banner', '');
@@ -1605,17 +1617,16 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     support_email: document.getElementById('company-email').value || null,
     header_style: document.getElementById('company-header-style').value
   };
-  const letterheadInput = document.getElementById('company-letterhead');
-  const letterheadFile = letterheadInput.files[0];
+  const logoFile = logoInput.files[0];
   // Same rule as the server (routers/companies.py): checked before anything is saved.
-  if (letterheadFile && !['image/png', 'image/jpeg', 'image/webp'].includes(letterheadFile.type)) {
-    showBanner('company-modal-banner', 'Letterhead must be a PNG, JPG or WebP image.');
-    showErrorCross('Letterhead must be a PNG, JPG or WebP image');
+  if (logoFile && !['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'].includes(logoFile.type)) {
+    showBanner('company-modal-banner', 'Logo must be a PNG, JPG, WebP or SVG image.');
+    showErrorCross('Logo must be a PNG, JPG, WebP or SVG image');
     return;
   }
-  if (letterheadFile && letterheadFile.size > 10 * 1024 * 1024) {
-    showBanner('company-modal-banner', 'Letterhead image is too large (max 10 MB).');
-    showErrorCross('Letterhead image is too large');
+  if (logoFile && logoFile.size > 10 * 1024 * 1024) {
+    showBanner('company-modal-banner', 'Image is too large (max 10 MB).');
+    showErrorCross('Image is too large');
     return;
   }
   try {
@@ -1628,10 +1639,10 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     }
 
     const savedImages = [];
-    if (logoInput.files.length > 0) {
+    let logoNote = '';
+    if (logoFile) {
       const formData = new FormData();
-      formData.append('file', logoInput.files[0]);
-      savedImages.push('/companies/' + company.id + '/logo-url');
+      formData.append('file', logoFile);
       const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/logo', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
@@ -1650,30 +1661,11 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         loadCompanies();
         return;
       }
-    }
-
-    if (letterheadFile) {
-      const formData = new FormData();
-      formData.append('file', letterheadFile);
-      savedImages.push('/companies/' + company.id + '/letterhead-url');
-      const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/letterhead', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token },
-        body: formData
-      });
-      if (!uploadResponse.ok) {
-        let detail = 'Letterhead upload failed.';
-        try {
-          const errBody = await uploadResponse.json();
-          if (errBody.detail) detail = errBody.detail;
-        } catch (parseErr) {
-          // response wasn't JSON — stick with the generic message
-        }
-        showBanner('company-modal-banner', `Company saved, but the letterhead didn't upload: ${detail}`);
-        showErrorCross(`The letterhead didn't upload`);
-        loadCompanies();
-        return;
-      }
+      // Tick only once the variant this header style uses loads back.
+      const saved = await uploadResponse.json();
+      const asBanner = payload.header_style === 'letterhead' && saved.letterhead_object_key;
+      savedImages.push('/companies/' + company.id + (asBanner ? '/letterhead-url' : '/logo-url'));
+      if (payload.header_style === 'letterhead' && !saved.letterhead_object_key) logoNote = saved.note || '';
     }
 
     if (sealInput.files.length > 0) {
@@ -1757,8 +1749,9 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     document.getElementById('company-form-title').textContent = 'New company';
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
     editingCompanyId = null;
+    editingCompany = null;
     loadCompanies();
-    showSuccessTick('Company saved');
+    showSuccessTick(logoNote ? 'Company saved — ' + logoNote : 'Company saved');
   } catch (err) {
     showBanner('company-modal-banner', err.message);
     showErrorCross(err.message);
@@ -1769,6 +1762,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
 
 function startEditCompany(company) {
   editingCompanyId = company.id;
+  editingCompany = company;
   document.getElementById('company-modal').classList.add('active');
   document.getElementById('company-form-title').textContent = 'Edit company — ' + company.name;
   document.getElementById('company-form-submit-btn').textContent = 'Save changes';
@@ -1780,33 +1774,16 @@ function startEditCompany(company) {
 
   document.getElementById('company-logo').value = '';
   document.getElementById('company-seal').value = '';
-  document.getElementById('company-letterhead').value = '';
   document.getElementById('company-header-style').value = company.header_style === 'letterhead' ? 'letterhead' : 'logo';
   applyCompanyHeaderStyle();
 
   const logoInfo = document.getElementById('company-current-logo-info');
   if (company.logo_object_key) {
-    logoInfo.innerHTML = 'A logo is already attached. <button type="button" class="link-btn-inline" data-view-current-logo="' + company.id + '">View it</button> — choosing a new file will replace it.';
+    logoInfo.innerHTML = 'An image is already attached. <button type="button" class="link-btn-inline" data-view-current-logo="' + company.id + '">View it</button> — choosing a new file will replace it.';
     logoInfo.style.display = 'block';
     logoInfo.querySelector('[data-view-current-logo]').addEventListener('click', () => viewCompanyImage(company.id, 'logo'));
   } else {
     logoInfo.style.display = 'none';
-  }
-
-  const letterheadInfo = document.getElementById('company-current-letterhead-info');
-  if (company.letterhead_object_key) {
-    letterheadInfo.innerHTML = 'A letterhead is already attached. <button type="button" class="link-btn-inline" data-view-current-letterhead="' + company.id + '">View it</button> — choosing a new file will replace it.';
-    letterheadInfo.style.display = 'block';
-    letterheadInfo.querySelector('[data-view-current-letterhead]').addEventListener('click', () => viewCompanyImage(company.id, 'letterhead'));
-  } else {
-    letterheadInfo.style.display = 'none';
-  }
-  const letterheadPreview = document.getElementById('company-letterhead-preview');
-  letterheadPreview.style.display = 'none';
-  if (company.letterhead_object_key) {
-    apiFetch('/companies/' + company.id + '/letterhead-url')
-      .then(d => { letterheadPreview.src = d.url; letterheadPreview.style.display = 'block'; })
-      .catch(() => {});  // the "View it" link above still works
   }
 
   const sealInfo = document.getElementById('company-current-seal-info');

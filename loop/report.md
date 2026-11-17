@@ -1,107 +1,90 @@
-# report.md — Iteration 17
+# report.md — Iteration 18
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Per-company **header style**: a company uses either its normal **logo** or a wide **letterhead banner** in the top-left header area of the quotation PDF and XLSX. The seal stays where it is.
+- **Goal**: **One image upload** per company. The existing **"Quotation header: Logo / Letterhead banner"** select decides how that same image is used: as a squared logo, or as a wide letterhead banner. Remove the separate letterhead upload field.
 - **Ponytail skill loaded**: yes
-- **Branch / commit**: `dev` @ (this commit, "loop iter 17: …")
-- **One-paragraph summary**: I cherry-picked `8fae36b` from `origin/letterhead-header` and resolved the conflicts in `schemas.py` and `companies.py`. I renumbered its migration to `0008_company_letterhead`, chained after `0007_md_position_default`, so there is a single head. The behaviour differs from that branch in one way: **the seal is kept**.
-  - **PDF:** the banner sits in the logo's place and is fitted inside a 148 mm × 30 mm box: content width, minus the seal, minus about a 5 mm gap. With no seal the box is 184.6 mm × 30 mm. The banner keeps its proportions and is aligned left. It is also scaled up to fill the box: `export_pdf.py` computes an explicit mm size with `fit_inside`, and the CSS `max-*` rules remain as a safety net.
-  - **XLSX:** the banner is anchored at A1 and fitted inside A:E minus 10 px × 115 px. The seal stays at F1 and the title stays on row 7.
-  - **Logo companies** render exactly as before.
-  - **Uploads:** the upload endpoint now refuses anything that isn't PNG, JPG or WebP, and anything over 10 MB, with a 400. The old branch silently stored any bytes.
-  - **Company form:** a "Quotation header" select shows either the logo upload or the banner upload. The seal upload is always shown. Editing shows a preview of the saved banner. The form checks the file type and size before saving anything, and the tick appears only after the banner loads back.
+- **Branch / commit**: `dev` @ (this commit, "loop iter 18: …")
+- **One-paragraph summary**: `POST /companies/{id}/logo` now stores **two copies of one upload**:
+  - the squared 300×300 logo, made exactly as before (an SVG is kept untouched);
+  - for PNG/JPG/WebP only, a proportional banner (`company-letterheads/{id}/letterhead.png`). It is only downscaled, and only when wider than 2000 px.
+
+  The "Quotation header" select chooses which copy the PDF/XLSX use, so switching the style needs no re-upload. If the upload is an SVG (or a GIF/BMP), the endpoint stores only the logo and clears any older banner, so a stale banner from a previous image is never shown. The response then has `letterhead_object_key: null` and a `note`.
+
+  The endpoint now refuses non-images and files over 10 MB with a 400, and stores nothing. Before this change it silently stored any bytes.
+
+  `POST /companies/{id}/letterhead`, the `company-letterhead` input and its JS are removed. `GET …/letterhead-url` stays.
+
+  The form has one "Logo / banner image" input. The select switches its preview between the squared logo and the wide banner. For a company that has a logo but no banner copy (uploaded before this change, or an SVG), choosing "Letterhead banner" shows *"Re-upload your banner image once — the saved logo was squared."* After saving, the tick waits for the copy that the chosen style uses to load back (`letterhead-url` for banner style, `logo-url` for logo style).
+
+  The PDF/XLSX layout from iteration 17 is unchanged.
 
 ## 2. Baseline (before any change)
-Throwaway `loop-test` stack:
 ```
 $ COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=infra/docker-compose.loop-test.yml GATEWAY=http://localhost:18080 ALLOW_DESTRUCTIVE_TESTS=1 ./scripts/verify.sh --keep
-======================= 42 passed, 12 skipped in 17.20s ========================
+======================= 42 passed, 13 skipped in 17.07s ========================
 verify.sh: PASSED (stack left running: --keep)
+
+$ document-service units (loop-test-document-service image, working tree mounted): python -m pytest tests -q
+265 passed, 58446 warnings in 165.44s
 ```
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | Banner fills the left header box, proportions kept, seal stays right | PASS | `test_banner_fills_the_left_box_keeps_ratio_and_the_seal_stays_right` (×4 sizes: 720×190, 1600×120, 200×400, 100×30), `test_720_banner_is_height_limited_to_30mm`, `test_header_does_not_grow_taller_than_the_logo_header`, `test_without_a_seal_the_banner_may_use_the_full_width`, `test_multi_page_…`; `loop/evidence/iter-17-letterhead-p1.png` |
-| A2 | Logo companies unchanged | PASS | `test_logo_style_renders_exactly_as_before` (logo at (12.7 mm, 7.6 mm, 120×120 px), seal right edge at the page margin, 120 px, for `header_style` absent/"logo"/None); `loop/evidence/iter-17-logo-p1.png` |
-| A3 | XLSX correct | PASS | `test_xlsx_banner_in_the_header_rows_left_of_the_seal` (×3), `test_xlsx_logo_style_still_has_logo_and_seal_at_90px`; dump below |
-| A4 | Company form works end to end | PASS | `tests/test_ui_letterhead_header.py` 1 passed; `loop/evidence/iter-17-company-form-letterhead.png` |
-| A5 | Migration is a single clean head | PASS | `alembic heads` below + `test_migration_chains_after_0007_as_the_single_head`, `test_migration_upgrade_and_downgrade_on_sqlite` |
-| A6 | No regressions + data safety | PASS | verify 42 passed / 13 skipped; document-service units 265 passed; UI 30 passed / 6 skipped |
+| A1 | One upload feeds both styles | PASS | `test_one_logo_upload_stores_the_square_logo_and_the_proportional_banner` [PNG/JPEG/WEBP]: logo object 300×300, banner object ratio within 1% of 720/190; `test_a_very_wide_upload_gets_a_downscaled_banner` (3000×800 → 2000×533); `test_svg_upload_stores_only_the_logo_with_a_note_and_drops_an_older_banner`; `test_logo_upload_rejects_non_images_and_huge_files` (txt, fake png, empty, >10 MB → 400, storage empty) |
+| A2 | Logo style unchanged | PASS | `test_logo_style_renders_exactly_as_before` (unchanged, still passes); UI test: logo rect = (12.7 mm, 7.6 mm, 90×90 pt), seal at the right margin; `loop/evidence/iter-18-logo-p1.png` |
+| A3 | Banner style from the same upload, proportions kept, seal stays | PASS | `test_company_style_switch_end_to_end_from_a_single_upload`: one `/logo` upload + seal, letterhead style → PDF images `[(300,300) seal, (720,190) banner]`, XLSX 2 images; flip to logo → `[(300,300),(300,300)]`; flip back without re-upload → banner again. UI test: banner rect top-left, `x1 < seal.x0`, height ≤ 30 mm, ratio within 1%; `loop/evidence/iter-18-banner-p1.png` |
+| A4 | Form has a single image input, switch needs no re-upload, hint for old logos | PASS | `tests/test_ui_letterhead_header.py::test_company_form_single_image_feeds_logo_and_banner` 1 passed (no `#company-letterhead`; `#company-logo` visible in both styles; banner saved with "Logo" selected; edited to Letterhead with no upload → tick → PDF has the banner; hint shown for a company whose image has no banner copy); `loop/evidence/iter-18-company-form-logo.png`, `iter-18-company-form-banner.png` |
+| A5 | Removed endpoint/field leave no dead code | PASS | grep below prints nothing; `test_separate_letterhead_upload_endpoint_is_gone` (404/405) |
+| A6 | No regressions + data safety | PASS | verify.sh 42 passed / 13 skipped; units 275 passed; UI 29 passed / 7 skipped, plus `test_ui_backup_restore.py` 2 passed with ALLOW_DESTRUCTIVE_TESTS on loop-test |
 
-**Data safety:** every test ran on the throwaway `loop-test` stack (ports 18080/18443, data under `infra/data-loop-test/`) or on SQLite/TestClient. Nothing ran against the user's stack. Before rebuilding the user's stack I backed it up (`backups/backup-2026-11-17-1546.tar.gz`). After the rebuild: documents 1, companies 1, customers 1, projects 1, products 100, users 20 (unchanged), document-service at `0008_company_letterhead`.
+**Data safety:** every test ran on the throwaway `loop-test` stack (ports 18080/18443, data under `infra/data-loop-test/`), or in a one-off container on SQLite/TestClient. Nothing ran against the user's stack.
 
-XLSX anchor dump (generated from the real exporter):
 ```
-letterhead 720x190 images(anchor,w,h px): [('A1', 436, 115), ('F1', 90, 90)] title: A7
-logo               images(anchor,w,h px): [('A1', 90, 90), ('F1', 90, 90)] title: A7
-```
-Alembic heads (loop-test document-service container):
-```
-$ alembic heads
-0008_company_letterhead (head)
-$ alembic current
+$ grep -rn "company-letterhead\b\|/letterhead'" web services --include=*.py --include=*.js --include=*.html
+(no output, exit=1)
+
+$ alembic heads      # unchanged, no new migration
 0008_company_letterhead (head)
 ```
-PDF check in the UI test, using PyMuPDF rects on page 1 of the real exported PDF:
-- The banner's top-left is at (12.7 mm, 7.6 mm).
-- `banner.x1 < seal.x0`.
-- The banner's height is ≤ 30 mm and its aspect ratio is within 1% of 720/190.
-- The seal's right edge is on the right page margin.
-- After switching to Logo, the logo is 90×90 pt at the same corner and the seal rect is identical.
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/document-service/alembic/versions/0008_company_header_style_letterhead.py` | added (from branch, renumbered 0007→0008, `down_revision` = `0007_md_position_default`) | single head |
-| `services/document-service/app/models.py`, `schemas.py` | `header_style` ("logo"/"letterhead", default "logo"), `letterhead_object_key` | from branch |
-| `services/document-service/app/routers/companies.py` | `POST /companies/{id}/letterhead`, `GET …/letterhead-url`; `_standardize_letterhead` now **rejects** non-PNG/JPG/WebP and >10 MB (400), reads at most 10 MB + 1 byte | validation at the upload boundary |
-| `services/document-service/app/routers/documents.py` | letterhead banner goes in the logo slot; **seal kept**; falls back to the logo if no banner | plan: seal stays |
-| `services/document-service/app/core/export_quotation.py` | `fit_inside`, `is_letterhead`; XLSX banner fitted in A:E (or A:G with no seal) × 115 px at A1 | Task 3 |
-| `services/document-service/app/core/export_pdf.py` | computes the banner's mm size (fit inside 148 or 184.6 × 30 mm) | fills the box, scales small banners up |
-| `services/document-service/app/templates/quotation.html` | `.letterhead` img in the left cell of the existing header row (seal stays right) | Task 2 |
-| `web/index.html`, `web/js/app.js` | "Quotation header" select (Logo / Letterhead banner); seal upload outside the toggled block; letterhead accepts png/jpg/webp; saved-banner preview; client-side type/size check before saving; letterhead included in `verifySavedImages`; error cross on upload failure | Task 4 |
-| `services/document-service/tests/test_letterhead_header.py` | rewritten for the new behaviour (26 tests) | Task 5 |
-| `tests/test_ui_letterhead_header.py` | added (Playwright + PyMuPDF) | Task 5 |
-| `docs/api.md`, `docs/data-model.md` | new endpoints/fields | Task 6 |
-| `services/backup-service/app/main.py`, `scripts/backup.sh`, `services/backup-service/tests/test_engine.py` | startup clean-up respects the lock; backup.sh waits for health; regression test | bug found during the pre-rebuild backup (attempt 6) |
-| `loop/evidence/iter-17-*.png` | evidence (3 files) | A1, A2, A4 |
+| `services/document-service/app/routers/companies.py` | `/logo` reads at most 10 MB + 1 byte, rejects >10 MB and unreadable non-SVG files (400), stores the squared logo plus the proportional banner (or clears it and returns a `note`); `_standardize_letterhead` returns `None` instead of raising; `POST /letterhead` deleted | Task 1 |
+| `web/index.html` | one "Logo / banner image" input (png/jpg/webp/svg), re-upload hint, one preview `<img>`; letterhead block removed | Task 2 |
+| `web/js/app.js` | `applyCompanyHeaderStyle` now switches the preview (logo-url / letterhead-url) and the hint; client-side type/size check moved to the single input; the tick waits on the copy the chosen style uses; the letterhead upload code is removed | Task 2, 3 |
+| `services/document-service/tests/test_letterhead_header.py` | upload tests rewritten for the single endpoint (+10 tests) | Task 4 |
+| `tests/test_ui_letterhead_header.py` | rewritten for the single-input flow; waits use `to_have_js_property` (string `wait_for_function` is blocked by the page's CSP) | Task 4 |
+| `docs/api.md`, `docs/workflows.md` | `/logo` endpoint, `/letterhead` removed, form behaviour; fixed the stale "400×200 padded" description | Task 4 |
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | branch's `test_letterhead_header.py` (5) | expected one full-width image, no seal | the tests encoded the old branch behaviour | rewrote the tests for the new decisions (seal kept, box) |
-| 2 | new XLSX tests | `1600 <= 655` | the test read `img.width` (source pixels after a reload), not the anchor extent | test helper `_size()` reads `anchor.ext` |
-| 3 | UI test skipped | `No module named 'playwright'` / `fitz` | the container's pip install line; `fitz` is the deprecated name | pinned `playwright==1.65.1`, `importorskip("pymupdf")` |
-| 4 | verify.sh collection error | `No module named 'PIL'` in tests venv | PIL imported before the skip guards | `importorskip("PIL")` after the Playwright/PyMuPDF guards |
-| 5 | UI suite collection error | `No module named 'openpyxl'` (existing `test_ui_duplicate_products.py`) | test-runner container missing the package, not a code bug | added `openpyxl` to the container's pip line |
-| 6 | pre-rebuild `./scripts/backup.sh` on the user's stack (LOOP §5) | `pg_dump: could not open output file "/backups/.tmp/…/db/docmgmt.dump": No such file or directory` | iteration-16 bug: backup-service's `on_startup` wipes `/backups/.tmp`; `up backup-service` + immediate `backup.sh` raced it and the startup clean-up deleted the running backup's work folder (`deploy.sh` has the same sequence). No data touched, the backup just failed | `on_startup` now cleans only while holding the backup lock (skips if a CLI job holds it); `backup.sh` waits for `/health` first. Regression test `test_startup_cleanup_leaves_a_running_cli_job_alone` (backup-service units 10 passed). Re-ran: recreate + immediate backup → `created backup-2026-11-17-1546.tar.gz` |
+| 1 | UI test | `Executable doesn't exist … chromium_headless_shell-1255` | installing `pytest-playwright` in the runner upgraded playwright past the image's browsers | install `playwright==1.65.1` only (test-runner setup, not code) |
+| 2 | UI test | `wait_for_function: EvalError … 'unsafe-eval' is not an allowed source` | string predicates need eval; the app's CSP forbids it | `expect(...).to_have_js_property("naturalWidth", N)` |
 
 ## 6. Final verification output
 ```
 $ COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=infra/docker-compose.loop-test.yml GATEWAY=http://localhost:18080 ALLOW_DESTRUCTIVE_TESTS=1 ./scripts/verify.sh --keep
-collecting ... collected 42 items / 13 skipped
-======================= 42 passed, 13 skipped in 16.62s ========================
+======================= 42 passed, 13 skipped in 17.50s ========================
 verify.sh: PASSED (stack left running: --keep)
 
-$ document-service: python -m pytest tests -q        → 265 passed in 170.13s
-$ tests/test_ui_letterhead_header.py (Playwright)    → 1 passed
-$ tests/test_ui_*.py (Playwright, loop-test)         → 30 passed, 6 skipped (the usual short-session skips)
+$ document-service: python -m pytest tests -q                 → 275 passed in 178.44s
+$ tests/test_ui_*.py (Playwright 1.65.1 container, loop-test) → 29 passed, 7 skipped (6 short-session skips + backup_restore, which needs the destructive flag)
+$ tests/test_ui_backup_restore.py (ALLOW_DESTRUCTIVE_TESTS=1, COMPOSE_PROJECT_NAME=loop-test) → 2 passed
 ```
-The 13th skip in verify.sh is the new UI test, which runs in the Playwright container instead.
 
 ## 7. Found but not fixed (out of scope)
-- **Banner on pages 2+.** The header is the `<thead>` of the page-layout table, so the banner repeats on every page, as the logo already did. Current behaviour is kept.
-- **Companies list.** The "Logo" column shows "—" for a letterhead company that has no logo uploaded. The banner isn't listed there. The fix would be a "View letterhead" link in that column.
-- **Backup round-trip.** I didn't add a dedicated letterhead test. The backup engine copies every object in the `documents` bucket, and the existing round-trip test compares all objects byte for byte, so `company-letterheads/…` is covered generically.
-- **Style switch with a file chosen.** Choosing a banner file and then switching the select back to Logo still uploads the chosen banner when you save. The file is only stored; the header follows the select.
+- **Logos uploaded before this change.** Their original file is gone, so only the squared copy exists. The form shows the re-upload hint for them.
+- **SVG logos still aren't checked to be real SVGs.** A file named `.svg` is stored as before; its presigned URL is still served as a forced download. This is unchanged behaviour.
+- **The UI test runner image is pinned to Playwright 1.65.1.** Installing `pytest-playwright` pulls a newer Playwright whose browsers the image doesn't have. The runner command must pin `playwright==1.65.1`.
 
 ## 8. Blockers / decisions needed
 None.
 
 ## 9. Suggestions for the next iteration
-- Test the user's real WINTERFELL banner in the UI. Synthetic banners were used in tests, as the plan asked.
-- Optional: the "View letterhead" link in the companies list.
+- Optional: a "View banner" link in the companies list for letterhead companies.
 
 App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)

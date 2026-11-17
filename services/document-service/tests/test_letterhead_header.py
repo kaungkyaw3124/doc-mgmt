@@ -1,8 +1,10 @@
 """
-Company header style (loop iteration 17): "logo" (logo + seal row, unchanged)
+Company header style (loop iterations 17-18): "logo" (logo + seal row, unchanged)
 or "letterhead" (one wide banner filling the header box LEFT of the seal; the
 seal stays at the top right). Layout tests render the real template and
 measure the WeasyPrint box tree; the end-to-end tests go through the HTTP API.
+Iteration 18: one /logo upload stores both the squared logo and the
+proportional banner; header_style picks which one the exports use.
 """
 import importlib.util
 import io
@@ -168,31 +170,17 @@ def test_header_style_defaults_to_logo_and_rejects_unknown_values():
     assert "header_style" in models.Company.__table__.columns and "letterhead_object_key" in models.Company.__table__.columns
 
 
-def _std(data):
-    out, name = companies_router._standardize_letterhead(data)
-    return Image.open(io.BytesIO(out)), name
-
-
-def test_letterhead_upload_keeps_proportions_and_only_downscales():
-    img, name = _std(banner((720, 190)))
-    assert img.size == (720, 190) and name == "letterhead.png"   # not stretched to a square
-    img, _ = _std(banner((3000, 800)))
-    assert img.size == (2000, 533)                                # downscaled, same ratio
+def test_banner_variant_keeps_proportions_and_only_downscales():
+    std = lambda data: Image.open(io.BytesIO(companies_router._standardize_letterhead(data)))
+    assert std(banner((720, 190))).size == (720, 190)   # not stretched to a square
+    assert std(banner((3000, 800))).size == (2000, 533)  # downscaled, same ratio
     for fmt in ("JPEG", "WEBP"):
-        assert _std(banner(fmt=fmt))[0].size == (720, 190)
+        assert std(banner(fmt=fmt)).size == (720, 190)
 
 
 @pytest.mark.parametrize("data", [b"just some text, not an image", b"GIF89a" + b"\0" * 20, b""])
-def test_letterhead_upload_rejects_non_images(data):
-    with pytest.raises(companies_router.HTTPException) as e:
-        companies_router._standardize_letterhead(data)
-    assert e.value.status_code == 400
-
-
-def test_letterhead_upload_rejects_a_huge_file():
-    with pytest.raises(companies_router.HTTPException) as e:
-        companies_router._standardize_letterhead(banner() + b"\0" * (10 * 1024 * 1024))
-    assert e.value.status_code == 400 and "too large" in e.value.detail
+def test_banner_variant_is_skipped_not_fatal_for_other_files(data):
+    assert companies_router._standardize_letterhead(data) is None
 
 
 # ---- end to end through the HTTP API ---------------------------------------
@@ -229,29 +217,89 @@ def _sq(color):
     return buf.getvalue()
 
 
-def test_company_style_switch_end_to_end(client, storage):
+def _stored(storage, key):
+    return Image.open(io.BytesIO(storage[key])).size
+
+
+def _upload_logo(client, cid, data, name="logo.png", mime="image/png", **kw):
+    return client.post(f"/companies/{cid}/logo", files={"file": (name, data, mime)}, **kw)
+
+
+@pytest.mark.parametrize("fmt,mime", [("PNG", "image/png"), ("JPEG", "image/jpeg"), ("WEBP", "image/webp")])
+def test_one_logo_upload_stores_the_square_logo_and_the_proportional_banner(client, storage, fmt, mime):
+    cid = _make_company(client)["id"]
+    r = _upload_logo(client, cid, banner(fmt=fmt), name="logo." + fmt.lower(), mime=mime)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["letterhead_object_key"] == f"company-letterheads/{cid}/letterhead.png" and "note" not in body
+    assert _stored(storage, body["logo_object_key"]) == (300, 300)        # logo: stretched square, as before
+    w, h = _stored(storage, body["letterhead_object_key"])
+    assert abs((w / h) / (720 / 190) - 1) < 0.01                          # banner: proportions kept
+    company = client.get(f"/companies/{cid}").json()
+    assert (company["logo_object_key"], company["letterhead_object_key"]) == (body["logo_object_key"], body["letterhead_object_key"])
+
+
+def test_a_very_wide_upload_gets_a_downscaled_banner(client, storage):
+    cid = _make_company(client)["id"]
+    key = _upload_logo(client, cid, banner((3000, 800))).json()["letterhead_object_key"]
+    assert _stored(storage, key) == (2000, 533)
+
+
+def test_svg_upload_stores_only_the_logo_with_a_note_and_drops_an_older_banner(client, storage):
+    cid = _make_company(client)["id"]
+    assert _upload_logo(client, cid, banner()).json()["letterhead_object_key"]
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'
+    r = _upload_logo(client, cid, svg, name="logo.svg", mime="image/svg+xml")
+    assert r.status_code == 200, r.text
+    assert r.json()["letterhead_object_key"] is None and "logo only" in r.json()["note"]
+    assert storage[r.json()["logo_object_key"]] == svg                   # SVG left untouched, as before
+    assert client.get(f"/companies/{cid}").json()["letterhead_object_key"] is None
+
+
+@pytest.mark.parametrize("name,data", [
+    ("x.txt", b"hello"),
+    ("x.png", b"not really a png"),
+    ("empty.png", b""),
+    ("huge.png", banner() + b"\0" * (10 * 1024 * 1024)),
+])
+def test_logo_upload_rejects_non_images_and_huge_files(client, storage, name, data):
+    cid = _make_company(client)["id"]
+    r = _upload_logo(client, cid, data, name=name)
+    assert r.status_code == 400, r.text
+    assert ("too large" in r.json()["detail"]) == name.startswith("huge")
+    assert storage == {}
+    assert client.get(f"/companies/{cid}").json()["logo_object_key"] is None
+
+
+def test_logo_upload_refuses_view_only(client, storage):
+    cid = _make_company(client)["id"]
+    assert _upload_logo(client, cid, banner(), headers={"X-Access-Level": "view"}).status_code == 403
+    assert storage == {}
+
+
+def test_separate_letterhead_upload_endpoint_is_gone(client, storage):
+    cid = _make_company(client)["id"]
+    r = client.post(f"/companies/{cid}/letterhead", files={"file": ("lh.png", banner(), "image/png")})
+    assert r.status_code in (404, 405)
+    assert storage == {}
+
+
+def test_company_style_switch_end_to_end_from_a_single_upload(client, storage):
     company = _make_company(client, header_style="letterhead")
     cid = company["id"]
     assert company["header_style"] == "letterhead" and company["letterhead_object_key"] is None
-    # different colours: the PDF embeds byte-identical images once, which would hide a duplicate
-    for path, data in (("logo", _sq("navy")), ("seal", _sq("crimson"))):
-        assert client.post(f"/companies/{cid}/{path}", files={"file": (f"{path}.png", data, "image/png")}).status_code == 200
     doc = _quotation(client, cid)
+    # the seal (a different colour, so the PDF can't de-duplicate it with the logo)
+    assert client.post(f"/companies/{cid}/seal", files={"file": ("seal.png", _sq("crimson"), "image/png")}).status_code == 200
 
-    # letterhead style, banner not uploaded yet -> falls back to the logo (no crash)
-    assert _pdf_image_sizes(client, doc) == [(300, 300), (300, 300)]
-
-    r = client.post(f"/companies/{cid}/letterhead", files={"file": ("lh.webp", banner(fmt="WEBP"), "image/webp")})
-    assert r.status_code == 200, r.text
-    mine = next(c for c in client.get("/companies").json() if c["id"] == cid)
-    assert mine["letterhead_object_key"] == f"company-letterheads/{cid}/letterhead.png"
+    # one /logo upload of a wide image and nothing else -> banner at its own proportions + seal
+    assert _upload_logo(client, cid, banner()).status_code == 200
     assert client.get(f"/companies/{cid}/letterhead-url").status_code in (200, 500)  # presign needs MinIO; route exists
-
-    assert _pdf_image_sizes(client, doc) == [(300, 300), (720, 190)]   # banner + seal, no logo
+    assert _pdf_image_sizes(client, doc) == [(300, 300), (720, 190)]
     xlsx = load_workbook(io.BytesIO(client.get(f"/documents/{doc}/export/quotation").content)).active
     assert len(xlsx._images) == 2 and _size(xlsx._images[0])[0] > 90
 
-    # switch back to logo: the banner stays saved, the header shows logo + seal
+    # flip to logo: the same upload, squared, + seal
     r = client.patch(f"/companies/{cid}", json={"header_style": "logo"})
     assert r.status_code == 200 and r.json()["header_style"] == "logo" and r.json()["letterhead_object_key"]
     assert _pdf_image_sizes(client, doc) == [(300, 300), (300, 300)]
@@ -261,13 +309,15 @@ def test_company_style_switch_end_to_end(client, storage):
     assert _pdf_image_sizes(client, doc) == [(300, 300), (720, 190)]
 
 
-def test_upload_endpoint_rejects_text_and_view_only(client, storage):
-    cid = _make_company(client)["id"]
-    r = client.post(f"/companies/{cid}/letterhead", files={"file": ("x.txt", b"hello", "text/plain")})
-    assert r.status_code == 400 and "PNG, JPG or WebP" in r.json()["detail"]
-    r = client.post(f"/companies/{cid}/letterhead", files={"file": ("lh.png", banner(), "image/png")}, headers={"X-Access-Level": "view"})
-    assert r.status_code == 403
-    assert storage == {}
+def test_old_squared_logo_with_letterhead_style_falls_back_to_the_logo(client, storage):
+    cid = _make_company(client, header_style="letterhead")["id"]
+    _upload_logo(client, cid, banner())
+    from app.core.db import get_db
+    from app.main import app
+    db = next(app.dependency_overrides[get_db]())
+    db.query(models.Company).filter_by(id=uuid.UUID(cid)).update({"letterhead_object_key": None})  # uploaded before iteration 18
+    db.commit()
+    assert _pdf_image_sizes(client, _quotation(client, cid)) == [(300, 300)]
 
 
 def test_invalid_header_style_is_rejected_by_the_api(client, storage):

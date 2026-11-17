@@ -339,6 +339,7 @@ flowchart LR
   bucket):
   - Document files: `{doc_type}/{doc_number}/{sanitized filename}`
   - Company logos: `company-logos/{company_id}/{filename}`
+  - Company banner variant of the logo upload: `company-letterheads/{company_id}/letterhead.png`
   - Company seals: `company-seals/{company_id}/{filename}`
   - Product files (single upload or bulk import): `{sku}/{filename}`
 - **Two S3 clients per service** — an internal one
@@ -360,10 +361,13 @@ flowchart LR
   in `documents.py` and `companies.py`) — prevents path traversal into
   another object's key space.
 - **Company logo/seal standardization**: raster images (not SVG) are
-  resized to fit and padded onto a fixed-size transparent canvas (400×200
-  for logos, 300×300 for seals) via Pillow, always re-saved as PNG, so
-  every company's letterhead renders consistently regardless of the
-  source image's dimensions (`companies.py:55-85`). SVGs are left
+  stretched to exactly 300×300 (logo and seal) via Pillow and re-saved as
+  PNG. The company form has ONE "Logo / banner image" upload: the same
+  `/logo` upload also stores a proportional banner copy (PNG/JPG/WebP only,
+  downscaled only if wider than 2000px). The "Quotation header" select
+  (`header_style`: Logo / Letterhead banner) decides which copy quotations
+  use, so switching needs no re-upload. Logos uploaded before both copies
+  were kept have no banner copy; the form asks to re-upload once. SVGs are left
   untouched and are always served with a forced `Content-Disposition:
   attachment` on their presigned URL, rather than being renderable inline
   in the app's own origin (an XSS-via-stored-SVG mitigation) — this

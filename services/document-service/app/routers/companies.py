@@ -110,27 +110,26 @@ LETTERHEAD_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _LETTERHEAD_FORMATS = {"PNG", "JPEG", "WEBP"}
 
 
-def _standardize_letterhead(file_bytes: bytes) -> tuple[bytes, str]:
+def _standardize_letterhead(file_bytes: bytes) -> bytes | None:
     """
-    Unlike a logo/seal (stretched to a fixed square), a letterhead banner is
-    wide and keeps its own proportions: only downscaled if wider than
-    LETTERHEAD_MAX_WIDTH, re-saved as PNG. Anything that isn't a readable
-    PNG/JPEG/WebP, or is over the size limit, is refused with a 400.
+    The proportional "banner" variant of an uploaded logo: unlike the logo
+    itself (stretched to a fixed square), it keeps its own proportions, is
+    only downscaled if wider than LETTERHEAD_MAX_WIDTH, and is re-saved as
+    PNG. Returns None (no banner variant) for anything that isn't a readable
+    PNG/JPEG/WebP — the logo upload still succeeds without it.
     """
-    if len(file_bytes) > LETTERHEAD_MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="Letterhead image is too large (max 10 MB).")
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.format not in _LETTERHEAD_FORMATS:
-            raise ValueError(img.format)
+            return None
         img = img.convert("RGBA")
         if img.width > LETTERHEAD_MAX_WIDTH:
             img = img.resize((LETTERHEAD_MAX_WIDTH, round(img.height * LETTERHEAD_MAX_WIDTH / img.width)), Image.LANCZOS)
         output = io.BytesIO()
         img.save(output, format="PNG")
-        return output.getvalue(), "letterhead.png"
+        return output.getvalue()
     except Exception:
-        raise HTTPException(status_code=400, detail="Letterhead must be a PNG, JPG or WebP image.")
+        return None
 
 
 @router.post("", response_model=schemas.CompanyOut, status_code=201)
@@ -308,17 +307,38 @@ def upload_company_logo(
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
 
-    raw_bytes = file.file.read()
+    # Read one byte past the limit so a huge upload isn't pulled fully into memory.
+    raw_bytes = file.file.read(LETTERHEAD_MAX_UPLOAD_BYTES + 1)
+    if len(raw_bytes) > LETTERHEAD_MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Image is too large (max 10 MB).")
     safe_name = _sanitize_filename(file.filename)
-    processed_bytes, filename = _standardize_image(raw_bytes, safe_name, STANDARD_LOGO_SIZE)
-    content_type = _safe_content_type(filename)
+    is_svg = safe_name.lower().endswith(".svg")
+    if not is_svg:
+        try:
+            Image.open(io.BytesIO(raw_bytes)).load()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Logo must be a PNG, JPG, WebP or SVG image.")
 
+    # One upload, two stored variants: the squared logo (header_style "logo")
+    # and the proportional banner (header_style "letterhead"), so switching
+    # the style later needs no re-upload.
+    processed_bytes, filename = _standardize_image(raw_bytes, safe_name, STANDARD_LOGO_SIZE)
     object_key = f"company-logos/{company_id}/{filename}"
-    upload_file(io.BytesIO(processed_bytes), object_key, content_type=content_type)
+    upload_file(io.BytesIO(processed_bytes), object_key, content_type=_safe_content_type(filename))
+
+    banner_bytes = None if is_svg else _standardize_letterhead(raw_bytes)
+    letterhead_key = None
+    if banner_bytes:
+        letterhead_key = f"company-letterheads/{company_id}/letterhead.png"
+        upload_file(io.BytesIO(banner_bytes), letterhead_key, content_type="image/png")
 
     company.logo_object_key = object_key
+    company.letterhead_object_key = letterhead_key  # an older banner belonged to the previous image
     db.commit()
-    return {"logo_object_key": object_key}
+    result = {"logo_object_key": object_key, "letterhead_object_key": letterhead_key}
+    if not letterhead_key:
+        result["note"] = "Saved as a logo only — a letterhead banner needs a PNG, JPG or WebP image."
+    return result
 
 
 @router.get("/{company_id}/logo-url")
@@ -328,30 +348,6 @@ def get_company_logo_url(company_id: uuid.UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="no logo attached to this company")
     is_svg = company.logo_object_key.lower().endswith(".svg")
     return {"url": get_presigned_url(company.logo_object_key, force_download=is_svg)}
-
-
-@router.post("/{company_id}/letterhead")
-def upload_company_letterhead(
-    company_id: uuid.UUID,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
-):
-    _require_edit_access(x_access_level)
-    company = db.query(models.Company).filter_by(id=company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="company not found")
-
-    # Read one byte past the limit so a huge upload isn't pulled fully into memory.
-    processed_bytes, filename = _standardize_letterhead(file.file.read(LETTERHEAD_MAX_UPLOAD_BYTES + 1))
-    content_type = _safe_content_type(filename)
-
-    object_key = f"company-letterheads/{company_id}/{filename}"
-    upload_file(io.BytesIO(processed_bytes), object_key, content_type=content_type)
-
-    company.letterhead_object_key = object_key
-    db.commit()
-    return {"letterhead_object_key": object_key}
 
 
 @router.get("/{company_id}/letterhead-url")
