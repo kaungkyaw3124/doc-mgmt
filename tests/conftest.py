@@ -141,3 +141,33 @@ def editor_user(admin):
     user["id"] = next(u["id"] for u in admin.get("/admin/users").json() if u["username"] == user["username"])
     yield user
     admin.patch(f"/admin/users/{user['id']}/active", json={"is_active": False})
+
+
+# ---- backup & restore (iteration 16) ----
+# Both: the flag, and a compose project other than the real stack's ("infra",
+# the default for infra/docker-compose.yml) — docker-driven tests follow it.
+DESTRUCTIVE = (os.environ.get("ALLOW_DESTRUCTIVE_TESTS") == "1"
+               and os.environ.get("COMPOSE_PROJECT_NAME", "infra") not in ("", "infra"))
+destructive = pytest.mark.skipif(
+    not DESTRUCTIVE,
+    reason="replaces or wipes data: set ALLOW_DESTRUCTIVE_TESTS=1, and only against the throwaway "
+           "loop-test stack (infra/docker-compose.loop-test.yml), never the real one",
+)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "restores_data: restores a backup (signs every session out); runs last")
+
+
+def pytest_collection_modifyitems(items):
+    # A restore replaces the sessions table, so every token the session-scoped
+    # fixtures hold dies with it: run those tests after everything else.
+    items.sort(key=lambda i: i.get_closest_marker("restores_data") is not None)
+
+
+def relogin(admin_client) -> str:
+    """Fresh admin token after a restore, installed on the shared client."""
+    resp = httpx.post(f"{BASE_URL}/auth/login", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, timeout=60)
+    assert resp.status_code == 200, resp.text
+    admin_client.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
+    return resp.json()["access_token"]

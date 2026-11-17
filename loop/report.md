@@ -1,148 +1,156 @@
-# report.md — Iteration 15 (revised: 5 pages)
+# report.md — Iteration 16
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: **Part A** — a one-click **"Delete ALL …"** button on each of the Products, Documents, Customers, Projects and Companies pages, for the user's development/testing stage. Temporary, and must be trivial to remove later. **Part B** — modal heading + Close stay visible while the modal body scrolls. **Part C** — an animated success tick after saves (no sound)
-- **Ponytail skill loaded**: yes (the session-start hook loaded it, and this iteration followed it)
-- **Branch / commit**: `dev` @ (this commit, see `git log`). Before this, I rebased the earlier unpushed products-only commit onto the planner's revised PLAN.md. The rebase was clean.
-- **One-paragraph summary**: The products part was already built in the first pass (`DELETE /products`, `GET /products/dev-config`). This pass adds `DELETE /documents`, `/customers`, `/projects` and `/companies` to document-service. Each one permanently deletes every row, including rows in the recycle bin, and returns `{"deleted": N}`. Each returns 403 when `ENVIRONMENT=production` or the user has view-only access. Documents also needs the same `X-Has-Document-Delete` permission as the single delete.
-  - **Documents** explicitly deletes their line items and audit log, removes each from Meilisearch, and makes a best-effort attempt to delete their stored files.
-  - **Customers / Projects** set the reference on documents to NULL, then delete. The documents are kept.
-  - **Companies** set `company_id`/`director_id` on documents to NULL, delete the MDs, then the companies. It makes a best-effort attempt to delete the logo, seal and MD-seal files.
-  - The UI has five red "Delete ALL … (dev)" buttons, all driven by one generic JS block. One click, no confirm, then the list refreshes and a banner shows "Deleted N …". The buttons show when `/products/dev-config` says the feature is enabled. One `ENVIRONMENT` variable feeds both services through compose, and each service's endpoint still enforces its own guard.
-  - Everything sits inside `DEV-ONLY: delete-all` markers. The first pass used `delete-all-products` markers; I renamed them to match the plan.
-
-- **Part B** (this session): one CSS block in `web/index.html` (no markup, no JS). The modal box's top padding moves into its `h3`, which becomes `position: sticky; top: 0` with a white background. The floated Close button (it always sits right before the h3) becomes `position: sticky; top: 28px` above it. The `.modal-box-scrollbody` modals (edit role, documents recycle bin) already had a fixed header, so the rule skips them with `:not(.modal-box-scrollbody)` and leaves them unchanged. It applies to all 26 other modals. Short modals render the same as before.
-
-- **Part C** (this session): one CSS block in `web/index.html` and one helper in `web/js/app.js`. `showTick(ok, message)` is exposed as `showSuccessTick` and `showErrorCross`. It shows a fixed top-right toast with an inline SVG: a circle, then a tick (or a cross), drawn with `stroke-dashoffset` keyframes. The cross also shakes. The toast has `pointer-events: none`, fades out, and its node is removed by a `setTimeout` (1.6 s for a tick, 2.6 s for a cross), so removal still happens under reduced motion, where the CSS shows a static tick. There is no sound, no library and no JS animation loop. The text banners for errors and details stay as they were. For companies, `verifySavedImages()` fetches each uploaded logo, seal or MD-seal `*-url` and waits for `img.onload` before the tick, so a file that can't be loaded back shows the cross and keeps the form open. No API or payload changed.
+- **Goal**: Backup & Restore: (1) a server-side backup/restore engine + nightly job, (2) **Download backup** button in the web UI, (3) **Restore from file** in the web UI
+- **Ponytail skill loaded**: yes (loaded by the session-start hook and followed for the whole iteration)
+- **Branch / commit**: `dev` @ (this commit, see `git log`)
+- **One-paragraph summary**: A new small container, **`backup-service`**, holds the one engine (`services/backup-service/app/engine.py`). The web API, `scripts/backup.sh`, `restore.sh` and `deploy.sh`, and the nightly cron all call it.
+  - **What a backup holds.** A backup is one `.tar.gz` containing `manifest.json`, a `pg_dump -Fc` of each of the 3 databases, and every MinIO object.
+  - **Restore.** The engine validates the archive (readable, manifest, checksums, safe paths, Alembic revision known), then:
+    1. turns on maintenance mode (nginx answers 503);
+    2. takes a pre-restore backup;
+    3. restores each database in one transaction;
+    4. replaces the MinIO objects;
+    5. runs migrations to head and rebuilds both search indexes;
+    6. turns maintenance off.
+  - **Web UI.** A new superuser-only **Backup & Restore** page has Download (optional password: openssl AES-256), the server-side backup list, and Restore. Restore means: upload the file, see the summary, type RESTORE, watch progress, then see the result with the iteration 15 tick.
+  - **Scripts.** Nightly cron installer, retention of 14, and `deploy.sh` (pull → backup → rebuild → restart nginx).
+  - **Testing.** Everything was tested on a throwaway `loop-test` stack. The round trip is lossless (row counts equal, files byte-identical, PDF still has logo + seal, search finds the product).
+  - **Your data.** Your stack at :8080 was backed up first, then rebuilt. Its data is intact.
 
 ## 2. Baseline (before any change)
+On the throwaway stack. The only edits made before this run were the test-stack file and a 1-line `COMPOSE_OVERRIDE` hook in verify.sh; app code was unchanged.
 ```
-$ ./scripts/verify.sh --keep          (products-only iter-15 code, rebased)
-======================== 24 passed, 9 skipped in 5.12s =========================
+$ COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=<override> GATEWAY=http://localhost:18080 ./scripts/verify.sh --keep
+======================== 24 passed, 11 skipped in 5.03s ========================
 verify.sh: PASSED (stack left running: --keep)
 ```
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | Catalogue + document-service unit tests pass | PASS | in the `infra-<svc>-service` images + `requirements-dev.txt`: document-service `python -m pytest tests -q` → `239 passed in 168.50s` (18 new in `tests/test_delete_all.py`); catalogue → `80 passed in 2.04s` |
-| A2 | UI test passes | PASS | `mcr.microsoft.com/playwright/python:v1.65.1-noble`, `--network host`, against the verify.sh stack: `pytest tests/test_ui_delete_all.py -v` → `6 passed in 21.52s` (one test per page + the production-hidden test) |
-| A3 | No regressions | PASS | `./scripts/verify.sh --keep` → `24 passed, 9 skipped` (the skips are the Playwright UI tests, because Playwright isn't in verify.sh's venv) |
-| A4 | Proof | PASS | `loop/evidence/iter-15-{products,documents,customers,projects,companies}-{before,after}.png`, taken by the UI test |
-| A5 | Removal steps | PASS | §4 below |
-| B1 | Close/heading stay visible after scrolling | PASS | `pytest tests/test_ui_modal_sticky_header.py -v` → `5 passed in 9.46s`. It covers bulk import with 45 rows (results overflow, scrolled to the bottom, Close and h3 inside the viewport and not covered per `elementFromPoint`, then Close closes the modal) plus audit log, create user, customer and edit role, each padded to 3000px and scrolled. Before the CSS change: `4 failed, 1 passed`. Edit role already passed because it is a scrollbody modal. |
-| B2 | Short modals unchanged | PASS | `loop/evidence/iter-15-modal-short-{before,after}.png` (Create User, 480×492). They look identical. A pixel diff shows anti-aliasing changes only inside the heading/Close strip (bbox 28,31–450,46), because sticky elements get their own compositing layer. Layout and position are unchanged. |
-| B3 | Proof | PASS | `loop/evidence/iter-15-bulk-import-scrolled.png` |
-| C1 | Tick on every success path, cross on failures | PASS | `pytest tests/test_ui_success_tick.py -v` → `6 passed in 13.40s`. Product save: tick visible with the `tick-draw` animation, gone in under 2.5 s, no node left. A forced 400 (route interception) shows the cross with `tick-shake` and no tick. Logo upload: tick when the presigned image loads, and the cross ("could not be loaded back") with no tick when that image request is aborted. Reduced motion: `animation-name: none`, node still removed. The path list is in §4. |
-| C2 | No sound, no new dependency | PASS | `test_no_sound_code` greps `web/` for `<audio`, `AudioContext`, `new Audio`, `navigator.vibrate` and finds none. No new packages, CDN links or files under `web/`. |
-| C3 | Weight | PASS (slightly over the ~1.5 KB raw target) | Raw added text: CSS 1,250 B; JS helper (both functions + `verifySavedImages`) 1,171 B; the 31 call-site lines bring the JS to 2,849 B. Gzip -9 delta: index.html +336 B, app.js +748 B. That is about 1.1 KB, on top of a ~275 KB raw page (index.html + app.js). No runtime cost until a save happens. |
-| C4 | Proof | PASS | `loop/evidence/iter-15-tick-mid.png`, `iter-15-tick-finished.png`, `iter-15-tick-error.png` |
-| C5 | No regressions | PASS | `./scripts/verify.sh --keep` → `24 passed, 11 skipped`. All Playwright UI tests: `27 passed, 6 skipped` (the same 6 short-session skips) |
-| B4 | No regressions | PASS | `./scripts/verify.sh --keep` → `24 passed, 10 skipped`. All Playwright UI tests: `21 passed, 6 skipped` (the 6 skips are the session tests, which need a stack started with short session values, as before) |
+| A1 | Round-trip restore is lossless | PASS | `tests/test_backup_restore.py::test_round_trip_restore_is_lossless PASSED`. Steps: seed a category, a product + PDF file, a company + logo + seal, a customer, a project, a quotation (company/customer/project) + document file → back up through the API → download by ticket → **DROP SCHEMA on docmgmt + catalogue and delete every MinIO object** → validate + restore through the API. Checked afterwards: `row_counts` for docmgmt and catalogue equal; the auth users count is equal; the sha256 of every `minio/*` file is equal and the content types are equal; the logo downloaded via its presigned URL matches the backup checksum; the quotation PDF has the same image count (≥2: logo + seal) and the same text; `/search` finds the product (index rebuilt); a `pre-restore-*` file is listed; and **503 was observed** on `/api/products` during the restore |
+| A2 | Validation / auth tests pass | PASS | `test_non_superuser_gets_403_everywhere` (list/create/download-ticket/validate/restore → 403 ×5; no token → 401), `test_bad_backups_are_refused[garbage, truncated, checksum, newer-revision, path-traversal, unlisted-file]` → 400 with a clear message, `test_encrypted_backup_needs_the_right_password` (missing → "encrypted", wrong → "Wrong password", right → 200), `test_restore_requires_typing_restore` (""/"restore"/"yes" → 400), `test_maintenance_mode_blocks_api_but_not_status` (503 on the API/login/files, status 200, UI 200), `test_second_backup_or_restore_is_rejected_while_one_runs` (409 on both create and restore while the lock is held), `test_download_is_a_valid_backup_and_listed`, single-use ticket (2nd fetch → 404). Engine unit tests: `services/backup-service/tests/test_engine.py` → `9 passed` |
+| A3 | UI flow works end to end | PASS | `tests/test_ui_backup_restore.py` (Playwright image) → `2 passed`. Steps: admin → Backup & Restore → Download (the file arrives through `expect_download`, and it is a valid tar with a manifest) → add a product through the API → upload that file → summary → "restore" keeps the button disabled, "RESTORE" enables it → Restore → "Restore complete … pre-restore-…" + tick → after logging in again, the added product is 404. A normal Editor sees no nav entry and no page. Screenshots: `loop/evidence/iter-16-backup-page.png`, `iter-16-restore-confirm.png`, `iter-16-restore-done.png` |
+| A4 | Nightly cron + retention + pre-update backup | PASS | `tests/test_backup_scripts.py` → `3 passed`. (1) The cron installer prints its line and installs exactly one `30 2 * * *` line (run twice; other crontab lines are kept; a fake `crontab` is used, the real one is never touched). (2) `deploy.sh` order is git pull < backup.sh < `up -d --build`, with no `down`/`volume rm`/`prune`. (3) 20 fake `backup-2000-01-*` files + `scripts/backup.sh` → exactly the newest 14 are kept, including the new one. Unit test: 20 fakes → 14 kept, and `pre-restore-*` is never pruned. `deploy.sh` is quoted below |
+| A5 | No regressions | PASS | `verify.sh` on loop-test → `42 passed, 12 skipped`. The skips are the Playwright UI files, as in the baseline. All Playwright UI tests: `29 passed, 6 skipped` (the same 6 short-session skips as iteration 15). Service unit tests: document-service `239 passed`, catalogue `80 passed`, auth `93 passed` |
+| A6 | Data safety | PASS | See "Data safety" below |
 
-Extra live-Postgres check: SQLite doesn't enforce FKs, so the unit tests can't prove the NULL-first ordering. Against the running stack I created a document linked to a customer, a project, a company and an MD, then called `DELETE /customers` → `200 {"deleted":1}`, `/projects` → 200, `/companies` → 200. The document survived with all four refs `None` and its 1 line item intact. `DELETE /documents` → `200 {"deleted":1}`.
+**Data safety**: every test (verify.sh, Playwright, unit, script, and the manual CLI tries) ran on the **throwaway `loop-test` stack**: `infra/docker-compose.loop-test.yml`, its own data under `infra/data-loop-test/`, ports 18080/18443. Afterwards I tore it down with `down -v` and deleted its data folder. **Your stack was never tested against.** Its volumes were never removed.
+- Before rebuilding your stack, I took a backup of it: `backups/backup-2026-11-17-1032.tar.gz` (293 KB).
+- Counts before and after the rebuild are identical: documents 1, companies 1, customers 1, projects 1, products 100, users 20.
+- One deviation: the pre-backup `up -d --build backup-service` also recreated document-service and catalogue-service with the new code, because they are its dependencies. This happened before the backup, and only the code changed; the data did not. `deploy.sh` and LOOP.md now use `--no-deps`.
+
+`scripts/deploy.sh` (comments trimmed):
+```bash
+git pull --ff-only
+export APP_COMMIT="$(git rev-parse --short HEAD)"
+"${COMPOSE[@]}" up -d --build --no-deps backup-service      # only the backup container, so the first deploy can back up too
+for _ in $(seq 30); do "${COMPOSE[@]}" exec -T backup-service true 2>/dev/null && break; sleep 2; done
+./scripts/backup.sh                                          # set -e: a failed backup stops the deploy
+"${COMPOSE[@]}" up -d --build
+"${COMPOSE[@]}" restart nginx
+# wait up to 2 min for http://localhost:8080/ → 200
+```
+
+### Task 1 — what I found in the stack
+- **Databases**: one Postgres 16 server with **3 databases**: `docmgmt` (document-service), `catalogue`, `auth`. They are created by `infra/init-db/*.sql`, and all are owned by `docmgmt` (POSTGRES_USER, a superuser).
+- **MinIO buckets**: `documents` (company logos/seals, MD seals, document files) and `products` (catalogue files). Each service creates its bucket at startup. **There is no letterhead upload** (already noted in iteration 15).
+- **Migrations**: only **document-service** uses Alembic. It runs `alembic upgrade head` in `on_startup` (`docs/decisions.md` §4, which says migrations are not run, is outdated). catalogue-service and auth-service use `create_all()` only. auth also runs `ensure_session_columns`.
+- **Search indexing**: there was **no re-index code**. Rows are indexed one at a time on create/update (`index_document`, `index_product`). I added `rebuild_index()` next to each, behind a new internal `/internal/after-restore` route.
+- **Data storage**: all data lives in **bind mounts** (`infra/data/...`), not named volumes. So a different compose project name alone would share your data folders. The throwaway stack file therefore re-points every data path.
+
+### Design choices (the plan asked me to say why)
+- **pg_dump custom format (-Fc)**: it is compressed, readable by pg_restore (which is how validation checks it), and restores with `--no-owner --no-privileges`. The restore turns it into SQL and runs `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` + the dump in **one `psql --single-transaction`**. A failure part-way through a database rolls back to how that database was. A plain-SQL dump would work too, but is larger and harder to check.
+- **backup-service built `FROM postgres:16`**: pg_dump refuses newer servers, and Debian's own client is version 15 (bookworm). This image has exactly 16.x. It has no CA bundle, so the Dockerfile borrows one from `python:3.12-slim-bookworm` (already a base for the other services), which keeps apt on https. There is no Docker socket. The service reaches the others only through the compose network: postgres, minio, and document-/catalogue-service `/internal/*` with the internal secret.
+- **Encryption**: `openssl enc -aes-256-cbc -pbkdf2 -iter 200000`, streamed on download. Manual decrypt (verified against a server-produced `.enc`: the decrypted file equals the original byte for byte):
+  `openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in X.tar.gz.enc -out X.tar.gz`
+- **Download**: the page asks for a **single-use, 60-second ticket**, then opens `/api/backup/fetch/<ticket>` as a plain link. The browser streams it to disk with its own progress bar. Neither the server nor the page holds the file in memory, and the password never appears in a URL.
+- **"Newer revision" check**: the backup's Alembic revision must be one that this app's document-service knows (`/internal/alembic-revisions`). Unknown → refused: "This backup is from a newer version of the app (database revision X). Update the app first, then restore."
+- **Maintenance mode**: backup-service creates `/maintenance/on`, a shared bind mount that nginx mounts read-only. nginx then returns 503 for `/api/*`, `/documents/*` and `/products/*`, except `= /api/backup/status`. The UI itself keeps loading. backup-service clears the flag in `finally` and on every startup, so a crash can't leave the app stuck at 503.
+- **Order change versus the plan**: maintenance mode starts **before** the pre-restore backup, not after. That way no write can land between the rollback snapshot and the restore and then be lost.
+- **Sessions**: `refresh_tokens` **data** is excluded from backups (they are live credentials). A restore therefore signs everyone out, which the UI says. `/api/backup/status` is public for that reason: the admin's own session ends during the restore. It returns only state/step/message/maintenance.
+- **Lock**: a `flock` on `backups/.lock` shared by the API and CLI execs. The kernel releases it if the holder dies.
+- **Rollback**: not automatic. On failure, the message names the step and the pre-restore file, and docs/BACKUP_RESTORE.md gives the command. Databases already restored by then are committed, so automatic rollback would be another full restore. I didn't build it because it isn't simple, and the plan allowed skipping it.
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/document-service/app/routers/documents.py` L659–682 | added (DEV-ONLY block) | `DELETE /documents` |
-| `services/document-service/app/routers/customers.py` L113–128 | added (DEV-ONLY block) | `DELETE /customers` |
-| `services/document-service/app/routers/projects.py` L145–160 | added (DEV-ONLY block) | `DELETE /projects` |
-| `services/document-service/app/routers/companies.py` L223–244 | added (DEV-ONLY block) | `DELETE /companies` |
-| `services/document-service/app/core/dev_delete_all.py` | added (whole file DEV-ONLY) | shared production/view-only guard + best-effort file delete |
-| `services/catalogue-service/app/routers/products.py` L427–469 | marker renamed only | `DELETE /products`, `GET /products/dev-config` (from the first pass) |
-| `web/index.html` L617, 692, 744, 790, 837 | one `<!-- DEV-ONLY: delete-all -->` comment + the button on the next line, ×5 | the buttons, hidden by default |
-| `web/js/app.js` L310 | one line | `initDeleteAll()` in `enterApp()` |
-| `web/js/app.js` L4398–4433 | replaced the products-only block with a generic table of 5 | show/hide + click handlers |
-| `services/document-service/tests/test_delete_all.py` | added | 18 unit tests |
-| `tests/test_ui_delete_all.py` | added (replaces `tests/test_ui_delete_all_products.py`, deleted) | Playwright + screenshots |
-| `loop/history/report-iter-15-products.md` | moved | the first pass's report |
-| `web/index.html` L447–455 | added CSS (Part B) | sticky modal h3 + Close |
-| `tests/test_ui_modal_sticky_header.py` | added (Part B) | Playwright: bulk import + 4 other modals |
-| `web/index.html` (after the modal CSS) | added `.tick-toast` CSS block (Part C) | tick / cross toast |
-| `web/js/app.js` after `showBanner` | added `showTick`, `showSuccessTick`, `showErrorCross`, `verifySavedImages` (Part C) | shared helper |
-| `web/js/app.js` save handlers | one `showSuccessTick(...)` on success and one `showErrorCross(...)` in each catch / partial-failure branch (Part C) | wiring |
-| `tests/test_ui_success_tick.py` | added (Part C) | Playwright: 6 tests |
-
-**Part C — success paths wired (tick on success, cross on that handler's failures):**
-documents create/edit (`doc-form`); projects create/edit; customers create/edit; companies create/edit, including the logo, seal and each MD's seal upload (tick only after every uploaded image loads back; cross on each "saved, but … didn't upload" / MD-row failure); category create (`category-modal`) and edit (`edit-category-modal`); products create/edit, plus the catalog-file upload and sub-item attach failure branches; product bulk import and category bulk import (tick next to the existing "Created N …" summary; cross on HTTP error or exception); create user; edit user save; create group; create role; rename role.
-Not wired (they are toggles, deletes, or assignments rather than saves, and some already use `flashSaved`): activate/deactivate user, group or role; trash/restore/delete; document status dropdown; group membership, role assignment and access-grant checkboxes (`flashSaved`); approve/deny pending users; session revoke; category sync from products (has its own `alert`). There is **no letterhead upload in the UI**; companies only have logo, seal and MD seal.
-
-Gateway/auth (Task 2): no change needed. In `infra/nginx/nginx.conf.template`, `/api/documents`, `/api/customers`, `/api/projects`, `/api/companies` and `/api/products` are prefix locations with no method rules. They get the same `_verify` RBAC check and the same headers as the single delete, and that includes `X-Has-Document-Delete` on `/api/documents`. The live UI test confirms this through nginx.
-
-**To remove the feature later**:
-1. `grep -rn "DEV-ONLY: delete-all" services web`
-   - In `products.py`, `documents.py`, `customers.py`, `projects.py`, `companies.py` and `web/js/app.js`, delete each BEGIN…END block.
-   - In `web/index.html`, delete each `<!-- DEV-ONLY: delete-all -->` line and the `<button id="delete-all-…-btn">` line right below it (5 places).
-   - Delete the single `initDeleteAll(); // DEV-ONLY…` line in `web/js/app.js`.
-2. Delete these files:
-   - `services/document-service/app/core/dev_delete_all.py`
-   - `services/document-service/tests/test_delete_all.py`
-   - `services/catalogue-service/tests/test_delete_all_products.py`
-   - `tests/test_ui_delete_all.py`
-3. `grep -rn "delete-all\|delete_all\|dev-config\|dev_delete_all" services web tests` should return nothing. There is no migration, nginx or auth-service change to undo.
+| `services/backup-service/` (Dockerfile, .dockerignore, requirements*.txt, `app/engine.py`, `app/main.py`, `tests/test_engine.py`) | added | engine + CLI + API; unit tests |
+| `services/document-service/app/main.py` | modified | `GET /internal/alembic-revisions`, `POST /internal/after-restore` (re-runs the idempotent `on_startup` = migrations to head, then rebuilds the index); shared `_ALEMBIC_INI` |
+| `services/catalogue-service/app/main.py` | modified | `POST /internal/after-restore` (create_all + index rebuild) |
+| `services/{document,catalogue}-service/app/core/search_client.py` | modified | `rebuild_index()` (clear, then re-add every row; fails open like the other index calls) |
+| `services/auth-service/app/routers/auth.py` | modified | `/verify` refuses `X-Service: backup` to non-superusers (explicit; not a grantable role service) |
+| `infra/docker-compose.yml` | modified | `backup-service` (compose-level secrets, `../backups`, `./data/maintenance`); nginx mounts the maintenance folder read-only and depends on backup-service |
+| `infra/nginx/nginx.conf.template` | modified | maintenance 503 block; `/api/backup/status` (public), `/api/backup/fetch/<ticket>` (no buffering, 3600 s), `/api/backup/` (superuser auth_request, `client_max_body_size 20g`, 3600 s timeouts, request buffering off). Those three locations only; nothing global |
+| `infra/docker-compose.loop-test.yml` | added | throwaway test stack (own data paths and ports) |
+| `scripts/verify.sh` | modified | optional `COMPOSE_OVERRIDE` (1 line + comment) to run on the throwaway stack |
+| `scripts/backup.sh`, `restore.sh`, `install-backup-cron.sh`, `deploy.sh` | added | CLI / nightly / pre-update backup |
+| `web/index.html` | modified | "Backup & Restore" nav item (hidden) + view |
+| `web/js/app.js` | modified | superuser-only nav; list (loadSeq guard), download by ticket, check/confirm/restore + status polling, result + tick |
+| `tests/conftest.py` | modified | `destructive` guard (flag **and** a non-`infra` project name), `restores_data` marker run last, `relogin()` |
+| `tests/test_backup_restore.py`, `test_backup_scripts.py`, `test_ui_backup_restore.py` | added | API/engine/scripts/UI tests |
+| `docs/BACKUP_RESTORE.md` | added | back up, restore, decrypt by hand, fresh server, off-site note |
+| `docs/operations.md`, `loop/LOOP.md` | modified | pre-update backup step / deploy.sh; how to use the throwaway stack |
+| `.gitignore` | modified | `backups/`, `infra/data-loop-test/` |
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | A1 (`test_delete_all.py`) | hung in `psycopg2.connect` from `app/core/audit.py:26` | `log_action` opens its own Postgres session, and the test didn't stub it | stubbed `documents_router.log_action`, the same as `test_supplier_position_e2e.py` does; audit rows are inserted directly in the seed instead |
-| 2 | A2 (environment) | `ModuleNotFoundError: No module named 'httpx'` | forgot `httpx` in the Playwright container's pip install | added it |
+| 1 | build backup-service | apt: `certificate verify failed` | the postgres:16 image has no CA bundle (and the keyring is `.pgp` on trixie) | COPY the CA bundle from python:3.12-slim-bookworm; sed only http→https in the image's own sources file |
+| 2 | A1 round trip | `409 Another backup or restore is already running` | the lock test's `holder.kill()` stopped only the local docker client; the process in the container kept the lock | wait for the holder to finish (3 s sleep) instead of killing it |
+| 3 | A4 cron installer | the other crontab line was lost | `crontab -l | … | crontab -` read and wrote the table in one pipeline | read it fully into a variable first, then install (a real script bug) |
+| 4 | manual `restore.sh` | typed RESTORE ignored, exit 1 | `docker compose exec -T` (verify step) consumed stdin | `</dev/null` on that exec and on `cp` |
+| 5 | A3 (full UI run) | strict mode: 2 `.tick-toast.tick-ok` | the "Backup ready" toast was still visible when the restore finished fast | locator narrowed to `has_text="Restore complete"` (test-only flake) |
+| 6 | Playwright environment | `Executable doesn't exist … 1.65.2` / module missing | I had pip-installed `pytest-playwright`, which upgraded playwright | install `playwright==1.65.1` to match the image |
 
 ## 6. Final verification output
 ```
-$ ./scripts/verify.sh --keep
-======================== 24 passed, 9 skipped in 4.92s =========================
+$ COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=infra/docker-compose.loop-test.yml \
+  GATEWAY=http://localhost:18080 ALLOW_DESTRUCTIVE_TESTS=1 ./scripts/verify.sh --keep
+tests/test_backup_restore.py::test_non_superuser_gets_403_everywhere PASSED
+tests/test_backup_restore.py::test_bad_backups_are_refused[checksum] PASSED
+tests/test_backup_restore.py::test_bad_backups_are_refused[newer-revision] PASSED
+tests/test_backup_restore.py::test_encrypted_backup_needs_the_right_password PASSED
+tests/test_backup_restore.py::test_maintenance_mode_blocks_api_but_not_status PASSED
+tests/test_backup_restore.py::test_second_backup_or_restore_is_rejected_while_one_runs PASSED
+tests/test_backup_scripts.py::test_backup_script_keeps_newest_14 PASSED
+...
+tests/test_backup_restore.py::test_round_trip_restore_is_lossless PASSED [100%]
+======================= 42 passed, 12 skipped in 16.18s ========================
 verify.sh: PASSED (stack left running: --keep)
 
-$ pytest tests/test_ui_delete_all.py -v     (Playwright image)
-test_ui_delete_all.py::test_one_click_deletes_all[documents] PASSED      [ 16%]
-test_ui_delete_all.py::test_one_click_deletes_all[products] PASSED       [ 33%]
-test_ui_delete_all.py::test_one_click_deletes_all[customers] PASSED      [ 50%]
-test_ui_delete_all.py::test_one_click_deletes_all[projects] PASSED       [ 66%]
-test_ui_delete_all.py::test_one_click_deletes_all[companies] PASSED      [ 83%]
-test_ui_delete_all.py::test_buttons_hidden_in_production PASSED          [100%]
-============================== 6 passed in 21.52s ==============================
-```
+$ pytest tests/test_ui_*.py      (Playwright image, loop-test stack)
+29 passed, 6 skipped in 61.30s
 
-Part B:
+$ backup-service:   python -m pytest tests  → 9 passed
+$ document-service: python -m pytest tests  → 239 passed
+$ catalogue-service: python -m pytest tests → 80 passed
+$ auth-service:     python -m pytest tests  → 93 passed
 ```
-$ pytest tests/test_ui_modal_sticky_header.py -v     (Playwright image)
-============================== 5 passed in 9.46s ===============================
-$ ./scripts/verify.sh --keep
-======================== 24 passed, 10 skipped in 4.77s ========================
-$ pytest tests/test_ui_*.py     (Playwright image)
-21 passed, 6 skipped in 55.72s
-```
-
-Part C:
-```
-$ pytest tests/test_ui_success_tick.py -v     (Playwright image)
-============================== 6 passed in 13.40s ==============================
-$ ./scripts/verify.sh --keep
-======================== 24 passed, 11 skipped in 4.74s ========================
-$ pytest tests/test_ui_*.py     (Playwright image)
-27 passed, 6 skipped in 54.66s
-```
+Not rerun after the last two small edits: `--no-deps` in deploy.sh (its test reran: `2 passed`) and `.dockerignore` for backup-service.
 
 ## 7. Found but not fixed (out of scope)
-- **Part C: the plan mentions a letterhead upload, but none exists** (no letterhead field in the UI or the companies router). There was nothing to wire.
-- **Part C: the edit-user modal still shows its old "Saved." text banner as well as the tick.** I left it because removing it isn't needed for this change.
-- **Part B: the bulk-import summary line and the Import button still scroll away**; only the heading and Close are pinned. The plan's fallback allows this. Pinning them would mean restructuring that modal into the scrollbody layout, which is more than a small CSS change.
-- **The UI decides visibility from catalogue's `/products/dev-config` only.** If the two services ever ran with different `ENVIRONMENT` values, the document-service buttons could show while that service answers 403. That can't happen with the current compose, which passes one variable to both. The server guard is the real rail.
-- **Running `tests/test_ui_delete_all.py` wipes all five tables in the stack it targets.** That is the feature. verify.sh skips it today only because Playwright isn't in its venv.
-- **The single `DELETE /products/{id}` sub-item FK issue and the leftover MinIO file** are still open (see `loop/history/report-iter-15-products.md` §7). Single deletes of documents and companies also leave their MinIO files behind. Delete-all removes them.
-- **Delete-all ignores `X-Allowed-Projects`** (the plan says every row). A project-restricted user in dev can wipe rows they can't see.
-- **The search-index error path is not separately unit-tested for documents**: `remove_document_from_index` already catches and logs, so it never raises. The storage-error path is tested.
-- **The extra red button wraps the page toolbar onto a second line on narrower widths.** It goes away when the feature is removed.
+- **Off-site copy**: not built (out of scope). docs/BACKUP_RESTORE.md says how to put `./backups/` on a mounted disk.
+- **Backup files are root-owned and mode 0644** in `./backups/`. Any local account on the VM can read them, and they contain password hashes and all data. The docs suggest `chmod 700 backups`. Making the engine write 0600 would force the user to use sudo to copy the files off the server.
+- **A backup is not one atomic snapshot**: the 3 pg_dumps and the MinIO copy run one after another. A write during a nightly backup could be in one part and missing from another. The pre-restore backup doesn't have this problem (it runs in maintenance mode). The fix would be maintenance mode during manual/nightly backups too, which would block users for that time.
+- **`restore.sh` copies an outside file into `backups/` and leaves it there.** Encrypted `.enc` copies don't show in the UI list, because the list shows `*.tar.gz` only.
+- **Pre-restore backups are never pruned.** Restores are rare, but the files add up.
+- **The UI keeps the pre-restore backup in its list only after a reload.** The page signs out after a restore anyway.
+- **backup-service has no `ENVIRONMENT=production` secrets check of its own.** It uses the same compose-level secrets that postgres/minio/nginx are started with, and the other services already refuse placeholders.
+- **`docs/decisions.md` §4 is outdated**: it says Alembic is not run, but document-service runs `upgrade head` at startup.
+- **The single `DELETE /documents/{id}` and `/companies/{id}` still leave their MinIO files behind** (from iteration 15). Backups faithfully include those orphans.
+- **Running Playwright with `UI_SCREENSHOT_DIR` rewrites earlier iterations' evidence PNGs.** I restored them with `git checkout` this time. A per-test filter would avoid it.
 
 ## 8. Blockers / decisions needed
 None.
 
 ## 9. Suggestions for the next iteration
-- Remove this feature before the first production deploy (steps in §4).
+- On the VM: run `./scripts/install-backup-cron.sh` once, and use `./scripts/deploy.sh` for updates from now on.
+- Decide on an off-site destination (a USB disk, a NAS, or a cloud bucket via rclone) and add the copy step to the cron job.
+- Consider maintenance mode (or a short "read-only" mode) during nightly backups if a fully consistent snapshot matters.
+- Remove the DEV-ONLY Delete ALL feature before production (iteration 15 §4). Backups now make mistakes recoverable, but that button is still one click with no confirm.
 
 ## App
-App running at http://localhost:8080 (login: admin / CHANGE_ME, local only).
-
-**Push**: `git push origin dev` fails in this environment (`could not read Username for 'https://github.com'`, meaning no GitHub credentials here). Commits are on local `dev` only.
+App running at http://localhost:8080 (login: admin / CHANGE_ME, local only). All 9 services are up, including the new `backup-service`; `GET /` → 200, `/api/backup/status` → `idle`, `/api/backup/list` without a token → 401.

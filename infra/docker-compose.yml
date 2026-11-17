@@ -108,6 +108,39 @@ services:
       - "8000"
     restart: unless-stopped
 
+  # Backup & restore engine + API (services/backup-service, docs/BACKUP_RESTORE.md).
+  # Talks to postgres/minio directly and to document-/catalogue-service's
+  # /internal routes; no Docker socket. Uses the same compose-level secrets
+  # the postgres/minio/nginx containers themselves are started with.
+  backup-service:
+    build:
+      context: ../services/backup-service
+      args:
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
+    environment:
+      PGHOST: postgres
+      PGUSER: docmgmt
+      PGPASSWORD: ${POSTGRES_PASSWORD:-docmgmt}
+      MINIO_URL: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:-local_dev_internal_secret_change_me}
+      APP_COMMIT: ${APP_COMMIT:-unknown}
+      # Upload spooling lands on the backups disk, in the engine's private dir.
+      TMPDIR: /backups/.tmp
+    volumes:
+      - ../backups:/backups
+      # nginx answers 503 while maintenance/on exists (restore in progress).
+      - ./data/maintenance:/maintenance
+    depends_on:
+      - postgres
+      - minio
+      - document-service
+      - catalogue-service
+    expose:
+      - "8000"
+    restart: unless-stopped
+
   nginx:
     image: nginx:alpine
     environment:
@@ -149,6 +182,7 @@ services:
       # that actually still exist) and re-trigger every browser's
       # one-time "new certificate" trust prompt for no reason.
       - ./data/nginx-certs:/etc/nginx/certs
+      - ./data/maintenance:/maintenance:ro
     # Render the template (substituting ONLY $INTERNAL_SHARED_SECRET and
     # $CORS_ALLOWED_ORIGIN — see the comment at the top of
     # nginx.conf.template for why the variable list passed to envsubst
@@ -171,5 +205,6 @@ services:
       - catalogue-service
       - search-service
       - auth-service
+      - backup-service
       - minio
     restart: unless-stopped

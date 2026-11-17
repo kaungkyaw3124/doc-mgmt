@@ -1,0 +1,6 @@
+# Keep test runs and caches out of the image: they change the build context,
+# which makes `docker compose up --build` recreate the container (see
+# docs/operations.md, "Updating a server").
+**/__pycache__
+**/.pytest_cache
+tests/

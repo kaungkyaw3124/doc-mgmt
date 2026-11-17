@@ -2,12 +2,14 @@ import os
 
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.db import Base, engine
+from app.core.db import Base, engine, get_db
+from app import models
 from app.core.storage import ensure_bucket_exists
-from app.core.search_client import _client as meili_client, _INDEX_NAME as MEILI_DOCS_INDEX
+from app.core.search_client import _client as meili_client, _INDEX_NAME as MEILI_DOCS_INDEX, rebuild_index
 from app.core.secrets_check import db_password_from_url, enforce_production_secrets, is_insecure
 from app.core.gateway_auth import verify_gateway_secret
 from app.routers import documents, customers, companies, projects
@@ -40,6 +42,9 @@ def _secret_problems() -> list[str]:
     return problems
 
 
+_ALEMBIC_INI = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
+
+
 def _run_migrations() -> None:
     """
     Runs `alembic upgrade head` in-process before anything else touches
@@ -63,9 +68,7 @@ def _run_migrations() -> None:
     a database left behind by a failed or partial migration is not a
     state this service should silently keep running against.
     """
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
-    alembic_cfg = AlembicConfig(config_path)
-    alembic_command.upgrade(alembic_cfg, "head")
+    alembic_command.upgrade(AlembicConfig(_ALEMBIC_INI), "head")
 
 
 @app.on_event("startup")
@@ -95,3 +98,22 @@ def on_startup():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ---- called only by backup-service (needs the internal secret like every
+# route here, and nginx routes nothing to /internal) ----
+@app.get("/internal/alembic-revisions")
+def alembic_revisions():
+    """Every revision this code knows. A backup stamped with any other one
+    was made by a newer app, and backup-service refuses to restore it."""
+    from alembic.script import ScriptDirectory
+
+    return {"revisions": [r.revision for r in ScriptDirectory.from_config(AlembicConfig(_ALEMBIC_INI)).walk_revisions()]}
+
+
+@app.post("/internal/after-restore")
+def after_restore(db: Session = Depends(get_db)):
+    """After backup-service replaced the database: bring the schema to head
+    (on_startup is idempotent by design) and rebuild the search index."""
+    on_startup()
+    return {"indexed": rebuild_index(db.query(models.Document).all())}

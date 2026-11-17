@@ -7,7 +7,7 @@ const API_BASE = '/api';
 // with stale data. Each list gets a counter: every load bumps it and
 // captures its own number, then only applies its result if no newer load
 // has started in the meantime — otherwise it just discards itself.
-const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0, groupMembers: 0, groupRoles: 0 };
+const loadSeq = { documents: 0, products: 0, customers: 0, projects: 0, companies: 0, groupMembers: 0, groupRoles: 0, backups: 0 };
 function startLoad(key) {
   loadSeq[key] += 1;
   return loadSeq[key];
@@ -289,7 +289,7 @@ async function enterApp() {
   // Defence in depth (logout reloads the page anyway): start from "nothing
   // permission-gated is shown, Documents view", then let /admin/me show
   // what this user may see.
-  ['admin-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
+  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
     .forEach(id => { document.getElementById(id).style.display = 'none'; });
   currentUserIsSuperuser = false;
   currentUserCanDeleteDocuments = false;
@@ -318,6 +318,8 @@ async function enterApp() {
     }
     if (me.is_superuser) {
       document.getElementById('new-group-form-wrap').style.display = 'block';
+      // Superuser only — the gateway refuses /api/backup/* to anyone else too.
+      document.getElementById('backup-nav-item').style.display = 'block';
     }
     const canManageCategories = me.is_superuser || (me.service_access && me.service_access.includes('categories'));
     document.getElementById('category-split-btn-wrap').style.display = canManageCategories ? 'inline-flex' : 'none';
@@ -4419,6 +4421,149 @@ async function viewAuditLog(documentId, docNumber) {
     content.innerHTML = `<p style="color:var(--danger); font-size:13px;">${escapeHtml(err.message)}</p>`;
   }
 }
+
+// ---------- backup & restore (superuser only) ----------
+function formatBytes(n) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + ' ' + units[i];
+}
+
+async function loadBackups() {
+  const seq = startLoad('backups');
+  const tbody = document.getElementById('backup-list-tbody');
+  try {
+    const rows = await apiFetch('/backup/list');
+    if (isStaleLoad('backups', seq)) return;
+    tbody.innerHTML = rows.length ? rows.map(b => `
+      <tr>
+        <td class="mono">${escapeHtml(b.name)}</td>
+        <td>${escapeHtml(formatBytes(b.size))}</td>
+        <td>${escapeHtml(new Date(b.created).toLocaleString())}</td>
+        <td><button class="link-btn-inline" data-backup-name="${escapeHtml(b.name)}">Download</button></td>
+      </tr>`).join('') : '<tr class="empty-row"><td colspan="4">No backups yet.</td></tr>';
+    tbody.querySelectorAll('[data-backup-name]').forEach(btn => btn.addEventListener('click', () =>
+      downloadBackup(btn.dataset.backupName).catch(err => showBanner('backup-banner', err.message))));
+  } catch (err) {
+    if (!isStaleLoad('backups', seq)) showBanner('backup-banner', err.message);
+  }
+}
+
+// A single-use, 60-second ticket turns the download into a plain link, so the
+// browser streams the file to disk with its own progress bar instead of this
+// page holding the whole backup in memory.
+async function downloadBackup(name) {
+  const password = document.getElementById('backup-password').value;
+  const ticket = await apiFetch('/backup/download-ticket', { method: 'POST', body: JSON.stringify({ name, password }) });
+  const a = document.createElement('a');
+  a.href = ticket.url;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+document.getElementById('backup-nav-item').addEventListener('click', loadBackups);
+
+document.getElementById('backup-download-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('backup-download-btn');
+  const progress = document.getElementById('backup-progress');
+  showBanner('backup-banner', '');
+  btn.disabled = true;
+  progress.textContent = 'Preparing backup… this can take a few minutes for a lot of files.';
+  try {
+    const created = await apiFetch('/backup/create', { method: 'POST' });
+    await downloadBackup(created.name);
+    progress.textContent = `Downloading ${created.name} — your browser shows the progress.`;
+    showSuccessTick('Backup ready');
+    loadBackups();
+  } catch (err) {
+    progress.textContent = '';
+    showBanner('backup-banner', err.message);
+    showErrorCross('Backup failed');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+let restoreUploadId = null;
+
+document.getElementById('restore-check-btn').addEventListener('click', async () => {
+  const fileInput = document.getElementById('restore-file');
+  const wrap = document.getElementById('restore-confirm-wrap');
+  showBanner('backup-banner', '');
+  document.getElementById('restore-result').innerHTML = '';
+  wrap.style.display = 'none';
+  restoreUploadId = null;
+  if (!fileInput.files.length) { showBanner('backup-banner', 'Choose a backup file first.'); return; }
+  const btn = document.getElementById('restore-check-btn');
+  btn.disabled = true;
+  btn.textContent = 'Uploading and checking…';
+  try {
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('password', document.getElementById('restore-password').value);
+    // Multipart upload: apiFetch would force a JSON Content-Type (same as the logo upload).
+    const res = await fetch(API_BASE + '/backup/restore/validate', {
+      method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: formData,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(formatApiErrorDetail(body.detail) || 'The file could not be checked.');
+    const s = body.summary;
+    restoreUploadId = body.upload_id;
+    document.getElementById('restore-summary').textContent =
+      `Backup from ${new Date(s.created_at).toLocaleString()}: ${s.products} products, ${s.documents} documents, ` +
+      `${s.companies} companies, ${s.customers} customers, ${s.projects} projects, ${s.users} users, ${s.files} files.`;
+    document.getElementById('restore-confirm').value = '';
+    document.getElementById('restore-start-btn').disabled = true;
+    wrap.style.display = 'block';
+  } catch (err) {
+    showBanner('backup-banner', err.message);
+    showErrorCross('Not a usable backup');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Check file';
+  }
+});
+
+document.getElementById('restore-confirm').addEventListener('input', (e) => {
+  document.getElementById('restore-start-btn').disabled = e.target.value !== 'RESTORE';
+});
+
+document.getElementById('restore-start-btn').addEventListener('click', async () => {
+  const result = document.getElementById('restore-result');
+  showBanner('backup-banner', '');
+  try {
+    await apiFetch('/backup/restore', { method: 'POST', body: JSON.stringify({
+      upload_id: restoreUploadId, confirm: document.getElementById('restore-confirm').value }) });
+  } catch (err) {
+    showBanner('backup-banner', err.message);
+    showErrorCross('Restore did not start');
+    return;
+  }
+  // The restore replaces the sessions table (this session included) and the
+  // API answers 503 meanwhile: stop the idle/refresh timer so it can't sign
+  // out mid-way and hide the outcome.
+  clearInterval(sessionTimer);
+  document.getElementById('restore-confirm-wrap').style.display = 'none';
+  ['restore-check-btn', 'backup-download-btn'].forEach(id => { document.getElementById(id).disabled = true; });
+  let st = { state: 'running', step: 'starting' };
+  while (st.state === 'running') {
+    result.innerHTML = `<div class="banner banner-info">Restoring… please wait (${escapeHtml(st.step || '')}). Don't close this page.</div>`;
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      // Public endpoint, no token on purpose: this session ends during the restore.
+      st = await (await fetch(API_BASE + '/backup/status')).json();
+    } catch (e) { /* gateway hiccup — keep polling */ }
+  }
+  const ok = st.state === 'done';
+  result.innerHTML = `<div class="banner banner-${ok ? 'info' : 'error'}">${escapeHtml(st.message || (ok ? 'Restore complete.' : 'Restore failed.'))}` +
+    (ok ? ' Everyone has been signed out.' : '') + '</div>' +
+    '<button class="btn-primary" id="restore-signin-btn">Sign in again</button>';
+  document.getElementById('restore-signin-btn').addEventListener('click', () => doLogout(''));
+  if (ok) showSuccessTick('Restore complete'); else showErrorCross('Restore failed');
+});
 
 // ---------- boot ----------
 addLineItem(); // start with one blank line item row

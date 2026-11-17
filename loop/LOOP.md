@@ -84,6 +84,9 @@ Stop and write the report when **one** of these is true:
    the current branch. Never merge into `main` — the user does that.
 3. Leave the app RUNNING for the user (do NOT run `down`). After the push:
    - make sure each `services/<name>/.env` exists (copy from `.env.example` if missing);
+   - **take a backup BEFORE rebuilding** (protects the user's data from a bad update):
+     `docker compose -f infra/docker-compose.yml up -d --build --no-deps backup-service && ./scripts/backup.sh`
+     (on a server, `./scripts/deploy.sh` does pull → backup → rebuild → restart nginx in one go);
    - `docker compose -f infra/docker-compose.yml up -d --build`
    - `docker compose -f infra/docker-compose.yml restart nginx` (nginx caches upstream IPs)
    - wait until `curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/` returns 200
@@ -109,3 +112,7 @@ Stop and write the report when **one** of these is true:
 - Before the final "leave the app running" step, rebuild the user's normal stack WITHOUT removing volumes
   (`up -d --build`, then `restart nginx`). If the Products/Documents lists are empty afterwards, say so in the report.
 - Report in a "Data safety" line which stack the tests used.
+- The throwaway stack is ready-made: `infra/docker-compose.loop-test.yml` (own data folders under
+  `infra/data-loop-test/`, ports 18080/18443). Run the suite on it with
+  `COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=infra/docker-compose.loop-test.yml GATEWAY=http://localhost:18080 ALLOW_DESTRUCTIVE_TESTS=1 ./scripts/verify.sh --keep`.
+  Tests that wipe/restore data skip themselves unless ALLOW_DESTRUCTIVE_TESTS=1 AND a non-default project name is set.
