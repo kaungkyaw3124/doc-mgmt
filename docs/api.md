@@ -204,6 +204,8 @@ unit="Nos", quantity, unit_price?, tax_rate=0}]}`.
 | `PATCH /companies/{id}/trash` \| `/restore` | PATCH | soft delete/restore |
 | `DELETE /companies/{id}` | DELETE | `400` if referenced by a document |
 | `POST /companies/{id}/logo` \| `/seal` | POST | multipart `file`; resized/padded to a fixed pixel size via Pillow (400×200 logo, 300×300 seal) unless SVG; stored as `standardized.png` |
+| `POST /companies/{id}/letterhead` | POST | multipart `file`; PNG/JPG/WebP only, max 10 MB (else 400); keeps its proportions, downscaled only if wider than 2000px; stored as `company-letterheads/{id}/letterhead.png`. Used on quotations when the company's `header_style` is `"letterhead"` (banner top-left, seal stays right; falls back to the logo if no banner is uploaded) |
+| `GET /companies/{id}/letterhead-url` | GET | presigned URL of the banner |
 | `GET /companies/{id}/logo-url` \| `/seal-url` | GET | presigned URL; `force_download=true` for SVGs (prevents inline-rendering a stored SVG in the browser's own origin) |
 
 ### `/projects` (`app/routers/projects.py`)

@@ -20,6 +20,7 @@ router = APIRouter(prefix="/companies", tags=["companies"])
 # company's letterhead looks consistent regardless of what was uploaded.
 STANDARD_LOGO_SIZE = (300, 300)  # square, like the seal — most logos aren't naturally 2:1 wide, and stretching a roughly-square/circular logo into a wide box made it look oval
 STANDARD_SEAL_SIZE = (300, 300)
+LETTERHEAD_MAX_WIDTH = 2000  # px — a banner is scaled DOWN to this if wider, never up, and never stretched
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 _ALLOWED_IMAGE_EXT_TO_MIME = {
@@ -103,6 +104,33 @@ def _clean_md_position(value):
     if not value:
         raise HTTPException(status_code=422, detail='Position is required for a Managing Director (e.g. "Managing Director").')
     return value
+
+
+LETTERHEAD_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_LETTERHEAD_FORMATS = {"PNG", "JPEG", "WEBP"}
+
+
+def _standardize_letterhead(file_bytes: bytes) -> tuple[bytes, str]:
+    """
+    Unlike a logo/seal (stretched to a fixed square), a letterhead banner is
+    wide and keeps its own proportions: only downscaled if wider than
+    LETTERHEAD_MAX_WIDTH, re-saved as PNG. Anything that isn't a readable
+    PNG/JPEG/WebP, or is over the size limit, is refused with a 400.
+    """
+    if len(file_bytes) > LETTERHEAD_MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Letterhead image is too large (max 10 MB).")
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.format not in _LETTERHEAD_FORMATS:
+            raise ValueError(img.format)
+        img = img.convert("RGBA")
+        if img.width > LETTERHEAD_MAX_WIDTH:
+            img = img.resize((LETTERHEAD_MAX_WIDTH, round(img.height * LETTERHEAD_MAX_WIDTH / img.width)), Image.LANCZOS)
+        output = io.BytesIO()
+        img.save(output, format="PNG")
+        return output.getvalue(), "letterhead.png"
+    except Exception:
+        raise HTTPException(status_code=400, detail="Letterhead must be a PNG, JPG or WebP image.")
 
 
 @router.post("", response_model=schemas.CompanyOut, status_code=201)
@@ -300,6 +328,38 @@ def get_company_logo_url(company_id: uuid.UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="no logo attached to this company")
     is_svg = company.logo_object_key.lower().endswith(".svg")
     return {"url": get_presigned_url(company.logo_object_key, force_download=is_svg)}
+
+
+@router.post("/{company_id}/letterhead")
+def upload_company_letterhead(
+    company_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    _require_edit_access(x_access_level)
+    company = db.query(models.Company).filter_by(id=company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="company not found")
+
+    # Read one byte past the limit so a huge upload isn't pulled fully into memory.
+    processed_bytes, filename = _standardize_letterhead(file.file.read(LETTERHEAD_MAX_UPLOAD_BYTES + 1))
+    content_type = _safe_content_type(filename)
+
+    object_key = f"company-letterheads/{company_id}/{filename}"
+    upload_file(io.BytesIO(processed_bytes), object_key, content_type=content_type)
+
+    company.letterhead_object_key = object_key
+    db.commit()
+    return {"letterhead_object_key": object_key}
+
+
+@router.get("/{company_id}/letterhead-url")
+def get_company_letterhead_url(company_id: uuid.UUID, db: Session = Depends(get_db)):
+    company = db.query(models.Company).filter_by(id=company_id).first()
+    if not company or not company.letterhead_object_key:
+        raise HTTPException(status_code=404, detail="no letterhead attached to this company")
+    return {"url": get_presigned_url(company.letterhead_object_key)}
 
 
 @router.post("/{company_id}/seal")

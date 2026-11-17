@@ -72,6 +72,13 @@
     /* No min-height: it reserved 100px of blank space above the heading even
        when the company has no logo/seal. The row is as tall as its images. */
   }
+  /* Letterhead banner: in the logo's place, filling the header box left of
+     the seal. Fits INSIDE max-width x max-height with its own proportions
+     (never stretched or cropped), left-aligned. 30mm tall is under the
+     120px (31.75mm) logo, so the text below doesn't move down. 148mm =
+     184.6mm content width - 31.75mm seal - ~5mm gap; full width with no seal. */
+  .letterhead { max-width: 184.6mm; max-height: 30mm; }
+  .letterhead.with-seal { max-width: 148mm; }
   .header-top img { display: block; }  /* no inline-baseline gap under the image */
   /* Header logo and company seal: 120px (was 130px). max-width/max-height
      (not fixed width+height) so any logo shrinks proportionally — aspect
@@ -197,7 +204,8 @@
     {# Row only rendered when there is an image: an empty row still carried its 10px margin-bottom, a hidden gap that pushed QUOTATION below the 7.6mm top margin. #}
     {% if logo_data_uri or seal_data_uri %}
     <div class="header-top">
-      <div>{% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
+      {# A letterhead company's banner arrives in the logo slot (see _gather_export_data). #}
+      <div>{% if logo_data_uri and company and company.header_style == 'letterhead' %}<img class="letterhead{{ ' with-seal' if seal_data_uri }}"{% if letterhead_size %} style="width: {{ '%.2f' % letterhead_size[0] }}mm; height: {{ '%.2f' % letterhead_size[1] }}mm"{% endif %} src="{{ logo_data_uri }}">{% elif logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% endif %}</div>
       <div>{% if seal_data_uri %}<img class="seal" src="{{ seal_data_uri }}">{% endif %}</div>
     </div>
     {% endif %}

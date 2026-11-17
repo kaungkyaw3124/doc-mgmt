@@ -150,6 +150,8 @@ erDiagram
         string short_name "doc number prefix"
         string logo_object_key
         string seal_object_key
+        string header_style "logo (default) or letterhead"
+        string letterhead_object_key "wide banner, kept when switching back to logo"
         bool is_primary
         bool is_deleted
         datetime created_at
