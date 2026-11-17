@@ -53,9 +53,6 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         elif customer.get("billing_address"):
             customer_address = ", ".join(str(v) for v in customer["billing_address"].values())
 
-    categories = {p["category"] for _, p, _ in items_with_product if p and p.get("category")}
-    group_label = categories.pop() if len(categories) == 1 else "Items"
-
     items = []
     total = 0
     catalogue_number = 0  # matches the Catalogue zip export's numbering — only product-based items count
@@ -131,7 +128,6 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         customer_address=customer_address,
         doc_number=document.doc_number,
         currency=document.currency,
-        group_label=group_label,
         items=items,
         subtotal=f"{subtotal_value:,.2f}",
         tax_rate=f"{tax_rate_value:g}",

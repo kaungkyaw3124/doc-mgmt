@@ -82,9 +82,14 @@ Stop and write the report when **one** of these is true:
    paste real command output (trimmed), not summaries like "tests pass".
 2. Commit with message `loop iter <N>: <short summary> [<STATUS>]` and push
    the current branch. Never merge into `main` — the user does that.
-3. Leave the Docker stack in a clean state
-   (`docker compose -f infra/docker-compose.yml down` unless the plan says
-   keep it running).
+3. Leave the app RUNNING for the user (do NOT run `down`). After the push:
+   - make sure each `services/<name>/.env` exists (copy from `.env.example` if missing);
+   - `docker compose -f infra/docker-compose.yml up -d --build`
+   - `docker compose -f infra/docker-compose.yml restart nginx` (nginx caches upstream IPs)
+   - wait until `curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/` returns 200
+     (retry up to ~2 minutes) and check `docker compose ... ps` shows all services up;
+   - put "App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)"
+     in the report, or the exact error if it would not start.
 
 ---
 
@@ -94,3 +99,13 @@ Stop and write the report when **one** of these is true:
   the local test stack.
 - Never disable the auth gateway, RBAC checks, or TLS verification to make
   a test pass.
+
+## Protect the user's data (added after the user's products disappeared)
+- Never run `docker compose down -v`, `docker volume rm/prune`, or anything that deletes volumes on the user's stack.
+- Tests that create or delete data (especially the DEV-ONLY "Delete ALL" tests) must NOT run against the
+  user's running stack/database. Run them on a throwaway stack with its own project name and volumes
+  (`docker compose -p loop-test -f infra/docker-compose.yml ...` on other ports, or SQLite/TestClient),
+  and tear that throwaway stack down with `-v` afterwards.
+- Before the final "leave the app running" step, rebuild the user's normal stack WITHOUT removing volumes
+  (`up -d --build`, then `restart nginx`). If the Products/Documents lists are empty afterwards, say so in the report.
+- Report in a "Data safety" line which stack the tests used.

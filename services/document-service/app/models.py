@@ -29,7 +29,7 @@ class Company(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     short_name = Column(String(20))  # e.g. "SS" for Swift Solution — used in doc numbers (SS-20260723/001)
-    position = Column(String(100))  # e.g. "Director" — title of the authorized signer; used by signer/signature generation, not shown in the Supplier block
+    position = Column(String(100))  # UNUSED since loop iteration 12 (each MD has a required position); kept so no data is lost
     address = Column(Text)
     contact_no = Column(String(50))
     support_email = Column(String(255))

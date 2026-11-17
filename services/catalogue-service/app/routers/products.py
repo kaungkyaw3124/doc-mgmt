@@ -424,6 +424,51 @@ def bulk_import_products(
     return {"created": created, "skipped": skipped, "warnings": warnings + name_warnings}
 
 
+# DEV-ONLY: delete-all BEGIN — temporary tool for clearing the
+# catalogue between test runs (loop iteration 15). Remove this whole block
+# plus the matching DEV-ONLY blocks in web/index.html and web/js/app.js.
+@router.get("/dev-config")
+def dev_config():
+    """Tells the UI whether to show the "Delete ALL products (dev)" button.
+    Kept here, not in a new router, so the feature removes in one cut."""
+    from app.core.config import settings
+    return {"delete_all_enabled": settings.environment != "production"}
+
+
+@router.delete("")
+def delete_all_products(
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+):
+    """Permanently deletes EVERY product (recycle bin included) — no
+    project-visibility filter, on purpose: the point is an empty catalogue.
+    Refused in production so it can never wipe the live VPS. Categories stay."""
+    import logging
+    from app.core.config import settings
+    from app.core.storage import s3_client
+
+    if settings.environment == "production":
+        raise HTTPException(status_code=403, detail="delete-all is disabled in production")
+    _require_edit_access(x_access_level)
+
+    products = db.query(models.Product.id, models.Product.image_object_key).all()
+    # Sub-item links first: sub_product_id has no ON DELETE CASCADE, so a
+    # product used as someone's component would otherwise fail the FK.
+    db.query(models.ProductSubItem).delete(synchronize_session=False)
+    db.query(models.Product).delete(synchronize_session=False)
+    db.commit()
+
+    for product_id, object_key in products:
+        remove_product_from_index(product_id)  # logs, never raises
+        if object_key:
+            try:
+                s3_client.delete_object(Bucket=settings.minio_bucket, Key=object_key)
+            except Exception:  # a missing/unreachable file must not fail the wipe — the rows are already gone
+                logging.getLogger(__name__).exception("could not delete %s from storage", object_key)
+    return {"deleted": len(products)}
+# DEV-ONLY: delete-all END
+
+
 @router.get("/trash", response_model=list[schemas.ProductOut])
 def list_trashed_products(
     db: Session = Depends(get_db),

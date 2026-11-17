@@ -1,5 +1,6 @@
 """customer -> quotation -> read back -> PDF/XLSX export -> soft delete -> trash."""
 import io
+import uuid
 
 from pypdf import PdfReader
 
@@ -44,7 +45,7 @@ def test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md(admi
     (director_id) — checked end to end through the gateway."""
     company_name = unique("Smoke Supplier Co")
     md_name = unique("U Smoke MD")
-    company = admin.post("/companies", json={"name": company_name, "short_name": unique("SM")[:12],
+    company = admin.post("/companies", json={"name": company_name, "short_name": "SM" + uuid.uuid4().hex[:4],  # 2–6 letters/digits since iteration 12
                                              "address": "Company Road", "contact_no": "01-000"})
     assert company.status_code == 201, company.text
     company_id = company.json()["id"]

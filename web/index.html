@@ -15,6 +15,7 @@
     --rust: #C1682F;
     --rust-dark: #A5541F;
     --hairline: #D8D2C4;
+    --separator: #B5AC98; /* between repeated form blocks: visible, calmer than --ink */
     --success: #3F7857;
     --warn: #B8862E;
     --danger: #A13D3D;
@@ -330,9 +331,19 @@
     gap: 10px;
     align-items: flex-end;
     margin-bottom: 12px;
-    padding-bottom: 12px;
-    border-bottom: 1px dashed var(--hairline);
   }
+  /* one separator for every repeated block (MDs, line items, sub-items): a line between
+     blocks, none above the first or after the last */
+  .director-row + .director-row,
+  .line-item-row + .line-item-row {
+    border-top: 1px solid var(--separator);
+    margin-top: 16px;
+    padding-top: 16px;
+  }
+  #director-rows { margin-top: 12px; }
+  .director-row { margin-bottom: 16px; }
+  .director-row-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .director-row-title { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
   .line-item-row > div { flex: 1; }
   .line-item-row label { font-size: 11px; }
   .line-item-row input { margin-bottom: 0; }
@@ -433,6 +444,32 @@
   .modal-box-wide { width: 950px; max-width: 94vw; }
   .modal-box h3 { margin-bottom: 16px; }
   .modal-close { float: right; }
+  /* Heading + Close stay pinned while a long modal body scrolls: the box's
+     top padding moves into the sticky h3 so its white background covers the
+     gap; Close (floated just before the h3) is sticky on top of it. */
+  .modal-box:not(.modal-box-scrollbody) { padding-top: 0; }
+  .modal-box:not(.modal-box-scrollbody) > h3 {
+    position: sticky; top: 0; z-index: 2; background: #fff;
+    padding-top: 28px; padding-bottom: 12px; margin-bottom: 4px;
+  }
+  .modal-box:not(.modal-box-scrollbody) > .modal-close { position: sticky; top: 28px; margin-top: 28px; z-index: 3; }
+
+  /* Success tick / error cross toast (showSuccessTick / showErrorCross in app.js) */
+  .tick-toast { position: fixed; top: 20px; right: 20px; z-index: 300; display: flex; align-items: center; gap: 8px;
+    background: #fff; border-radius: 4px; padding: 8px 14px 8px 10px; box-shadow: 0 4px 20px rgba(27,42,74,0.2);
+    font-size: 13px; pointer-events: none; animation: tick-fade 1.6s forwards; }
+  .tick-toast svg { width: 28px; height: 28px; flex: none; fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+  .tick-toast circle, .tick-toast path { stroke-dasharray: 100; stroke-dashoffset: 100; animation: tick-draw 0.45s ease-out forwards; }
+  .tick-toast path { animation-delay: 0.3s; }
+  .tick-ok svg { stroke: var(--success); }
+  .tick-err svg { stroke: var(--danger); }
+  .tick-err { animation: tick-shake 0.4s 0.6s, tick-fade 2.6s forwards; }
+  @keyframes tick-draw { to { stroke-dashoffset: 0; } }
+  @keyframes tick-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes tick-shake { 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .tick-toast, .tick-toast circle, .tick-toast path { animation: none; stroke-dashoffset: 0; }
+  }
 
   /* Large, scrollable-body modal (e.g. the documents recycle bin) — the
      box itself is a fixed 80% of the viewport and does NOT scroll;
@@ -603,6 +640,8 @@
         </div>
         <div>
           <button class="btn-secondary" id="open-document-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
+          <!-- DEV-ONLY: delete-all -->
+          <button class="btn-secondary" id="delete-all-documents-btn" style="display:none; margin-right:8px; background:var(--danger); color:#fff; border-color:var(--danger);">Delete ALL documents (dev)</button>
           <button class="btn-secondary" id="toggle-doc-form">+ New document</button>
         </div>
       </div>
@@ -676,6 +715,8 @@
           </span>
           <button class="btn-secondary" id="open-cart-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>Cart <span id="cart-count-badge"></span></button>
           <button class="btn-secondary" id="open-product-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
+          <!-- DEV-ONLY: delete-all -->
+          <button class="btn-secondary" id="delete-all-products-btn" style="display:none; margin-right:8px; background:var(--danger); color:#fff; border-color:var(--danger);">Delete ALL products (dev)</button>
           <button class="btn-secondary" id="toggle-product-form">+ New product</button>
         </div>
       </div>
@@ -726,6 +767,8 @@
         </div>
         <div>
           <button class="btn-secondary" id="toggle-customer-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
+          <!-- DEV-ONLY: delete-all -->
+          <button class="btn-secondary" id="delete-all-customers-btn" style="display:none; margin-right:8px; background:var(--danger); color:#fff; border-color:var(--danger);">Delete ALL customers (dev)</button>
           <button class="btn-secondary" id="toggle-customer-form">+ New customer</button>
         </div>
       </div>
@@ -770,6 +813,8 @@
         </div>
         <div>
           <button class="btn-secondary" id="toggle-project-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
+          <!-- DEV-ONLY: delete-all -->
+          <button class="btn-secondary" id="delete-all-projects-btn" style="display:none; margin-right:8px; background:var(--danger); color:#fff; border-color:var(--danger);">Delete ALL projects (dev)</button>
           <button class="btn-secondary" id="toggle-project-form">+ New project</button>
         </div>
       </div>
@@ -815,6 +860,8 @@
         </div>
         <div>
           <button class="btn-secondary" id="toggle-company-trash-btn" style="margin-right:8px;"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Recycle bin</button>
+          <!-- DEV-ONLY: delete-all -->
+          <button class="btn-secondary" id="delete-all-companies-btn" style="display:none; margin-right:8px; background:var(--danger); color:#fff; border-color:var(--danger);">Delete ALL companies (dev)</button>
           <button class="btn-secondary" id="toggle-company-form">+ New company</button>
         </div>
       </div>
@@ -836,7 +883,7 @@
         <thead>
           <tr>
             <th>Name <button class="sort-btn" data-sort-table="company" data-sort-col="name">⇅</button></th>
-            <th>Position</th><th>Contact No</th><th>Logo</th><th>Seal</th><th>Edit</th><th>Delete</th>
+            <th>Short name</th><th>Customer service phone</th><th>Logo</th><th>Seal</th><th>Edit</th><th>Delete</th>
           </tr>
         </thead>
         <tbody id="companies-tbody">
@@ -1173,31 +1220,27 @@
           <input type="text" id="company-name" placeholder="Trustwell International Co., Ltd." required>
         </div>
         <div>
-          <label for="company-short-name">Short name (used in doc numbers, e.g. "SS")</label>
-          <input type="text" id="company-short-name" placeholder="SS" maxlength="20">
+          <label for="company-short-name">Short name (2–6 letters/digits, used in document numbers, e.g. "WF")</label>
+          <input type="text" id="company-short-name" placeholder="WF" maxlength="6">
         </div>
       </div>
       <div class="form-row">
         <div>
-          <label for="company-position">Signer position</label>
-          <input type="text" id="company-position" placeholder="Director">
-        </div>
-        <div></div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label for="company-address">Address</label>
+          <label for="company-address">Office address</label>
           <input type="text" id="company-address" placeholder="Yangon, Myanmar">
+          <div class="hint">Used when the MD has no address.</div>
         </div>
         <div>
-          <label for="company-contact">Contact No</label>
+          <label for="company-contact">Customer service phone</label>
           <input type="text" id="company-contact" placeholder="+95 9 xxx xxx xxx">
+          <div class="hint">Printed in the footer of every quotation.</div>
         </div>
       </div>
       <div class="form-row">
         <div>
-          <label for="company-email">Support email</label>
+          <label for="company-email">Customer service email</label>
           <input type="text" id="company-email" placeholder="support@trustwell.com">
+          <div class="hint">Printed in the footer of every quotation.</div>
         </div>
         <div></div>
       </div>
@@ -1493,7 +1536,7 @@ Warranty: 2 years from the date of delivery</textarea>
     <h3>Companies — recycle bin</h3>
     <div id="company-trash-banner"></div>
     <table>
-      <thead><tr><th>Name</th><th>Position</th><th>Restore</th></tr></thead>
+      <thead><tr><th>Name</th><th>Short name</th><th>Restore</th></tr></thead>
       <tbody id="company-trash-tbody">
         <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:80%"></span></td></tr>
         <tr class="empty-row skeleton-row"><td colspan="3"><span class="skeleton-bar" style="width:55%"></span></td></tr>

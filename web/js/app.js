@@ -155,6 +155,30 @@ function showBanner(elId, message, type = 'error') {
   el.innerHTML = message ? `<div class="banner banner-${type}">${escapeHtml(message)}</div>` : '';
 }
 
+// Animated tick (success) / cross (failure) toast — CSS-drawn, no sound.
+function showTick(ok, message) {
+  const el = document.createElement('div');
+  el.className = 'tick-toast ' + (ok ? 'tick-ok' : 'tick-err');
+  el.setAttribute('role', 'status');
+  el.innerHTML = `<svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23" pathLength="100"/><path d="${ok ? 'M15 27l7 7 15-15' : 'M18 18l16 16M34 18L18 34'}" pathLength="100"/></svg>`;
+  if (message) el.append(message);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), ok ? 1600 : 2600);
+}
+const showSuccessTick = (message) => showTick(true, message);
+const showErrorCross = (message) => showTick(false, message);
+
+// Resolves once each saved image (by its *-url endpoint) loads back from storage.
+async function verifySavedImages(urlPaths) {
+  const urls = await Promise.all(urlPaths.map(p => apiFetch(p).then(d => d.url)));
+  await Promise.all(urls.map(src => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('Saved, but the uploaded image could not be loaded back.'));
+    img.src = src;
+  })));
+}
+
 // ---------- auth ----------
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -307,6 +331,7 @@ async function enterApp() {
   }
   loadDocuments();
   loadProducts();
+  initDeleteAll(); // DEV-ONLY: delete-all
   loadCustomers();
   loadCompanies();
   loadProjects();
@@ -818,8 +843,10 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     document.getElementById('doc-number').disabled = false;
     editingDocumentId = null;
     loadDocuments();
+    showSuccessTick('Document saved');
   } catch (err) {
     showBanner('doc-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('doc-form-submit-btn').disabled = false;
   }
@@ -1258,6 +1285,7 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     document.getElementById('project-form-title').textContent = 'New project';
     document.getElementById('project-form-submit-btn').textContent = 'Create project';
     editingProjectId = null;
+    showSuccessTick('Project saved');
     await loadProjects();
 
     if (reopenDocModalAfterProject) {
@@ -1269,6 +1297,7 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     }
   } catch (err) {
     showBanner('project-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('project-form-submit-btn').disabled = false;
   }
@@ -1447,8 +1476,11 @@ function buildDirectorRow(director) {
   const div = document.createElement('div');
   div.className = 'director-row';
   div.dataset.directorId = director ? director.id : '';
-  div.style.cssText = 'margin-bottom:14px; padding:12px; border:1px solid var(--border); border-radius:8px;';
   div.innerHTML = `
+    <div class="director-row-header">
+      <span class="director-row-title">MD</span>
+      <button type="button" class="link-btn-inline director-remove-btn" style="color:var(--danger);">Remove</button>
+    </div>
     <div class="form-row" style="flex-wrap:wrap;">
       <div style="min-width:180px;">
         <label>Name</label>
@@ -1456,7 +1488,7 @@ function buildDirectorRow(director) {
       </div>
       <div style="min-width:180px;">
         <label>Position</label>
-        <input type="text" class="director-position" maxlength="100" placeholder="Managing Director" value="${director ? escapeHtml(director.position || '') : ''}">
+        <input type="text" class="director-position" maxlength="100" required placeholder="Managing Director" value="${director ? escapeHtml(director.position || '') : 'Managing Director'}">
       </div>
       <div style="min-width:180px;">
         <label>Address</label>
@@ -1479,9 +1511,6 @@ function buildDirectorRow(director) {
         <input type="file" class="director-seal-file" accept="image/png,image/jpeg">
         ${director && director.seal_object_key ? `<div style="font-size:12px; color:var(--text-dim); margin-top:2px;">Seal already attached — choosing a new file replaces it. <button type="button" class="link-btn-inline director-view-seal-btn">View</button></div>` : ''}
       </div>
-      <div style="min-width:180px; text-align:right;">
-        <button type="button" class="link-btn-inline director-remove-btn" style="color:var(--danger);">Remove</button>
-      </div>
     </div>
   `;
   div.querySelector('.director-remove-btn').addEventListener('click', async () => {
@@ -1496,6 +1525,7 @@ function buildDirectorRow(director) {
       }
     }
     div.remove();
+    renumberDirectorRows();
   });
   if (director && director.seal_object_key) {
     div.querySelector('.director-view-seal-btn').addEventListener('click', async () => {
@@ -1510,6 +1540,13 @@ function buildDirectorRow(director) {
   return div;
 }
 
+// "MD 1", "MD 2"… by position, so the numbers close up after a Remove
+function renumberDirectorRows() {
+  document.querySelectorAll('#director-rows .director-row-title').forEach((el, i) => {
+    el.textContent = 'MD ' + (i + 1);
+  });
+}
+
 function resetDirectorRows(directors) {
   const container = document.getElementById('director-rows');
   container.innerHTML = '';
@@ -1518,10 +1555,12 @@ function resetDirectorRows(directors) {
   } else {
     container.appendChild(buildDirectorRow(null)); // default: one blank row
   }
+  renumberDirectorRows();
 }
 
 document.getElementById('add-director-row-btn').addEventListener('click', () => {
   document.getElementById('director-rows').appendChild(buildDirectorRow(null));
+  renumberDirectorRows();
 });
 
 document.getElementById('toggle-company-form').addEventListener('click', () => {
@@ -1547,8 +1586,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
   const sealInput = document.getElementById('company-seal');
   const payload = {
     name: document.getElementById('company-name').value,
-    short_name: document.getElementById('company-short-name').value || null,
-    position: document.getElementById('company-position').value || null,
+    short_name: document.getElementById('company-short-name').value.trim().toUpperCase() || null,
     address: document.getElementById('company-address').value || null,
     contact_no: document.getElementById('company-contact').value || null,
     support_email: document.getElementById('company-email').value || null
@@ -1562,9 +1600,11 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
       company = await apiFetch('/companies', { method: 'POST', body: JSON.stringify(payload) });
     }
 
+    const savedImages = [];
     if (logoInput.files.length > 0) {
       const formData = new FormData();
       formData.append('file', logoInput.files[0]);
+      savedImages.push('/companies/' + company.id + '/logo-url');
       const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/logo', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
@@ -1579,6 +1619,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           // response wasn't JSON — stick with the generic message
         }
         showBanner('company-modal-banner', `Company saved, but the logo didn't upload: ${detail}`);
+        showErrorCross(`The logo didn't upload`);
         loadCompanies();
         return;
       }
@@ -1587,6 +1628,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     if (sealInput.files.length > 0) {
       const formData = new FormData();
       formData.append('file', sealInput.files[0]);
+      savedImages.push('/companies/' + company.id + '/seal-url');
       const uploadResponse = await fetch(API_BASE + '/companies/' + company.id + '/seal', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
@@ -1601,6 +1643,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           // response wasn't JSON — stick with the generic message
         }
         showBanner('company-modal-banner', `Company saved, but the seal didn't upload: ${detail}`);
+        showErrorCross(`The seal didn't upload`);
         loadCompanies();
         return;
       }
@@ -1626,6 +1669,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         });
         if (!created) {
           showBanner('company-modal-banner', 'Company saved, but one MD row failed to save.');
+          showErrorCross('An MD row failed to save');
           loadCompanies();
           return;
         }
@@ -1645,14 +1689,17 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           headers: { 'Authorization': 'Bearer ' + token },
           body: formData
         });
+        savedImages.push('/companies/' + company.id + '/directors/' + directorId + '/seal-url');
         if (!uploadResponse.ok) {
           showBanner('company-modal-banner', `Company saved, but a director's seal didn't upload.`);
+          showErrorCross("An MD seal didn't upload");
           loadCompanies();
           return;
         }
       }
     }
 
+    await verifySavedImages(savedImages);
     document.getElementById('company-form').reset();
     resetDirectorRows(null);
     document.getElementById('company-modal').classList.remove('active');
@@ -1660,8 +1707,10 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
     editingCompanyId = null;
     loadCompanies();
+    showSuccessTick('Company saved');
   } catch (err) {
     showBanner('company-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('company-form-submit-btn').disabled = false;
   }
@@ -1674,7 +1723,6 @@ function startEditCompany(company) {
   document.getElementById('company-form-submit-btn').textContent = 'Save changes';
   document.getElementById('company-name').value = company.name;
   document.getElementById('company-short-name').value = company.short_name || '';
-  document.getElementById('company-position').value = company.position || '';
   document.getElementById('company-address').value = company.address || '';
   document.getElementById('company-contact').value = company.contact_no || '';
   document.getElementById('company-email').value = company.support_email || '';
@@ -1732,6 +1780,13 @@ async function loadCompanies() {
   }
 }
 
+document.getElementById('company-short-name').addEventListener('input', (e) => {
+  e.target.value = e.target.value.toUpperCase();
+});
+
+// same rule the API enforces on save (companies.SHORT_NAME_RE)
+const SHORT_NAME_RE = /^[A-Za-z0-9]{2,6}$/;
+
 function renderCompaniesTable(companies) {
   const tbody = document.getElementById('companies-tbody');
   if (!companies.length) {
@@ -1741,7 +1796,7 @@ function renderCompaniesTable(companies) {
   tbody.innerHTML = companies.map(c => `
     <tr>
       <td>${escapeHtml(c.name)}</td>
-      <td>${escapeHtml(c.position || '—')}</td>
+      <td>${escapeHtml(c.short_name || '—')}${c.short_name && !SHORT_NAME_RE.test(c.short_name) ? ' <span class="short-name-warning" style="color:var(--danger); font-size:12px;">Short name needs fixing</span>' : ''}</td>
       <td>${escapeHtml(c.contact_no || '—')}</td>
       <td>${c.logo_object_key ? `<button class="link-btn-inline" data-logo-id="${c.id}">View logo</button>` : '—'}</td>
       <td>${c.seal_object_key ? `<button class="link-btn-inline" data-seal-id="${c.id}">View seal</button>` : '—'}</td>
@@ -1859,6 +1914,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
     document.getElementById('customer-form-title').textContent = 'New customer';
     document.getElementById('customer-form-submit-btn').textContent = 'Create customer';
     editingCustomerId = null;
+    showSuccessTick('Customer saved');
     await loadCustomers();
 
     if (reopenDocModalAfterCustomer) {
@@ -1871,6 +1927,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
     }
   } catch (err) {
     showBanner('customer-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('customer-form-submit-btn').disabled = false;
   }
@@ -2249,8 +2306,10 @@ document.getElementById('create-category-btn').addEventListener('click', async (
     document.getElementById('product-category').value = name;
     document.getElementById('new-category-short-term').value = '';
     document.getElementById('category-modal').classList.remove('active');
+    showSuccessTick('Category saved');
   } catch (err) {
     showBanner('category-modal-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -2360,8 +2419,10 @@ document.getElementById('edit-category-save-btn').addEventListener('click', asyn
     });
     await loadCategories();
     document.getElementById('edit-category-modal').classList.remove('active');
+    showSuccessTick('Category saved');
   } catch (err) {
     showBanner('edit-category-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -2435,6 +2496,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
           // response wasn't JSON — stick with the generic message
         }
         showBanner('product-modal-banner', `Product saved, but the catalog file didn't upload: ${detail}`);
+        showErrorCross("The catalog file didn't upload");
         loadProducts();
         return;
       }
@@ -2449,6 +2511,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
           });
         } catch (err) {
           showBanner('product-modal-banner', `Product saved, but a sub-item ("${item.name}") failed to attach: ${err.message}`);
+          showErrorCross('A sub-item failed to attach');
           loadProducts();
           return;
         }
@@ -2463,9 +2526,11 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     editingProductId = null;
     pendingSubItems = [];
     loadProducts();
+    showSuccessTick('Product saved');
   } catch (err) {
     if (err.detail && err.detail.existing) showProductExistsBanner(err.detail.existing);  // 409 race
     else showBanner('product-modal-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('product-form-submit-btn').disabled = false;
   }
@@ -2645,6 +2710,7 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
         // response wasn't JSON — stick with the generic message
       }
       showBanner('bulk-import-banner', detail);
+      showErrorCross(detail);
       resultsEl.innerHTML = '';
       return;
     }
@@ -2686,8 +2752,10 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
       ${warningText.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${warningText.join('<br>')}</p>` : ''}
     `;
     loadProducts();
+    showSuccessTick('Import finished');
   } catch (err) {
     showBanner('bulk-import-banner', err.message);
+    showErrorCross(err.message);
     resultsEl.innerHTML = '';
   } finally {
     submitBtn.disabled = false;
@@ -2779,6 +2847,7 @@ document.getElementById('category-bulk-import-submit-btn').addEventListener('cli
         // response wasn't JSON — stick with the generic message
       }
       showBanner('category-bulk-import-banner', detail);
+      showErrorCross(detail);
       resultsEl.innerHTML = '';
       return;
     }
@@ -2801,8 +2870,10 @@ document.getElementById('category-bulk-import-submit-btn').addEventListener('cli
       ${result.warnings.length ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">${result.warnings.map(w => escapeHtml(w)).join('<br>')}</p>` : ''}
     `;
     loadCategories();
+    showSuccessTick('Import finished');
   } catch (err) {
     showBanner('category-bulk-import-banner', err.message);
+    showErrorCross(err.message);
     resultsEl.innerHTML = '';
   } finally {
     submitBtn.disabled = false;
@@ -3247,7 +3318,7 @@ async function loadCompanyTrash() {
     tbody.innerHTML = companies.map(c => `
       <tr>
         <td>${escapeHtml(c.name)}</td>
-        <td>${escapeHtml(c.position || '—')}</td>
+        <td>${escapeHtml(c.short_name || '—')}</td>
         <td><button class="link-btn-inline" data-restore-company-id="${c.id}">Restore</button></td>
       </tr>
     `).join('');
@@ -3815,8 +3886,10 @@ document.getElementById('create-user-submit-btn').addEventListener('click', asyn
     }
     document.getElementById('create-user-modal').classList.remove('active');
     loadAllUsers();
+    showSuccessTick('User created');
   } catch (err) {
     showBanner('create-user-banner', err.message);
+    showErrorCross(err.message);
   } finally {
     document.getElementById('create-user-submit-btn').disabled = false;
   }
@@ -3833,8 +3906,10 @@ document.getElementById('edit-user-save-btn').addEventListener('click', async ()
     document.getElementById('edit-user-password').value = '';
     loadAllUsers();
     showBanner('edit-user-banner', 'Saved.', 'info');
+    showSuccessTick('User saved');
   } catch (err) {
     showBanner('edit-user-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -3960,8 +4035,10 @@ document.getElementById('create-group-btn').addEventListener('click', async () =
     await apiFetch('/admin/groups', { method: 'POST', body: JSON.stringify({ name }) });
     document.getElementById('new-group-name').value = '';
     loadAdminGroups();
+    showSuccessTick('Group created');
   } catch (err) {
     showBanner('admin-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -4056,8 +4133,10 @@ document.getElementById('create-role-btn').addEventListener('click', async () =>
     await apiFetch('/admin/groups/' + selectedGroupId + '/roles', { method: 'POST', body: JSON.stringify({ name }) });
     document.getElementById('new-role-name').value = '';
     loadGroupRoles();
+    showSuccessTick('Role created');
   } catch (err) {
     showBanner('admin-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -4266,8 +4345,10 @@ document.getElementById('edit-role-rename-btn').addEventListener('click', async 
     await apiFetch('/admin/roles/' + editingRoleId + '/rename', { method: 'PATCH', body: JSON.stringify({ name: newName }) });
     await renderEditRoleModal();
     loadGroupRoles();
+    showSuccessTick('Role renamed');
   } catch (err) {
     showBanner('edit-role-banner', err.message);
+    showErrorCross(err.message);
   }
 });
 
@@ -4378,3 +4459,40 @@ loadPublicGroups();
     }
   }
 })();
+
+// DEV-ONLY: delete-all BEGIN — temporary one-click wipes (loop iteration 15).
+// No confirm dialog, by request. Both services refuse them in production;
+// dev-config only decides whether the buttons are rendered.
+const DELETE_ALL = [
+  // [button id, API path, banner id, reload, noun]
+  ['delete-all-products-btn', '/products', 'products-banner', () => loadProducts(), 'products'],
+  ['delete-all-documents-btn', '/documents', 'documents-banner', () => loadDocuments(), 'documents'],
+  ['delete-all-customers-btn', '/customers', 'customers-banner', () => loadCustomers(), 'customers'],
+  ['delete-all-projects-btn', '/projects', 'projects-banner', () => loadProjects(), 'projects'],
+  ['delete-all-companies-btn', '/companies', 'company-banner', () => loadCompanies(), 'companies'],
+];
+
+async function initDeleteAll() {
+  let enabled = false;
+  try {
+    enabled = (await apiFetch('/products/dev-config')).delete_all_enabled; // one ENVIRONMENT drives both services
+  } catch (e) { /* hidden on any error */ }
+  DELETE_ALL.forEach(([id]) => { document.getElementById(id).style.display = enabled ? '' : 'none'; });
+}
+
+DELETE_ALL.forEach(([id, path, banner, reload, noun]) => {
+  document.getElementById(id).addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const res = await apiFetch(path, { method: 'DELETE' });
+      await reload();
+      showBanner(banner, `Deleted ${res.deleted} ${noun}`, 'info');
+    } catch (err) {
+      showBanner(banner, err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+});
+// DEV-ONLY: delete-all END
