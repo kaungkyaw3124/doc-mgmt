@@ -10,8 +10,13 @@ FROM postgres:16
 # the Debian host (nothing below comes from it).
 COPY --from=python:3.12-slim-bookworm /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ARG APT_MIRROR=deb.debian.org
+# Like the other services, the sources file is rewritten to the main + updates
+# suites only: mirrors often lack the debian-security suite (a 404 there makes
+# apt-get update fail), and these are build-time packages. The codename comes
+# from the image itself (postgres:16 follows Debian stable).
 RUN rm -f /etc/apt/sources.list.d/pgdg.list && \
-    sed -i "s#http://deb.debian.org#https://$APT_MIRROR#" /etc/apt/sources.list.d/debian.sources && \
+    . /etc/os-release && \
+    printf 'Types: deb\nURIs: https://%s/debian\nSuites: %s %s-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' "$APT_MIRROR" "$VERSION_CODENAME" "$VERSION_CODENAME" > /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
