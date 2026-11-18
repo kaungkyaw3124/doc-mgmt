@@ -288,7 +288,7 @@ async function doLogout(message = '', broadcast = true) {
 // Every document/customer/project/product belongs to one group; the server
 // only returns the caller's own (app/core/group_scope.py). The Group select
 // appears on the create forms only when there is a choice: superusers and
-// users in several groups. Records can't be moved yet, so it is hidden on edit.
+// users in several groups. Hidden on edit: a superuser moves records with "Move…" instead.
 let myGroups = [];     // [{id, name}] the user may create records in
 let groupNames = {};   // id -> name, for the labels in the lists
 let defaultGroupId = '';
@@ -327,6 +327,7 @@ async function loadMyGroups(me) {
   importSelect.innerHTML = document.getElementById('product-form-group').innerHTML;
   importSelect.value = defaultGroupId;
   importWrap.style.display = groupChoiceNeeded() ? '' : 'none';
+  refreshMoveControls();
 }
 
 function groupChoiceNeeded() {
@@ -385,7 +386,7 @@ async function enterApp() {
   // Defence in depth (logout reloads the page anyway): start from "nothing
   // permission-gated is shown, Documents view", then let /admin/me show
   // what this user may see.
-  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
+  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap', 'unassigned-card']
     .forEach(id => { document.getElementById(id).style.display = 'none'; });
   currentUserIsSuperuser = false;
   currentUserCanDeleteDocuments = false;
@@ -416,6 +417,8 @@ async function enterApp() {
       document.getElementById('new-group-form-wrap').style.display = 'block';
       // Superuser only — the gateway refuses /api/backup/* to anyone else too.
       document.getElementById('backup-nav-item').style.display = 'block';
+      document.getElementById('unassigned-card').style.display = 'block';
+      loadUnassignedCard();
     }
     const canManageCategories = me.is_superuser || (me.service_access && me.service_access.includes('categories'));
     document.getElementById('category-split-btn-wrap').style.display = canManageCategories ? 'inline-flex' : 'none';
@@ -1175,13 +1178,13 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
 function renderDocumentsTable(docs) {
   const tbody = document.getElementById('documents-tbody');
   if (!docs.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No documents match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">No documents match.</td></tr>';
     return;
   }
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
   tbody.innerHTML = docs.map(d => `
     <tr>
-      <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button>${groupTag(d.group_id)}</td>
+      <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button></td>
       <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
       <td>${escapeHtml(docCustomerName(d))}</td>
       <td>${projectLabel(d.project_id)}</td>
@@ -1208,6 +1211,7 @@ function renderDocumentsTable(docs) {
       <td>${currentUserCanDeleteDocuments
         ? `<button class="link-btn-inline" data-trash-doc-id="${d.id}" data-trash-doc-number="${escapeHtml(d.doc_number)}" style="color:var(--danger);">Delete</button>`
         : '<span style="color:var(--text-dim);">—</span>'}</td>
+      ${groupCell('documents', d)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-goto-project-id]').forEach(btn => {
@@ -1510,17 +1514,18 @@ async function loadProjects() {
 function renderProjectsTable(projects) {
   const tbody = document.getElementById('projects-tbody');
   if (!projects.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No projects match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No projects match.</td></tr>';
     return;
   }
   tbody.innerHTML = projects.map(p => `
     <tr>
-      <td>${escapeHtml(p.name)}${groupTag(p.group_id)}</td>
+      <td>${escapeHtml(p.name)}</td>
       <td class="mono">${escapeHtml(p.budget_year || '—')}</td>
       <td>${fmtDate(p.created_at)}</td>
       <td><button class="link-btn-inline" data-view-project-id="${p.id}">View documents</button></td>
       <td><button class="link-btn-inline" data-edit-project-id="${p.id}">Edit</button></td>
       <td><button class="link-btn-inline" data-trash-project-id="${p.id}" data-trash-project-name="${escapeHtml(p.name)}" style="color:var(--danger);">Delete</button></td>
+      ${groupCell('projects', p)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-view-project-id]').forEach(btn => {
@@ -2130,18 +2135,19 @@ async function loadCustomers() {
 function renderCustomersTable(customers) {
   const tbody = document.getElementById('customers-tbody');
   if (!customers.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No customers match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No customers match.</td></tr>';
     return;
   }
   tbody.innerHTML = customers.map(c => `
     <tr>
-      <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button>${groupTag(c.group_id)}</td>
+      <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button></td>
       <td>${c.organization ? escapeHtml(c.organization) : `<span style="color:var(--text-dim);">${escapeHtml(c.name)}</span>`}</td>
       <td>${escapeHtml(c.email || '—')}</td>
       <td>${escapeHtml(c.phone || '—')}</td>
       <td>${fmtDate(c.created_at)}</td>
       <td><button class="link-btn-inline" data-edit-customer-id="${c.id}">Edit</button></td>
       <td><button class="link-btn-inline" data-trash-customer-id="${c.id}" data-trash-customer-name="${escapeHtml(c.name)}" style="color:var(--danger);">Delete</button></td>
+      ${groupCell('customers', c)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-view-customer-id]').forEach(btn => {
@@ -3248,14 +3254,14 @@ function renderProductSubItemsReadonly(subItems) {
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
     <tr>
       <td class="mono">${escapeHtml(p.sku)}</td>
       <td>
-        <button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button>${groupTag(p.group_id)}
+        <button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button>
         ${p.description ? `<div style="font-size:12px; color:var(--text-dim); margin-top:2px; white-space:pre-line;">${escapeHtml(p.description)}</div>` : ''}
       </td>
       <td>${escapeHtml(p.category || '—')}</td>
@@ -3267,6 +3273,7 @@ function renderProductsTable(products) {
       <td><button class="link-btn-inline" data-add-to-cart-id="${p.id}">+ Add to cart</button></td>
       <td><button class="link-btn-inline" data-edit-id="${p.id}">Edit</button></td>
       <td><button class="link-btn-inline" data-trash-product-id="${p.id}" data-trash-product-sku="${escapeHtml(p.sku)}" style="color:var(--danger);">Delete</button></td>
+      ${groupCell('products', p)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-add-to-cart-id]').forEach(btn => {
@@ -3614,6 +3621,157 @@ function applyFilterAndSort(tableName) {
   }
   config.render(list);
 }
+
+// ---------- moving records between groups (superuser, loop iteration 20) ----------
+// Each of the four lists gets a Group column (checkbox + label + "Move…"),
+// a group filter and a "Move selected…" button. The server decides what has
+// to move together (a document with its customer/project, a customer with
+// its documents, a bundle with its sub-items); the modal shows that via a
+// dry run before anything changes.
+const MOVE_LINK_LABELS = {
+  documents: 'Also move its customer and project',
+  customers: 'Also move its documents',
+  projects: 'Also move its documents',
+  products: 'Also move linked products (bundle / sub-items)',
+};
+const MOVE_RELOAD = { documents: () => loadDocuments(), customers: () => loadCustomers(), projects: () => loadProjects(), products: () => loadProducts() };
+let moveState = null; // {table, ids}
+
+function groupCell(table, row) {
+  if (!currentUserIsSuperuser) return `<td>${groupTag(row.group_id)}</td>`;
+  return `<td style="white-space:nowrap;"><input type="checkbox" class="move-select" data-move-table="${table}" value="${row.id}" aria-label="Select for moving" style="width:auto; margin:0 4px 0 0;">${groupTag(row.group_id)}
+    <button class="link-btn-inline" data-move-table="${table}" data-move-id="${row.id}">Move…</button></td>`;
+}
+
+Object.keys(MOVE_LINK_LABELS).forEach(table => {
+  const filter = document.createElement('select');
+  filter.id = table + '-group-filter';
+  filter.setAttribute('aria-label', 'Filter by group');
+  filter.style.maxWidth = '240px';
+  filter.style.display = 'none';
+  filter.addEventListener('change', () => applyFilterAndSort(table));
+  const bulk = document.createElement('button');
+  bulk.type = 'button';
+  bulk.className = 'btn-secondary';
+  bulk.id = table + '-move-selected-btn';
+  bulk.textContent = 'Move selected to group…';
+  bulk.style.display = 'none';
+  bulk.addEventListener('click', () => {
+    const ids = [...document.querySelectorAll(`.move-select[data-move-table="${table}"]:checked`)].map(cb => cb.value);
+    if (!ids.length) { showErrorCross('Select rows first'); return; }
+    openMoveModal(table, ids);
+  });
+  const reset = document.getElementById(table + '-reset-filters-btn');
+  reset.parentNode.insertBefore(filter, reset);
+  reset.parentNode.insertBefore(bulk, reset.nextSibling);
+  reset.addEventListener('click', () => { filter.value = ''; applyFilterAndSort(table); });
+  tableConfig[table].extraFilters = (tableConfig[table].extraFilters || []).concat({
+    selectId: filter.id,
+    matchFn: (item, val) => (val === 'none' ? !item.group_id : item.group_id === val),
+  });
+  document.getElementById(table + '-tbody').addEventListener('click', e => {
+    const btn = e.target.closest('[data-move-id]');
+    if (btn) openMoveModal(table, [btn.dataset.moveId]);
+  });
+});
+
+function refreshMoveControls() {
+  const options = myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  Object.keys(MOVE_LINK_LABELS).forEach(table => {
+    const filter = document.getElementById(table + '-group-filter');
+    const current = filter.value;
+    filter.innerHTML = '<option value="">All groups</option>' + options + '<option value="none">Unassigned</option>';
+    filter.value = current;
+    filter.style.display = currentUserIsSuperuser ? '' : 'none';
+    document.getElementById(table + '-move-selected-btn').style.display = currentUserIsSuperuser ? '' : 'none';
+  });
+  document.getElementById('move-group-target').innerHTML = '<option value="">— choose a group —</option>' + options;
+  document.getElementById('unassigned-target').innerHTML = '<option value="">— choose a group —</option>' + options;
+}
+
+function describeMoved(moved) {
+  const parts = Object.entries(moved).filter(([, n]) => n).map(([e, n]) => `${n} ${n === 1 ? e.slice(0, -1) : e}`);
+  return parts.join(', ') || 'nothing (already in that group)';
+}
+
+function openMoveModal(table, ids) {
+  moveState = { table, ids };
+  document.getElementById('move-group-title').textContent = `Move ${ids.length} ${ids.length === 1 ? table.slice(0, -1) : table} to group`;
+  document.getElementById('move-group-links-label').textContent = MOVE_LINK_LABELS[table];
+  document.getElementById('move-group-links').checked = true;
+  document.getElementById('move-group-target').value = '';
+  document.getElementById('move-group-preview').textContent = 'Choose a group.';
+  showBanner('move-group-banner', '');
+  document.getElementById('move-group-modal').classList.add('active');
+}
+
+async function postMove(dryRun) {
+  const { table, ids } = moveState;
+  const body = {
+    group_id: document.getElementById('move-group-target').value,
+    with_links: document.getElementById('move-group-links').checked,
+    dry_run: dryRun,
+  };
+  if (ids.length === 1) return apiFetch(`/${table}/${ids[0]}/move`, { method: 'POST', body: JSON.stringify(body) });
+  return apiFetch(`/${table}/move`, { method: 'POST', body: JSON.stringify({ ...body, ids }) });
+}
+
+async function previewMove() {
+  const preview = document.getElementById('move-group-preview');
+  showBanner('move-group-banner', '');
+  if (!document.getElementById('move-group-target').value) { preview.textContent = 'Choose a group.'; return; }
+  preview.textContent = 'Checking…';
+  try {
+    preview.textContent = 'Will move: ' + describeMoved((await postMove(true)).moved);
+  } catch (err) {
+    preview.textContent = '';
+    showBanner('move-group-banner', err.message);
+  }
+}
+document.getElementById('move-group-target').addEventListener('change', previewMove);
+document.getElementById('move-group-links').addEventListener('change', previewMove);
+document.getElementById('move-group-close').addEventListener('click', () => {
+  document.getElementById('move-group-modal').classList.remove('active');
+});
+document.getElementById('move-group-submit').addEventListener('click', async () => {
+  if (!document.getElementById('move-group-target').value) { showBanner('move-group-banner', 'Choose a group.'); return; }
+  try {
+    const result = await postMove(false);
+    document.getElementById('move-group-modal').classList.remove('active');
+    showSuccessTick('Moved ' + describeMoved(result.moved));
+    // a move can touch the other lists too (a document's customer/project)
+    Object.values(MOVE_RELOAD).forEach(reload => reload());
+  } catch (err) {
+    showBanner('move-group-banner', err.message);
+    showErrorCross(err.message);
+  }
+});
+
+async function loadUnassignedCard() {
+  const el = document.getElementById('unassigned-counts');
+  try {
+    const [docs, prods] = await Promise.all([apiFetch('/documents/unassigned-counts'), apiFetch('/products/unassigned-counts')]);
+    el.textContent = `Documents ${docs.documents} · Products ${prods.products} · Customers ${docs.customers} · Projects ${docs.projects}`;
+  } catch (err) {
+    el.textContent = err.message;
+  }
+}
+document.getElementById('unassigned-assign-btn').addEventListener('click', async () => {
+  const select = document.getElementById('unassigned-target');
+  if (!select.value) { showErrorCross('Choose a group'); return; }
+  const name = select.options[select.selectedIndex].textContent;
+  if (!confirm(`Give every unassigned document, product, customer and project to "${name}"?`)) return;
+  try {
+    const body = JSON.stringify({ group_id: select.value });
+    await apiFetch('/documents/assign-unassigned', { method: 'POST', body });
+    await apiFetch('/products/assign-unassigned', { method: 'POST', body });
+    showSuccessTick('Assigned to ' + name);
+    loadUnassignedCard();
+    Object.values(MOVE_RELOAD).forEach(reload => reload());
+  } catch (err) {
+    showErrorCross(err.message);
+  }
+});
 
 document.querySelectorAll('.sort-btn').forEach(btn => {
   btn.addEventListener('click', () => {

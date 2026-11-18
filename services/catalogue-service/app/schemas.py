@@ -85,3 +85,15 @@ class CategoryOut(BaseModel):
 
 class AssignUnassigned(BaseModel):
     group_id: uuid.UUID
+
+
+class MoveToGroup(BaseModel):
+    """Body of POST /products/{id}/move (superuser). with_links: also move
+    the bundle/sub-item products linked to it. dry_run: only count."""
+    group_id: uuid.UUID
+    with_links: bool = True
+    dry_run: bool = False
+
+
+class BulkMoveToGroup(MoveToGroup):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=1000)

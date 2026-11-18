@@ -683,7 +683,7 @@
 
       <table>
         <thead>
-          <tr><th>Number</th><th>Type</th><th>Customer</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th></tr>
+          <tr><th>Number</th><th>Type</th><th>Customer</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th><th>Group</th></tr>
         </thead>
         <tbody id="documents-tbody">
           <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:80%"></span></td></tr>
@@ -751,7 +751,7 @@
             <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
             <th>Created <button class="sort-btn" data-sort-table="products" data-sort-col="created">⇅</button></th>
             <th>Modified <button class="sort-btn" data-sort-table="products" data-sort-col="modified">⇅</button></th>
-            <th>Catalog</th><th>Cart</th><th>Edit</th><th>Delete</th>
+            <th>Catalog</th><th>Cart</th><th>Edit</th><th>Delete</th><th>Group</th>
           </tr>
         </thead>
         <tbody id="products-tbody">
@@ -797,7 +797,7 @@
             <th>Organization</th>
             <th>Email</th><th>Phone</th>
             <th>Created <button class="sort-btn" data-sort-table="customers" data-sort-col="created_at">⇅</button></th>
-            <th>Edit</th><th>Delete</th>
+            <th>Edit</th><th>Delete</th><th>Group</th>
           </tr>
         </thead>
         <tbody id="customers-tbody">
@@ -844,7 +844,7 @@
           <tr>
             <th>Name <button class="sort-btn" data-sort-table="projects" data-sort-col="name">⇅</button></th>
             <th>Budget year <button class="sort-btn" data-sort-table="projects" data-sort-col="budget_year">⇅</button></th>
-            <th>Created</th><th>Documents</th><th>Edit</th><th>Delete</th>
+            <th>Created</th><th>Documents</th><th>Edit</th><th>Delete</th><th>Group</th>
           </tr>
         </thead>
         <tbody id="projects-tbody">
@@ -967,6 +967,15 @@
             <button type="button" class="btn-secondary" id="group-delete-btn" style="padding:6px 12px; font-size:13px; color:var(--danger); border-color:var(--danger);">Delete group</button>
           </div>
         </div>
+      </div>
+
+      <div class="card" id="unassigned-card" style="display:none;">
+        <h3>Unassigned data</h3>
+        <p style="color:var(--text-dim); margin-top:0;">Records from before groups existed. Only superusers see them until they are given to a group.</p>
+        <p id="unassigned-counts">…</p>
+        <label for="unassigned-target">Group</label>
+        <select id="unassigned-target"></select>
+        <button class="btn-primary" id="unassigned-assign-btn">Assign all to group…</button>
       </div>
 
       <div id="group-detail-panel" style="display:none;">
@@ -1094,6 +1103,23 @@
     <button class="link-btn-inline modal-close" id="audit-log-close">Close <svg class="icon icon-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
     <h3 id="audit-log-title">Audit log</h3>
     <div id="audit-log-content"></div>
+  </div>
+</div>
+
+<!-- ============ MOVE TO GROUP MODAL (superuser, loop iteration 20) ============ -->
+<div class="modal-overlay" id="move-group-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="move-group-close">Close</button>
+    <h3 id="move-group-title">Move to group</h3>
+    <div id="move-group-banner" class="modal-banner-slot"></div>
+    <label for="move-group-target">Target group</label>
+    <select id="move-group-target"></select>
+    <label style="display:flex; gap:8px; align-items:center; font-weight:normal;">
+      <input type="checkbox" id="move-group-links" checked style="width:auto; margin:0;">
+      <span id="move-group-links-label">Also move linked records</span>
+    </label>
+    <p id="move-group-preview" style="color:var(--text-dim); min-height:1.4em;"></p>
+    <button class="btn-primary" id="move-group-submit">Move</button>
   </div>
 </div>
 

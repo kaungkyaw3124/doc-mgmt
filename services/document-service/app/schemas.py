@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProjectCreate(BaseModel):
@@ -233,3 +233,16 @@ class DocumentOut(BaseModel):
 
 class AssignUnassigned(BaseModel):
     group_id: uuid.UUID
+
+
+class MoveToGroup(BaseModel):
+    """Body of POST /{documents|customers|projects}/{id}/move (superuser).
+    with_links: also move the linked customer/project/documents (see
+    app/core/group_move.py). dry_run: only count what would move."""
+    group_id: uuid.UUID
+    with_links: bool = True
+    dry_run: bool = False
+
+
+class BulkMoveToGroup(MoveToGroup):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=1000)

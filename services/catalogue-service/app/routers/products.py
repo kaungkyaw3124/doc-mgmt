@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import re
 import shutil
@@ -449,6 +450,73 @@ def assign_unassigned(payload: schemas.AssignUnassigned, db: Session = Depends(g
     )
     db.commit()
     return {"products": count, "reindexed": rebuild_index(scoped(db, models.Product, scope).all())}
+
+
+# ---------- moving products to another group (superuser, loop iteration 20) ----------
+# A bundle and its sub-items must stay in one group (add_sub_item refuses a
+# cross-group link), so a move works on the connected set: the selected
+# products plus every bundle/sub-item linked to them, transitively. Products
+# already in the target group are not followed (their links are there too).
+# with_links=False moves only the selection and refuses (409) when that would
+# leave a cross-group link. Documents keep their snapshot lines either way.
+audit_logger = logging.getLogger("app.audit")
+audit_logger.setLevel(logging.INFO)  # root is WARN (alembic.ini); its console handler still prints these
+
+
+def _move_products(ids, payload: schemas.MoveToGroup, db: Session, scope: Scope, username: str | None):
+    require_superuser(scope)
+    if payload.group_id not in scope.group_ids:  # a superuser's scope = every ACTIVE group
+        raise HTTPException(status_code=422, detail="That group does not exist or is disabled.")
+    P, S, target = models.Product, models.ProductSubItem, payload.group_id
+    ids = set(ids)
+    rows = {p.id: p for p in scoped(db, P, ALL).filter(P.id.in_(ids)).all()}
+    if len(rows) != len(ids):
+        raise HTTPException(status_code=404, detail="product not found")
+    while True:
+        follow = [i for i, p in rows.items() if p.group_id != target]
+        links = db.query(S.parent_product_id, S.sub_product_id).filter(
+            S.parent_product_id.in_(follow) | S.sub_product_id.in_(follow)).all() if follow else []
+        new_ids = {i for link in links for i in link} - rows.keys()
+        if not new_ids:
+            break
+        rows.update({p.id: p for p in scoped(db, P, ALL).filter(P.id.in_(new_ids)).all()})
+    extra = sum(1 for i, p in rows.items() if i not in ids and p.group_id != target)
+    if extra and not payload.with_links:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Not moved: it is linked (bundle/sub-item) to {extra} product{'s' if extra > 1 else ''} "
+                   "in another group. Tick “also move linked products” to move them together.",
+        )
+    to_move = [p for i, p in rows.items() if p.group_id != target and (payload.with_links or i in ids)]
+    if not payload.dry_run:
+        moved = [(p.id, p.group_id) for p in to_move]
+        for p in to_move:
+            p.group_id = target
+        db.commit()
+        for row_id, old in moved:
+            audit_logger.info("group_move user=%s product=%s from=%s to=%s", username or "unknown", row_id, old, target)
+        for p in to_move:
+            index_product(p)  # the old group stops finding it in search, the new one does at once
+    return {"moved": {"products": len(to_move)}, "dry_run": payload.dry_run}
+
+
+@router.post("/move")
+def bulk_move_products(payload: schemas.BulkMoveToGroup, db: Session = Depends(get_db), scope: Scope = Depends(get_scope),
+                       x_username: str | None = Header(default=None, alias="X-Username")):
+    return _move_products(payload.ids, payload, db, scope, x_username)
+
+
+@router.post("/{product_id}/move")
+def move_product(product_id: uuid.UUID, payload: schemas.MoveToGroup, db: Session = Depends(get_db),
+                 scope: Scope = Depends(get_scope), x_username: str | None = Header(default=None, alias="X-Username")):
+    return _move_products([product_id], payload, db, scope, x_username)
+
+
+@router.get("/unassigned-counts")
+def unassigned_product_counts(db: Session = Depends(get_db), scope: Scope = Depends(get_scope)):
+    """Admin → Groups "Unassigned data" card (recycle bin included, like assign-unassigned)."""
+    require_superuser(scope)
+    return {"products": scoped(db, models.Product, ALL).filter(models.Product.group_id == None).count()}  # noqa: E711
 
 
 # DEV-ONLY: delete-all BEGIN — temporary tool for clearing the

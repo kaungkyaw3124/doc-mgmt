@@ -66,5 +66,27 @@ like `backup.sh`.
 3. Create or add its users. From their next request they see only that
    group's records, and everything they create belongs to it.
 
-Moving records between groups and an "Unassigned data" admin card come in
-iteration 20.
+## Moving records to another group (superusers only)
+
+In the Documents, Products, Customers and Projects lists a superuser sees a
+**Group** column with a checkbox and **Move…**, a group filter (incl.
+"Unassigned") and **Move selected to group…**. The modal asks for the target
+group and shows what will move (a dry run) before anything changes.
+
+No cross-group links may remain after a move, so linked records move together:
+
+| Moving | With the box ticked (default) | Box unticked |
+|---|---|---|
+| a document | its customer and project move too (and any other documents of that customer/project) | refused (409) if they are in another group |
+| a customer / project | the documents that use it move too (and their customers/projects) | refused (409) if documents use it |
+| a product | linked bundle/sub-item products move too | refused (409) if linked |
+
+Line items keep their snapshots; products are never moved by a document move.
+A move is all or nothing, re-indexes search at once (the old group stops
+finding it), adds a `moved_group` entry to each moved document's audit log,
+and logs one `group_move user=… <entity>=<id> from=<old> to=<new>` line per
+row (`docker compose logs document-service catalogue-service | grep group_move`).
+Group admins and everyone else get 403. API: see [api.md](api.md).
+
+**Admin → Groups → Unassigned data** shows how many records have no group yet
+and gives them all to one group (the same as `scripts/assign-unassigned.sh`).
