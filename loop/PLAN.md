@@ -2,37 +2,85 @@
 
 | Field | Value |
 |---|---|
-| Iteration | **21** |
-| Goal | Make simultaneous use safe: no duplicate numbers, no silent overwrites, no double saves, no half-saved records, no stale screens |
+| Iteration | **22** |
+| Goal | **Part A** — The quotation **XLSX prints with all 7 columns on every page** (No, Item, Qty, Unit, Price, Amount, Remark). Today Excel splits the sheet: columns A–E on one page, Price/Amount/Remark on a second page. **Part B** — the document **type** decides the heading: an Invoice must say INVOICE, not QUOTATION (see "Part B" at the bottom) |
 | Attempt limit | 5 per failing check |
 | Status | READY FOR CLAUDE CODE |
 
-## What the user wants
-"Some requests may get lost halfway… if requests come from two computers at the same time, the job may get confused." (Brainstormed; the user said "ok you have fixes".)
-No job queue, no Redis cache for now (decided: not needed at this size; revisit only if a load test shows a problem).
+## What the user reported (with screenshots)
+1. Excel sheet: the Remark column is on another page when printing.
+2. Print preview shows only the first 5 columns on page 1.
+3. The remaining columns (Amount, Remark) and the End-user details print on a separate page 2.
+The user does not want this to happen.
+
+## Root cause (already found and reproduced by the planner)
+`services/document-service/app/core/export_quotation.py` sets column widths `[8, 55, 8, 8, 16, 16, 30]` (= 141 characters ≈ 10.6 in) but sets **no page setup**:
+no fit-to-page, no print area, no paper size, no orientation (only margins and `print_title_rows`). A4 portrait has ≈ 7.3 in of printable width, so Excel breaks the sheet between columns E and F.
+Reproduced with LibreOffice: same workbook widths without fit-to-width → 2 pages (page 1 has `No`, page 2 has `Price/Amount/Remark`); with `fitToPage=True, fitToWidth=1, fitToHeight=0, paperSize=A4, print_area=A1:G{last}` → 1 page with all four.
 
 ## Decisions already made
-1. **Unique numbers from the database**
-   - Product SKU (`_generate_sku` in `catalogue-service/app/routers/products.py` reads the max number then inserts — a race) and the document/quotation number (company short name + date + sequence in `document-service/app/routers/documents.py`) must come from a **locked counter** (a small counters table updated with `SELECT … FOR UPDATE` / atomic `UPDATE … RETURNING`, per prefix / per company+day), never "read max then insert".
-   - Add **unique constraints** in the database (SKU; document number) as a second line of defence; on a rare conflict retry once with a fresh number, otherwise a clear 409.
-   - Existing data: build each counter from the current maximum in the migration so numbering continues without gaps or reuse. Alembic migrations in both services, single head each.
-2. **Version check on edit (optimistic locking)** for documents, products, customers, projects and companies: each row has a `version` integer (starts at 1, +1 on every update). The UI sends the version it loaded; if it is stale the API returns **409** with a clear message and the UI shows "Someone else changed this. Reload to see their changes" with a Reload button (the user's typed edits stay in the form so nothing is lost). No silent last-write-wins. Requests without a version keep working for now (so scripts/bulk import don't break) but the web UI always sends it.
-3. **One save per click + idempotency**: Save/Create/Import buttons are disabled while the request runs (and show progress). Create endpoints accept an optional `Idempotency-Key` header (UI generates one per form open); a repeated key within a short window returns the first result instead of creating a second record (small `idempotency_keys` table with expiry, shared helper in each service).
-4. **All-or-nothing saves**: a document with its line items, sub-items and audit entry is saved in a **single database transaction**; product create + file upload: if the file upload or index update fails, roll back / clean up (delete the orphan object; keep the DB consistent) and return a clear error. Search-index updates happen only after the commit succeeds; a failed index update is logged and retried by a re-index command instead of failing the save.
-5. **No stale data**: API responses get `Cache-Control: no-store` (nginx + services), lists are re-fetched after each save/delete, and a refresh after a 409 shows current data.
-6. Group scoping from iteration 19 must keep working everywhere these changes touch (counters per company are global; owner group unchanged).
+- **Fit to 1 page wide, as many pages tall as needed**: `ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)`, `ws.page_setup.fitToWidth = 1`, `fitToHeight = 0`.
+- **A4, portrait** (same as the PDF): `paperSize = ws.PAPERSIZE_A4`, `orientation = "portrait"`.
+- **Print area** `A1:G{last used row}` so nothing outside A:G (images, stray cells) widens the printed page. Make sure the logo/banner, seal and the "Regards" signature image anchors are inside the area (the banner is fitted inside A:E; the seal is at F1; the signature is placed lower — check each and extend the area if an image would be cut).
+- Keep the existing margins and `print_title_rows` (header repeats on every page).
+- Center horizontally (`ws.print_options.horizontalCentered = True`).
+- If the automatic scale comes out below ≈ 68 % (text too small), narrow the Remark column from 30 to 24 (and only that column) and report the scale before/after. Do not change any other column width, fonts, or layout.
+- No change to the PDF export, the data, or the API.
 
-## Tests (throwaway `loop-test` stack ONLY)
-- **Race tests with real parallelism** (threads/asyncio against a real Postgres, not SQLite): 30 simultaneous product creates in one category → 30 distinct SKUs with no gaps; 30 simultaneous documents for one company+day → 30 distinct numbers; simultaneous create + bulk import; counters continue correctly after a restart and after the migration on existing data.
-- **Version check**: two clients load the same record; A saves; B saves the old version → 409 and the data is A's; B reloads and saves → OK. For all five entities. A request without a version still works.
-- **Idempotency**: the same `Idempotency-Key` twice (and ten times in parallel) → exactly one record; a different key → a second record; expired key → treated as new.
-- **Atomicity**: force a failure after the document header insert (inject an error in the line-item step) → nothing is stored; force a MinIO failure during product create → no product row and no orphan object; search-index failure → the save succeeds and the item shows up after the re-index command.
-- **UI (Playwright)**: double-click Save → one record; two browser contexts edit the same company → the second gets the "Someone else changed this" message with Reload and keeps their typed text; buttons are disabled during save.
-- Headers: `Cache-Control: no-store` on API responses (not on static files/PDF downloads that need it otherwise — check).
-- All existing tests pass; `./scripts/verify.sh` passes; evidence screenshots in `loop/evidence/iter-21-*.png`.
+## Tasks
+1. Add the page setup to `export_quotation.py` (one small block next to the existing margins code).
+2. Make sure every anchored image is inside the print area; adjust the area if needed.
+3. Tests + evidence (below). Add a comment explaining why the sheet must be fit-to-width.
+
+## Tests
+- Unit test on the generated workbook (openpyxl): `fitToPage`, `fitToWidth == 1`, `fitToHeight == 0`, paper size A4, portrait, `print_area` covers A1:G{last row}, `print_title_rows` unchanged.
+- **Real print check with LibreOffice** (`soffice --headless --convert-to pdf`; skip the test with a clear message if `soffice` is not installed in the test image, but run it in this iteration — install it in the test container if needed): for quotations with 3 items, 45 items (multi-page), with tax, with sub-items, with a letterhead banner and seal, with long Remark text:
+  - every PDF page contains the column titles including **Remark** (print titles repeat) and **no page contains only some of the columns**;
+  - the page count equals the expected number (1 page for 3 items; no blank pages; no page that holds only the right-hand columns);
+  - on page 1 the banner/logo image, the seal and the Total row are present; the signature block ("Regards") is not cut off;
+  - horizontal check with PyMuPDF word boxes: the right edge of the "Remark" header is inside the page minus the right margin.
+- Existing XLSX tests (tax, letterhead anchors, tail layout, etc.) still pass; all document-service tests pass; `./scripts/verify.sh` passes.
+- Evidence: `loop/evidence/iter-22-xlsx-print-before-p1.png` / `-p2.png` (the bug: columns split) and `iter-22-xlsx-print-after-p1.png` (fixed), rendered from the LibreOffice PDFs; say that Excel itself could not be run and LibreOffice is the proxy.
 
 ## Acceptance checks
-A1 race tests (numbers unique, gapless) · A2 version conflict for 5 entities · A3 idempotency · A4 atomicity/cleanup · A5 UI double-click + conflict banner · A6 migrations (counters seeded from existing max, single head per service) · A7 no regressions, group isolation tests still pass, report says which stack tests ran on.
+| # | Check | How to verify |
+|---|---|---|
+| A1 | Page setup flags set | unit test |
+| A2 | All 7 columns on every printed page; no split | LibreOffice print test (3 and 45 items, banner/seal/tax/sub-items) |
+| A3 | Images and signature inside the print area | test + `iter-22-xlsx-print-after-p1.png` |
+| A4 | Before/after proof | evidence PNGs |
+| A5 | No regressions | document-service suite, `./scripts/verify.sh` |
+| A6 | Data safety | tests on throwaway stack/in-process only; report says which |
 
-## Out of scope
-Live editing locks (Google-Docs style), Redis/job queue, load testing (later, only if needed).
+## Out of scope — record under "Found but not fixed"
+- Landscape option, other paper sizes, Excel-specific rendering differences.
+
+---
+
+## Part B — The heading follows the document type (do after Part A, same iteration)
+
+### What the user reported (with screenshots)
+In the Documents list a document was created with type **INVOICE** (e.g. `WF-20261118/001`), but the exported PDF (and Excel) says **QUOTATION** at the top and "Quotation ID" in the End User block. It must show the real type.
+
+### Root cause (found by the planner)
+The word is hardcoded: `services/document-service/app/templates/quotation.html` line ≈212 `<div class="title">QUOTATION</div>` and ≈231 `Quotation ID`; `export_quotation.py` line ≈163 `ws[f"A{row}"] = "QUOTATION"`, ≈208 `("Quotation ID", …)`, and the sheet name `ws.title = "Quotation"` (≈105). `doc_type` exists on the document (`quotation | invoice | proposal | catalogue`, `models.py` ≈89, `schemas.py` ≈163) but the export never reads it.
+
+### Decisions already made
+- Heading text from `doc_type`: `quotation` → **QUOTATION**, `invoice` → **INVOICE**, `proposal` → **PROPOSAL**. The ID label follows: **Quotation ID / Invoice ID / Proposal ID**. Single helper (e.g. a small dict next to the exporters) used by both PDF and XLSX; an unknown type falls back to the capitalised type name, never crashes.
+- Also follow the type in: the XLSX sheet name (`Quotation` / `Invoice` / `Proposal`), the download **file names** (check the export endpoints' `Content-Disposition` and the Documents list links; e.g. `invoice-WF-20261118-001.pdf`), and any other visible "Quotation" wording in exports (PDF `<title>`, running footer, XLSX document properties/title). Do not rename internal functions, routes, template file names or CSS classes.
+- **`catalogue` documents** have their own export (the "Catalogue" link) — do not change it; check that the PDF/XLSX export of a catalogue-type document still behaves as it does today and note what you saw in the report.
+- Layout, fonts, colours, the red heading style (10.5pt bold, same size as the Date line) stay exactly as they are; only the text changes. Heading widths: "PROPOSAL" is the longest — confirm it still fits the header area next to the logo/banner.
+- No change to the data model, API payloads, or the document form.
+
+### Tests
+- Unit tests (PDF via the HTML spy like the existing layout tests; XLSX via openpyxl): for each of `quotation`, `invoice`, `proposal` the heading text, ID label, sheet name and download filename match the type; the old text ("QUOTATION"/"Quotation ID") does **not** appear for invoice/proposal; the quotation output is identical to today's (existing layout/XLSX tests pass unchanged); an unknown type does not crash.
+- HTTP e2e: create one document of each type through the API, fetch `/export/pdf` and `/export/xlsx` (TestClient + `X-Internal-Secret` as in the other e2e tests) and check the extracted PDF text (pypdf/pymupdf) and the XLSX title cell.
+- Playwright (throwaway `loop-test` stack ONLY): create an Invoice in the UI, download its PDF and check the first page text contains INVOICE and "Invoice ID" and not QUOTATION. Screenshot of the PDF page 1: `loop/evidence/iter-22-invoice-pdf-p1.png`.
+
+### Acceptance checks (Part B)
+| # | Check | How to verify |
+|---|---|---|
+| B1 | Invoice/proposal exports show the right heading + ID label (PDF and XLSX) | tests + evidence PNG |
+| B2 | Sheet name and filenames follow the type | tests |
+| B3 | Quotation output unchanged; catalogue behaviour unchanged (noted) | existing tests pass untouched |
+| B4 | No regressions, data safety | `./scripts/verify.sh`, document-service suite; report states which stack tests ran on |
