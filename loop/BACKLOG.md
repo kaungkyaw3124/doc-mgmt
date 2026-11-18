@@ -5,8 +5,8 @@ Status: **QUEUED** (plan written in `loop/queue/`), **LIVE** (in `loop/PLAN.md`)
 
 | # | Request (user's words, short) | Status | Where |
 |---|---|---|---|
-| 1 | Department data separation: documents/products/customers/projects belong to the creator's group; users see only their group | LIVE (iteration 19, in progress on the user's PC) | `loop/PLAN.md` |
-| 2 | Superuser can move records between groups; "unassigned data" card | QUEUED | `loop/queue/iter-20-move-between-groups.md` |
+| 1 | Department data separation: documents/products/customers/projects belong to the creator's group; users see only their group | DONE (iteration 19) | `loop/history/report-iter-19.md` |
+| 2 | Superuser can move records between groups; "unassigned data" card | LIVE (iteration 20) | `loop/PLAN.md` |
 | 3 | Concurrency safety: unique numbers, version check, idempotency, atomic saves | QUEUED | `loop/queue/iter-21-concurrency.md` |
 | 4 | XLSX prints with Remark/Amount on a second page, only 5 columns on page 1 — must fit on one page wide | QUEUED | `loop/queue/iter-22-xlsx-print-fit.md` |
 | 11 | Invoice/proposal documents export with the heading QUOTATION and "Quotation ID" — heading and ID label must follow the document type (PDF, XLSX, file names) | QUEUED (Part B of iteration 22) | `loop/queue/iter-22-xlsx-print-fit.md` |
@@ -18,3 +18,5 @@ Status: **QUEUED** (plan written in `loop/queue/`), **LIVE** (in `loop/PLAN.md`)
 | 9 | Product duplicate check while typing (autocomplete) | IDEA (`/products/duplicate-check` exists) | — |
 
 Recently DONE: letterhead banner with single logo/banner upload (17, 18), backup & restore (16), delete-all + sticky modal heading + success tick (15).
+
+Small leftovers from iteration 19's report (not planned): 500 on a line item for a product with no price (`_process_items`), document-service logs silent after startup (alembic `fileConfig`), dev-only Delete ALL companies still wipes shared companies, VM must discard its local `authz.py` edit before pulling.
