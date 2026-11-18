@@ -80,7 +80,9 @@ def _require_delete_access(x_has_document_delete: str | None):
 
 def _process_items(items_payload, db: Session, scope: Scope):
     """Validates/builds LineItem objects from a list of DocumentItemIn,
-    returning (line_items, subtotal, tax_total). Shared between create and
+    returning (line_items, subtotal, tax_total, labour_total). subtotal is
+    materials only and the only taxed amount; labour_total is always summed,
+    and the caller adds it to the total only when include_labour is on. Shared between create and
     full-update so both paths handle product linking identically. Products
     are looked up as the caller (their groups); a product the caller can't
     see only works when the item already carries its own description and
@@ -88,6 +90,7 @@ def _process_items(items_payload, db: Session, scope: Scope):
     line_items = []
     subtotal = Decimal("0")
     tax_total = Decimal("0")
+    labour_total = Decimal("0")
     for index, item_in in enumerate(items_payload):
         description = item_in.description
         unit_price = item_in.unit_price
@@ -115,6 +118,7 @@ def _process_items(items_payload, db: Session, scope: Scope):
         tax_amount = line_total * (item_in.tax_rate / Decimal("100"))
         subtotal += line_total
         tax_total += tax_amount
+        labour_total += item_in.quantity * (item_in.labour_unit_price or 0)
         line_items.append(
             models.LineItem(
                 product_id=item_in.product_id,
@@ -125,10 +129,11 @@ def _process_items(items_payload, db: Session, scope: Scope):
                 unit_price=unit_price,
                 tax_rate=item_in.tax_rate,
                 line_total=line_total,
+                labour_unit_price=item_in.labour_unit_price,
                 sort_order=index,
             )
         )
-    return line_items, subtotal, tax_total
+    return line_items, subtotal, tax_total, labour_total
 
 
 END_USER_FIELDS = ("end_user_name", "end_user_organization", "end_user_address", "end_user_phone", "end_user_email")
@@ -231,7 +236,7 @@ def create_document(
     # idempotency key and the counter bump commit together or not at all.
     # Items first: this may call catalogue-service, and the counter row stays
     # locked from next_number until the commit.
-    line_items, subtotal, tax_total = _process_items(payload.items, db, scope)
+    line_items, subtotal, tax_total, labour_total = _process_items(payload.items, db, scope)
     doc = models.Document(
         id=uuid.uuid4(),
         group_id=group_id,
@@ -248,7 +253,8 @@ def create_document(
         items=line_items,
         subtotal=subtotal,
         tax_total=tax_total,
-        total=subtotal + tax_total,
+        total=subtotal + tax_total + (labour_total if payload.include_labour else 0),
+        include_labour=payload.include_labour,
         status="draft",
         **end_user,
     )
@@ -589,7 +595,7 @@ def update_document(
         if director.company_id != payload.company_id:
             raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
-    line_items, subtotal, tax_total = _process_items(payload.items, db, scope)
+    line_items, subtotal, tax_total, labour_total = _process_items(payload.items, db, scope)
 
     # Full edit: switching to a saved customer clears the manual fields
     # (end_user is all None), and switching to manual leaves customer_id None.
@@ -602,10 +608,12 @@ def update_document(
     if payload.currency is not None:
         doc.currency = payload.currency
     doc.terms_and_conditions = payload.terms_and_conditions
+    if payload.include_labour is not None:
+        doc.include_labour = payload.include_labour
     doc.items = line_items  # SQLAlchemy replaces the collection (old ones deleted via cascade)
     doc.subtotal = subtotal
     doc.tax_total = tax_total
-    doc.total = subtotal + tax_total
+    doc.total = subtotal + tax_total + (labour_total if doc.include_labour else 0)
     doc.updated_at = datetime.utcnow()  # always UPDATE the header row, so an items-only edit still bumps (and checks) the version
     db.add(models.AuditLogEntry(document_id=doc.id, username=x_username or "unknown", action="edited"))  # same transaction as the edit
 

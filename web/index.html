@@ -347,6 +347,9 @@
   .line-item-row > div { flex: 1; }
   .line-item-row label { font-size: 11px; }
   .line-item-row input { margin-bottom: 0; }
+  /* "Include labour" (loop iteration 23): labour inputs/totals only show while the box is ticked. */
+  #doc-form:not(.with-labour) .labour-only { display: none; }
+  .li-line-totals span { font-size: 12px; white-space: nowrap; }
   .line-item-row input.field-error { border-color: var(--danger); background: #fff5f5; }
   .remove-line { background: none; border: none; color: var(--danger); font-size: 12px; cursor: pointer; padding: 8px 4px; }
 
@@ -1445,11 +1448,13 @@
       </div>
       <div id="line-items"></div>
       <button type="button" class="add-line-btn" id="add-line-btn">+ Add line item</button>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-top:10px; font-size:14px;"><input type="checkbox" id="doc-include-labour" style="width:auto; margin:0;"> Include labour (a labour unit price per line; labour is not taxed)</label>
 
       <div id="doc-totals-summary" style="display:flex; justify-content:flex-end; align-items:center; gap:24px; margin:14px 0; font-size:14px;">
         <div>Tax %: <input type="text" id="doc-tax-rate" value="0" style="width:60px; display:inline-block; margin:0;"></div>
-        <div>Total without tax: <strong id="doc-totals-subtotal">0.00</strong></div>
-        <div>Total with tax: <strong id="doc-totals-grand">0.00</strong></div>
+        <div><span class="labour-only">SUB Total — Material: </span><span id="doc-totals-subtotal-label">Total without tax: </span><strong id="doc-totals-subtotal">0.00</strong></div>
+        <div class="labour-only">Labour: <strong id="doc-totals-labour">0.00</strong></div>
+        <div><span id="doc-totals-grand-label">Total with tax</span>: <strong id="doc-totals-grand">0.00</strong></div>
       </div>
 
       <label for="doc-terms">Terms &amp; Conditions</label>

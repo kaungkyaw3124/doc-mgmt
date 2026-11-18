@@ -156,6 +156,7 @@ class DocumentItemIn(BaseModel):
     quantity: Decimal
     unit_price: Optional[Decimal] = None
     tax_rate: Decimal = Decimal("0")
+    labour_unit_price: Optional[Decimal] = Field(default=None, ge=0)  # used only when the document's include_labour is on
 
 
 class DocumentItemOut(DocumentItemIn):
@@ -184,6 +185,7 @@ class DocumentCreate(BaseModel):
     end_user_address: Optional[str] = None
     end_user_phone: Optional[str] = None
     end_user_email: Optional[str] = None
+    include_labour: bool = False
     items: list[DocumentItemIn] = []
 
 
@@ -201,6 +203,7 @@ class DocumentUpdate(BaseModel):
     end_user_address: Optional[str] = None
     end_user_phone: Optional[str] = None
     end_user_email: Optional[str] = None
+    include_labour: Optional[bool] = None  # omit to leave unchanged
     items: list[DocumentItemIn] = []
     version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
@@ -225,6 +228,7 @@ class DocumentOut(BaseModel):
     subtotal: Optional[Decimal]
     tax_total: Optional[Decimal]
     total: Optional[Decimal]
+    include_labour: bool = False
     issue_date: Optional[date]
     due_date: Optional[date]
     doc_metadata: Optional[dict]

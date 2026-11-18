@@ -112,7 +112,8 @@ class Document(Base):
     currency = Column(String(3), default="USD")
     subtotal = Column(Numeric(12, 2))
     tax_total = Column(Numeric(12, 2))
-    total = Column(Numeric(12, 2))
+    total = Column(Numeric(12, 2))  # subtotal + tax_total (+ labour when include_labour)
+    include_labour = Column(Boolean, default=False, nullable=False, server_default="false")  # shows the Labour columns on the form and exports
     issue_date = Column(Date)
     due_date = Column(Date)
     doc_metadata = Column("metadata", JSONB)
@@ -142,7 +143,8 @@ class LineItem(Base):
     quantity = Column(Numeric(12, 2))
     unit_price = Column(Numeric(12, 2))
     tax_rate = Column(Numeric(5, 2))
-    line_total = Column(Numeric(12, 2))
+    line_total = Column(Numeric(12, 2))  # material only: quantity * unit_price
+    labour_unit_price = Column(Numeric(12, 2))  # optional; labour total = quantity * this, never taxed
 
     document = relationship("Document", back_populates="items")
 

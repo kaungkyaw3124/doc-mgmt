@@ -141,4 +141,4 @@ def test_single_alembic_head():
     ini = pathlib.Path(__file__).resolve().parents[1] / "alembic.ini"
     cfg = Config(str(ini))
     cfg.set_main_option("script_location", str(ini.parent / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0010_concurrency"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0011_labour"]

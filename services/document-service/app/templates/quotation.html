@@ -130,6 +130,14 @@
   tbody.tail { break-inside: avoid; page-break-inside: avoid; }
   table.items { break-after: avoid; page-break-after: avoid; }
   tr.sub-item td.sub-label { text-align: right; }
+  /* Loop iteration 23, "Include labour": 9 columns in a fixed layout (widths in
+     the <colgroup>; Item takes what is left), slightly smaller text so the four
+     money columns fit the 184.6mm content width. */
+  table.items.labour { table-layout: fixed; }
+  table.items.labour th, table.items.labour td { font-size: 8pt; padding: 4px 3px; overflow-wrap: anywhere; }
+  table.items.labour tr.sub-item td { font-size: 7.5pt; }
+  tr.labour-total td { font-weight: bold; border: 1px solid #333; }
+  tr.labour-total td.label { text-align: center; }
 
   .terms h3 { font-size: 11pt; margin-bottom: 6px; }
   .terms p { margin: 2px 0; white-space: pre-wrap; }
@@ -238,13 +246,24 @@
   </td></tr></thead>
   <tbody><tr><td>
 
-  <table class="items">
+  <table class="items{{ ' labour' if include_labour }}">
+    {%- if include_labour %}
+    <colgroup><col style="width: 7mm"><col><col style="width: 10mm"><col style="width: 11mm"><col style="width: 21mm"><col style="width: 22mm"><col style="width: 19mm"><col style="width: 22mm"><col style="width: 22mm"></colgroup>
+    <thead>
+      <tr>
+        <th rowspan="2">No</th><th rowspan="2">Item</th><th rowspan="2">Qty</th><th rowspan="2">Unit</th>
+        <th colspan="2">Material ({{ currency }})</th><th colspan="2">Labour ({{ currency }})</th><th rowspan="2">Remark</th>
+      </tr>
+      <tr><th>Unit Price</th><th>Total Price</th><th>Unit Price</th><th>Total Price</th></tr>
+    </thead>
+    {%- else %}
     <thead>
       <tr>
         <th>No</th><th>Item</th><th>Qty</th><th>Unit</th>
         <th>Price ({{ currency }})</th><th>Amount ({{ currency }})</th><th>Remark</th>
       </tr>
     </thead>
+    {%- endif %}
     <tbody>
       {% for item in items %}
       {# The last item group and the totals go in their own row group (see tbody.tail in the CSS). #}
@@ -259,6 +278,10 @@
         <td>{{ item.unit }}</td>
         <td class="num">{{ item.price }}</td>
         <td class="num">{{ item.amount }}</td>
+        {%- if include_labour %}
+        <td class="num">{{ item.labour_price }}</td>
+        <td class="num">{{ item.labour_amount }}</td>
+        {%- endif %}
         <td>{{ item.remark }}</td>
       </tr>
       {% for sub in item.sub_items %}
@@ -269,10 +292,35 @@
         <td>Nos</td>
         <td class="num">{{ sub.price }}</td>
         <td class="num">{{ sub.amount }}</td>
+        {%- if include_labour %}
+        <td></td><td></td>
+        {%- endif %}
         <td></td>
       </tr>
       {% endfor %}
       {% endfor %}
+      {%- if include_labour %}
+      {# SUB Total (materials | labour) -> tax on materials only -> Grand Total; labour is never taxed. #}
+      <tr class="labour-total">
+        <td colspan="5" class="label">SUB Total</td>
+        <td class="num">{{ subtotal }}</td>
+        <td></td>
+        <td class="num">{{ labour_total }}</td>
+        <td></td>
+      </tr>
+      {% if has_tax %}
+      <tr class="labour-total">
+        <td colspan="5" class="label">Tax on materials ({{ tax_rate }}%)</td>
+        <td class="num">{{ tax_total }}</td>
+        <td colspan="3"></td>
+      </tr>
+      {% endif %}
+      <tr class="labour-total">
+        <td colspan="5" class="label">Grand Total</td>
+        <td colspan="3" class="num">{{ total }}</td>
+        <td></td>
+      </tr>
+      {%- else %}
       {% if has_tax %}
       <tr class="subtotal-row">
         <td colspan="5" style="text-align:right;">Subtotal:</td>
@@ -290,6 +338,7 @@
         <td class="num">{{ total }}</td>
         <td></td>
       </tr>
+      {%- endif %}
     </tbody>
   </table>
 

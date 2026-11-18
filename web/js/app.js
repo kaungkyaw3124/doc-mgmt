@@ -801,6 +801,8 @@ function addLineItem(prefill) {
     <div style="max-width:70px;"><label>Qty</label><input type="text" class="li-qty" placeholder="1" value="${prefill ? safeVal(prefill.quantity) : ''}"></div>
     <div style="max-width:80px;"><label>Unit</label><input type="text" class="li-unit" placeholder="Nos" value="${prefill ? escapeHtml(prefill.unit || 'Nos') : 'Nos'}"></div>
     <div><label>Unit price</label><input type="text" class="li-price" placeholder="20.00" value="${prefill ? safeVal(prefill.unit_price) : ''}"></div>
+    <div class="labour-only" style="max-width:110px;"><label>Labour unit price</label><input type="text" class="li-labour" placeholder="optional" value="${prefill ? safeVal(prefill.labour_unit_price) : ''}"></div>
+    <div class="labour-only li-line-totals" style="max-width:150px;"><label>Material / Labour total</label><span class="li-mat-total">0.00</span> / <span class="li-lab-total">-</span></div>
     <div><label>Remark</label><input type="text" class="li-remark" placeholder="Optional note" value="${prefill ? escapeHtml(prefill.remark || '') : ''}"></div>
     <button type="button" class="remove-line" data-line-id="${id}">Remove</button>
   `;
@@ -830,22 +832,36 @@ function addLineItem(prefill) {
 document.getElementById('add-line-btn').addEventListener('click', addLineItem);
 
 document.getElementById('line-items').addEventListener('input', (e) => {
-  if (e.target.matches('.li-qty, .li-price')) updateDocumentTotals();
+  if (e.target.matches('.li-qty, .li-price, .li-labour')) updateDocumentTotals();
 });
 document.getElementById('doc-tax-rate').addEventListener('input', updateDocumentTotals);
+document.getElementById('doc-include-labour').addEventListener('change', updateDocumentTotals);
 
+// Live preview only — the server recalculates every total on save. Tax is on
+// materials only; labour is added untaxed when "Include labour" is ticked.
 function updateDocumentTotals() {
+  const withLabour = document.getElementById('doc-include-labour').checked;
+  document.getElementById('doc-form').classList.toggle('with-labour', withLabour);
   let subtotal = 0;
+  let labour = 0;
   document.querySelectorAll('#line-items .line-item-row').forEach(row => {
     const qty = Number(row.querySelector('.li-qty').value) || 0;
     const price = Number(row.querySelector('.li-price').value) || 0;
+    const lab = qty * (Number(row.querySelector('.li-labour').value) || 0);
     subtotal += qty * price;
+    labour += lab;
+    row.querySelector('.li-mat-total').textContent = (qty * price).toFixed(2);
+    row.querySelector('.li-lab-total').textContent = lab ? lab.toFixed(2) : '-';
   });
+  if (!withLabour) labour = 0;
   const taxRate = Number(document.getElementById('doc-tax-rate').value) || 0;
   const taxTotal = subtotal * (taxRate / 100);
   const currency = document.getElementById('doc-currency').value;
+  document.getElementById('doc-totals-subtotal-label').style.display = withLabour ? 'none' : '';
+  document.getElementById('doc-totals-grand-label').textContent = withLabour ? 'Grand Total' : 'Total with tax';
   document.getElementById('doc-totals-subtotal').textContent = subtotal.toFixed(2) + ' ' + currency;
-  document.getElementById('doc-totals-grand').textContent = (subtotal + taxTotal).toFixed(2) + ' ' + currency;
+  document.getElementById('doc-totals-labour').textContent = labour.toFixed(2) + ' ' + currency;
+  document.getElementById('doc-totals-grand').textContent = (subtotal + taxTotal + labour).toFixed(2) + ' ' + currency;
 }
 document.getElementById('doc-currency').addEventListener('change', updateDocumentTotals);
 
@@ -879,8 +895,9 @@ function refreshLineItemProductOptions() {
 document.getElementById('doc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showBanner('doc-modal-banner', '');
-  document.querySelectorAll('#line-items .li-price.field-error').forEach(el => el.classList.remove('field-error'));
+  document.querySelectorAll('#line-items .li-price.field-error, #line-items .li-labour.field-error').forEach(el => el.classList.remove('field-error'));
   const overallTaxRate = Number(document.getElementById('doc-tax-rate').value) || 0;
+  const includeLabour = document.getElementById('doc-include-labour').checked;
   const items = [];
   const incompleteRows = [];
   document.querySelectorAll('#line-items .line-item-row').forEach((row, rowIndex) => {
@@ -915,6 +932,12 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       incompleteRows.push(`Row ${rowIndex + 1}: unit price must be a number`);
       return;
     }
+    const labour = row.querySelector('.li-labour').value.trim();
+    if (includeLabour && labour && !(Number(labour) >= 0)) {
+      row.querySelector('.li-labour').classList.add('field-error');
+      incompleteRows.push(`Row ${rowIndex + 1}: labour unit price must be a number, 0 or more`);
+      return;
+    }
     if (!product_id && !description) description = remark; // free-text row — use the remark as its name/description too, so exports aren't blank
 
     const item = { quantity: Number(quantity), tax_rate: overallTaxRate, unit };
@@ -922,6 +945,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     if (description) item.description = description;
     if (remark) item.remark = remark;
     if (unit_price) item.unit_price = Number(unit_price);
+    if (includeLabour && labour) item.labour_unit_price = Number(labour); // unticked: labour is dropped on save
     items.push(item);
   });
   if (incompleteRows.length > 0) {
@@ -953,6 +977,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       director_id: document.getElementById('doc-director').value || null,
       currency: document.getElementById('doc-currency').value,
       terms_and_conditions: document.getElementById('doc-terms').value || null,
+      include_labour: includeLabour,
       items
     };
     if (editingDocumentId) {
@@ -1022,6 +1047,7 @@ function startEditDocument(doc) {
   refreshDocDirectorPicker(doc.director_id);
   document.getElementById('doc-terms').value = doc.terms_and_conditions || '';
 
+  document.getElementById('doc-include-labour').checked = !!doc.include_labour;
   document.getElementById('line-items').innerHTML = '';
   lineItemCount = 0;
   doc.items.forEach(item => addLineItem(item));
@@ -1203,6 +1229,7 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
     <div style="text-align:right; margin-top:10px; font-size:14px;">
       <div>Subtotal: <span class="mono">${fmtMoney(doc.subtotal)}</span></div>
       <div>Tax: <span class="mono">${fmtMoney(doc.tax_total)}</span></div>
+      ${doc.include_labour ? `<div>Labour (not taxed): <span class="mono">${fmtMoney((doc.items || []).reduce((s, i) => s + Number(i.quantity || 0) * Number(i.labour_unit_price || 0), 0))}</span></div>` : ''}
       <div style="font-weight:600; margin-top:4px;">Total: <span class="mono">${fmtMoney(doc.total)} ${escapeHtml(doc.currency || '')}</span></div>
     </div>
     ${doc.terms_and_conditions ? `
