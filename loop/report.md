@@ -71,3 +71,8 @@ None.
 
 ## 9. Suggestions for the next iteration
 - Decide whether to commit a test image (Dockerfile.test with LibreOffice + PyMuPDF), so the print tests run the same way every time instead of being skipped.
+
+## 10. App running / data safety
+- **App running at http://localhost:8080 (login: admin / CHANGE_ME, local only).** Backup taken before the rebuild: `backup-2026-11-18-1057.tar.gz`. Then `up -d --build` (volumes kept) and `restart nginx`; `/` returns 200 and all 9 services are Up.
+- Lists after the rebuild: products 100, **documents 0**. That is not a loss: iteration 21's report already recorded documents 0 on this stack.
+- Data safety: tests ran only in-process (SQLite TestClient) and on the throwaway `loop-test` stack, which was then removed with `down -v`. The user's stack had no tests run against it.
