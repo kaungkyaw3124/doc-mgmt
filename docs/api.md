@@ -145,6 +145,16 @@ decodes the JWT and checks permissions itself.
 
 ---
 
+## Simultaneous use (loop iteration 21) — applies to document-service and catalogue-service
+
+- **Numbers**: document numbers (`<SHORT>-<YYYYMMDD>/<NNN>`, per prefix + day) and SKUs (`<PREFIX>-<NNNN>`, per prefix) come from a locked `counters` row taken inside the create's transaction — unique and gapless under parallel creates. A number typed by hand that clashes with the next generated one is skipped (one retry); a clash on a typed number is `409`. `GET /documents/next-number` only previews (takes nothing); the UI sends `doc_number: null` when the preview was not changed.
+- **Version check**: documents, products, customers, projects and companies return `version` (1, +1 per update). `PATCH` accepts `version`; a stale one gives `409 {"detail": "Someone else changed this. Reload to see their changes."}`. Without `version` there is no check (scripts, bulk tools), but two saves racing on the same row still cannot both win.
+- **Idempotency-Key** (optional header) on `POST /documents|/products|/customers|/projects|/companies`: a repeat within 24 h returns the first request's record (same status 201) instead of creating another — also for parallel repeats. Not on `POST /products/bulk-import`.
+- **All or nothing**: a document, its line items and its `created`/`edited` audit entry commit together. Bulk import: a row whose catalogue file fails to upload is not created (listed in `skipped`); `POST /products/{id}/file` returns `502` and changes nothing when storage is down. Search indexing runs after the commit and never fails a save; `scripts/reindex.sh` rebuilds both indexes from the database.
+- **Caching**: every `/api/*` answer has `Cache-Control: no-store` (`infra/nginx/cors.conf`).
+
+---
+
 ## document-service
 
 Gateway mapping: `infra/nginx/nginx.conf:75-127`. All routes below require a

@@ -17,15 +17,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.concurrency import check_version, claim_idempotency_key, next_number, remember
 from app.core.group_scope import ALL, Scope, get_scope, scoped, get_or_404, group_for_create, require_superuser
 from app.core.search_client import index_product, remove_product_from_index, rebuild_index
-from app.core.storage import upload_file, get_presigned_url, download_file_bytes
+from app.core.storage import upload_file, delete_file, get_presigned_url, download_file_bytes
 from app.core.document_client import get_visible_product_ids
 from app.core import duplicates as dup
 from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app import models, schemas
 
 router = APIRouter(prefix="/products", tags=["products"])
+logger = logging.getLogger(__name__)
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -157,30 +159,47 @@ def _raise_if_exact_duplicate(db: Session, name, description, x_allowed_projects
     })
 
 
-def _generate_sku(db: Session, category_name: str | None) -> str:
+def _sku_prefix(db: Session, category_name: str | None) -> str:
     """
-    e.g. COM-0001 for a product in the "Computer" category — using that
-    category's manually-set short_term as the prefix (not derived from
-    the category name itself). Falls back to "PRD" if no category was
-    given, or the category has no short_term set. Finds the next free
-    number for that prefix, so it stays sequential per-category.
+    e.g. "COM" for a product in the "Computer" category — that category's
+    manually-set short_term (not derived from the category name itself).
+    Falls back to "PRD" if no category was given, or the category has no
+    short_term set.
     """
-    prefix = "PRD"
     if category_name:
         category = db.query(models.Category).filter_by(name=category_name).first()
         if category and category.short_term:
-            prefix = category.short_term.upper()
+            return category.short_term.upper()
+    return "PRD"
 
-    # sku is unique across ALL groups, so numbering looks at every product.
-    existing_skus = [
-        p.sku for p in scoped(db, models.Product, ALL).with_entities(models.Product.sku).filter(models.Product.sku.like(f"{prefix}-%")).all()
-    ]
-    max_n = 0
-    for sku in existing_skus:
-        match = re.match(rf"^{re.escape(prefix)}-(\d+)$", sku)
-        if match:
-            max_n = max(max_n, int(match.group(1)))
-    return f"{prefix}-{max_n + 1:04d}"
+
+def _max_sku_number(db: Session, prefix: str) -> int:
+    """Highest N in "<prefix>-N" already used — seeds the prefix's counter.
+    sku is unique across ALL groups, so this looks at every product."""
+    rows = scoped(db, models.Product, ALL).with_entities(models.Product.sku).filter(models.Product.sku.like(f"{prefix}-%"))
+    return max((int(m.group(1)) for (sku,) in rows if (m := re.fullmatch(rf"{re.escape(prefix)}-(\d+)", sku))), default=0)
+
+
+def _add_with_next_sku(db: Session, product, category_name: str | None) -> None:
+    """
+    Gives `product` the next SKU of its category (e.g. COM-0001), from the
+    locked per-prefix counter — two simultaneous creates can never get the
+    same one, and a rolled-back create gives its number back — then adds and
+    flushes it. A clash with a hand-typed SKU is retried once with the
+    counter moved past the highest SKU in use (a savepoint keeps the rest of
+    the transaction, e.g. the held idempotency key).
+    """
+    prefix = _sku_prefix(db, category_name)
+    for attempt in range(2):
+        product.sku = f"{prefix}-{next_number(db, f'sku:{prefix}', lambda: _max_sku_number(db, prefix), reseed=attempt > 0):04d}"
+        try:
+            with db.begin_nested():  # add inside: begin_nested() flushes pending objects before its SAVEPOINT
+                db.add(product)
+                db.flush()
+            return
+        except IntegrityError:
+            pass
+    raise HTTPException(status_code=409, detail="sku already exists")
 
 
 @router.post("", response_model=schemas.ProductOut, status_code=201)
@@ -189,29 +208,31 @@ def create_product(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
     group_id = group_for_create(scope, payload.group_id)
+    # First: a repeat must get the first answer, not "duplicate"/"sku exists".
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /products")
+    if replay_id:
+        return _attach_sub_item_count(db, get_or_404(db, models.Product, replay_id, scope, "product not found"))
     _raise_if_exact_duplicate(db, payload.name, payload.description, x_allowed_projects, group_id)
-    sku = payload.sku or _generate_sku(db, payload.category)
-
-    existing = scoped(db, models.Product, ALL).filter_by(sku=sku).first()  # unique across all groups
-    if existing:
+    if payload.sku and scoped(db, models.Product, ALL).filter_by(sku=payload.sku).first():  # unique across all groups
         raise HTTPException(status_code=409, detail="sku already exists")
-
-    data = payload.model_dump()
-    data["sku"] = sku
-    data["group_id"] = group_id
-    product = models.Product(**data)
-    db.add(product)
+    product = models.Product(**{**payload.model_dump(), "id": uuid.uuid4(), "group_id": group_id})
+    remember(held, product.id)
+    if payload.sku:
+        db.add(product)
+    else:
+        _add_with_next_sku(db, product, payload.category)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="sku already exists")
     db.refresh(product)
-    index_product(product)
+    index_product(product)  # after the commit; a failure is logged and fixed by scripts/reindex.sh
     return _attach_sub_item_count(db, product)
 
 
@@ -406,26 +427,41 @@ def bulk_import_products(
         if row_key[0] in sku_by_name:
             name_warnings.append({"row": position, "name": name, "reason": f"same name as {sku_by_name[row_key[0]]}"})
 
-        sku = _generate_sku(db, category)
-        product = models.Product(sku=sku, name=name, category=category, unit_price=price, description=description, group_id=group_id)
-        db.add(product)
-        db.commit()
+        product = models.Product(name=name, category=category, unit_price=price, description=description, group_id=group_id)
+        _add_with_next_sku(db, product, category)
+        sku = product.sku
+        entry = {"sku": sku, "name": name, "row": position, "has_file": False}
+
+        # All or nothing per row: the file goes up before the commit, a failed
+        # upload drops the row (and gives its SKU back), and a failed commit
+        # removes the uploaded object again — no row without its file, no
+        # orphan file without a row.
+        object_key = None
+        if position in files_by_position:
+            filename, file_bytes = files_by_position.pop(position)
+            object_key = f"{sku}/{filename}"
+            try:
+                upload_file(io.BytesIO(file_bytes), object_key, content_type="application/octet-stream")
+            except Exception:
+                logger.exception("bulk import: catalogue file upload failed for row %s", position)
+                db.rollback()
+                skipped.append({"row": position, "name": name, "reason": "catalogue file upload failed — row not created", "existing_sku": ""})
+                continue
+            product.image_object_key = object_key
+            entry["has_file"] = True
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            if object_key:
+                delete_file(object_key)
+            raise
         db.refresh(product)
         index_product(product)
 
         sku_by_key[row_key] = sku
         sku_by_name.setdefault(row_key[0], sku)
         row_by_key[row_key] = position
-
-        entry = {"sku": sku, "name": name, "row": position, "has_file": False}
-
-        if position in files_by_position:
-            filename, file_bytes = files_by_position.pop(position)
-            object_key = f"{sku}/{filename}"
-            upload_file(io.BytesIO(file_bytes), object_key, content_type="application/octet-stream")
-            product.image_object_key = object_key
-            db.commit()
-            entry["has_file"] = True
 
         created.append(entry)
 
@@ -659,8 +695,9 @@ def update_product(
     _require_edit_access(x_access_level)
     product = get_or_404(db, models.Product, product_id, scope, "product not found")
     _check_product_visible(product, x_allowed_projects)
+    check_version(product, payload.version)
 
-    changes = payload.model_dump(exclude_unset=True)
+    changes = payload.model_dump(exclude_unset=True, exclude={"version"})
     new_name = changes.get("name", product.name)
     new_description = changes.get("description", product.description)
     # Only when the text changes: products that were already duplicates
@@ -724,10 +761,20 @@ def upload_product_file(
     object_key = f"{product.sku}/{sanitized_filename}"
     # Content-Type is derived from the filename server-side, NEVER trusted
     # from the client's upload — see app/core/upload_safety.py.
-    upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
+    try:
+        upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
+    except Exception:
+        logger.exception("catalogue file upload failed for product %s", product.id)
+        raise HTTPException(status_code=502, detail="The file couldn't be stored (file storage unavailable). Nothing was changed — try again.")
 
-    product.image_object_key = object_key
-    db.commit()
+    previous_key, product.image_object_key = product.image_object_key, object_key
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        if object_key != previous_key:  # same key = the upload replaced the file the row still points at
+            delete_file(object_key)  # the row doesn't point at it: don't leave an orphan
+        raise
     return {"image_object_key": object_key}
 
 

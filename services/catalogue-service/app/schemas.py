@@ -26,6 +26,7 @@ class ProductUpdate(BaseModel):
     currency: Optional[str] = None
     remark: Optional[str] = None
     attributes: Optional[dict] = None
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
 
 class ProductOut(BaseModel):
@@ -44,6 +45,7 @@ class ProductOut(BaseModel):
     sub_item_count: int = 0
     created_at: datetime
     updated_at: datetime
+    version: int = 1
 
 
 class SubItemAdd(BaseModel):

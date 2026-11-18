@@ -16,7 +16,7 @@ from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
@@ -48,6 +48,10 @@ def _jsonb_as_json(type_, compiler, **kw):
 @pytest.fixture
 def ctx(monkeypatch):
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    # pysqlite's own transaction handling breaks SAVEPOINT (the SKU / doc-number
+    # retry uses one); SQLAlchemy's documented fix, so SQLite behaves like Postgres.
+    event.listen(engine, "connect", lambda dbapi_conn, rec: setattr(dbapi_conn, "isolation_level", None))
+    event.listen(engine, "begin", lambda conn: conn.exec_driver_sql("BEGIN"))
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False)
 

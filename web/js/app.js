@@ -104,7 +104,7 @@ function refreshAccessToken() {
       if (since >= 0 && since < 3000) await new Promise(r => setTimeout(r, 3000 - since));
       try { localStorage.setItem(REFRESH_AT_KEY, String(Date.now())); } catch (e) {}
       const res = await fetch(API_BASE + '/auth/refresh', { method: 'POST', credentials: 'include' });
-      if (!res.ok) throw new Error('refresh failed');
+      if (!res.ok) { res.text().catch(() => {}); throw new Error('refresh failed'); }  // drain: an unread no-store body keeps its connection busy
       applySession(await res.json());
       return token;
     })().finally(() => { refreshPromise = null; });
@@ -144,10 +144,44 @@ async function apiFetch(path, options = {}, _retriedAfterRefresh = false) {
     if (res.status === 403) detail = "You don't have access to this. (" + detail + ")";
     const error = new Error(detail);
     error.detail = rawDetail;  // e.g. the duplicate-product 409's {message, existing}
+    error.status = res.status;
     throw error;
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+// ---------- safe simultaneous use (loop iteration 21) ----------
+// The server's answer when an edit was made on an older copy of the record.
+const CONFLICT_MESSAGE = 'Someone else changed this. Reload to see their changes.';
+const editingVersions = {};  // form -> the version of the record it was opened with
+const idempotencyKeys = {};  // form -> Idempotency-Key, kept until that form's create succeeds
+function newRequestKey() {  // crypto.randomUUID needs https; getRandomValues works on plain-http LAN too
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+}
+// A repeated create (double click, retry after a lost answer) gets the first result back.
+function idempotencyHeader(form) { return { 'Idempotency-Key': idempotencyKeys[form] ||= newRequestKey() }; }
+function idempotencyDone(form) { delete idempotencyKeys[form]; }
+function setBusy(btn, busy) {
+  btn.disabled = busy;
+  btn.setAttribute('aria-busy', String(busy));
+  if (busy) { btn.dataset.label = btn.textContent; btn.textContent = 'Saving…'; }
+  else if (btn.textContent === 'Saving…') btn.textContent = btn.dataset.label;  // a success path may already have set the next label
+}
+// Save failed: a version conflict gets a Reload button (the typed text stays
+// in the form until the user clicks it); anything else is a plain banner.
+function showSaveError(err, bannerId, reload) {
+  if (err.status === 409 && err.message === CONFLICT_MESSAGE && reload) {
+    const el = document.getElementById(bannerId);
+    el.innerHTML = `<div class="banner banner-error conflict-banner">${escapeHtml(CONFLICT_MESSAGE)} <button type="button" class="btn btn-secondary conflict-reload-btn">Reload</button></div>`;
+    el.querySelector('.conflict-reload-btn').addEventListener('click', async () => {
+      try { await reload(); showBanner(bannerId, ''); } catch (e) { showBanner(bannerId, e.message); }
+    });
+    el.scrollIntoView({ block: 'center' });  // Save sits at the bottom of a long modal; the banner is at the top, under a sticky header
+  } else {
+    showBanner(bannerId, err.message);
+  }
+  showErrorCross(err.message);
 }
 
 function showBanner(elId, message, type = 'error') {
@@ -273,7 +307,7 @@ async function doLogout(message = '', broadcast = true) {
     // sign back in with it.
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), 2000);
-    await fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include', signal: abort.signal }).catch(() => {});
+    await fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include', signal: abort.signal }).then(r => r.text()).catch(() => {});
     clearTimeout(timer);
     try { localStorage.setItem(LOGOUT_KEY, Date.now() + '|' + message); } catch (e) {}
   }
@@ -703,6 +737,7 @@ async function prefillNextDocNumber(forceOverwrite = false) {
     const field = document.getElementById('doc-number');
     if ((forceOverwrite || !field.value) && !editingDocumentId) {
       field.value = result.doc_number;
+      field.dataset.preview = result.doc_number;  // untouched preview -> let the server take the number (its counter is locked)
     }
   } catch (err) {
     // non-fatal — the field just stays blank and the server will
@@ -909,8 +944,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     endUser['end_user_' + f] = manualCustomer ? (document.getElementById('doc-end-user-' + f).value.trim() || null) : null;
   });
   try {
-    const submitBtn = document.getElementById('doc-form-submit-btn');
-    submitBtn.disabled = true;
+    setBusy(document.getElementById('doc-form-submit-btn'), true);
     const commonPayload = {
       customer_id: manualCustomer ? null : resolveCustomerIdFromInput(),
       ...endUser,
@@ -922,14 +956,15 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       items
     };
     if (editingDocumentId) {
-      await apiFetch('/documents/' + editingDocumentId, { method: 'PATCH', body: JSON.stringify(commonPayload) });
+      await apiFetch('/documents/' + editingDocumentId, { method: 'PATCH', body: JSON.stringify({ ...commonPayload, version: editingVersions.document }) });
     } else {
       await apiFetch('/documents', {
         method: 'POST',
+        headers: idempotencyHeader('document'),
         body: JSON.stringify({
           group_id: chosenGroupId('doc-form'),
           doc_type: document.getElementById('doc-type').value,
-          doc_number: document.getElementById('doc-number').value || null,
+          doc_number: (v => (v && v !== document.getElementById('doc-number').dataset.preview) ? v : null)(document.getElementById('doc-number').value),
           ...commonPayload
         })
       });
@@ -945,18 +980,20 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     document.getElementById('doc-type').disabled = false;
     document.getElementById('doc-number').disabled = false;
     editingDocumentId = null;
+    idempotencyDone('document');
     loadDocuments();
     showSuccessTick('Document saved');
   } catch (err) {
-    showBanner('doc-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingDocumentId;
+    showSaveError(err, 'doc-modal-banner', id && (async () => { startEditDocument(await apiFetch('/documents/' + id)); loadDocuments(); }));
   } finally {
-    document.getElementById('doc-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('doc-form-submit-btn'), false);
   }
 });
 
 function startEditDocument(doc) {
   editingDocumentId = doc.id;
+  editingVersions.document = doc.version;
   showGroupSelect('doc-form', false);
   document.getElementById('doc-modal').classList.add('active');
   document.getElementById('doc-form-title').textContent = 'Edit document — ' + doc.doc_number;
@@ -1378,12 +1415,13 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     description: document.getElementById('project-description').value || null
   };
   try {
-    document.getElementById('project-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('project-form-submit-btn'), true);
     let created = null;
     if (editingProjectId) {
-      await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify(payload) });
+      await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify({ ...payload, version: editingVersions.project }) });
     } else {
-      created = await apiFetch('/projects', { method: 'POST', body: JSON.stringify({ ...payload, group_id: chosenGroupId('project-form') }) });
+      created = await apiFetch('/projects', { method: 'POST', headers: idempotencyHeader('project'), body: JSON.stringify({ ...payload, group_id: chosenGroupId('project-form') }) });
+      idempotencyDone('project');
     }
     document.getElementById('project-form').reset();
     document.getElementById('project-modal').classList.remove('active');
@@ -1401,15 +1439,16 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
       document.getElementById('doc-modal').classList.add('active');
     }
   } catch (err) {
-    showBanner('project-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingProjectId;
+    showSaveError(err, 'project-modal-banner', id && (async () => { startEditProject(await apiFetch('/projects/' + id)); loadProjects(); }));
   } finally {
-    document.getElementById('project-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('project-form-submit-btn'), false);
   }
 });
 
 function startEditProject(project) {
   editingProjectId = project.id;
+  editingVersions.project = project.version;
   showGroupSelect('project-form', false);
   document.getElementById('project-modal').classList.add('active');
   document.getElementById('project-form-title').textContent = 'Edit project — ' + project.name;
@@ -1709,6 +1748,7 @@ document.getElementById('company-modal-close').addEventListener('click', () => {
   document.getElementById('company-modal').classList.remove('active');
 });
 
+let ownSaveDone = false;  // company form: this submit's own PATCH already succeeded
 document.getElementById('company-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showBanner('company-modal-banner', '');
@@ -1735,12 +1775,14 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     return;
   }
   try {
-    document.getElementById('company-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('company-form-submit-btn'), true);
+    ownSaveDone = false;
     let company;
     if (editingCompanyId) {
-      company = await apiFetch('/companies/' + editingCompanyId, { method: 'PATCH', body: JSON.stringify(payload) });
+      company = await apiFetch('/companies/' + editingCompanyId, { method: 'PATCH', body: JSON.stringify({ ...payload, version: editingVersions.company }) });
+      ownSaveDone = true;
     } else {
-      company = await apiFetch('/companies', { method: 'POST', body: JSON.stringify(payload) });
+      company = await apiFetch('/companies', { method: 'POST', headers: idempotencyHeader('company'), body: JSON.stringify(payload) });
     }
 
     const savedImages = [];
@@ -1795,6 +1837,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         loadCompanies();
         return;
       }
+      uploadResponse.text().catch(() => {});  // drain (no-store body)
     }
 
     // Flush the director rows: create any new ones, rename existing ones,
@@ -1844,6 +1887,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           loadCompanies();
           return;
         }
+        uploadResponse.text().catch(() => {});  // drain (no-store body)
       }
     }
 
@@ -1855,18 +1899,26 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
     editingCompanyId = null;
     editingCompany = null;
+    idempotencyDone('company');  // only now: an image that failed above leaves the key, so Save again reuses the same company
     loadCompanies();
     showSuccessTick(logoNote ? 'Company saved — ' + logoNote : 'Company saved');
   } catch (err) {
-    showBanner('company-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingCompanyId;
+    showSaveError(err, 'company-modal-banner', id && (async () => { startEditCompany(await apiFetch('/companies/' + id)); loadCompanies(); }));
   } finally {
-    document.getElementById('company-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('company-form-submit-btn'), false);
+    // Our PATCH went through but a logo/seal/MD step stopped early: those
+    // uploads bumped the version too, so take it over for the next Save.
+    // shortcut: someone else's edit in that same second would be taken over too; fine at this size.
+    if (ownSaveDone && editingCompanyId) {
+      apiFetch('/companies/' + editingCompanyId).then(c => { editingVersions.company = c.version; }).catch(() => {});
+    }
   }
 });
 
 function startEditCompany(company) {
   editingCompanyId = company.id;
+  editingVersions.company = company.version;
   editingCompany = company;
   document.getElementById('company-modal').classList.add('active');
   document.getElementById('company-form-title').textContent = 'Edit company — ' + company.name;
@@ -2054,12 +2106,13 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
       : null
   };
   try {
-    document.getElementById('customer-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('customer-form-submit-btn'), true);
     let created = null;
     if (editingCustomerId) {
-      await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify(payload) });
+      await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify({ ...payload, version: editingVersions.customer }) });
     } else {
-      created = await apiFetch('/customers', { method: 'POST', body: JSON.stringify({ ...payload, group_id: chosenGroupId('customer-form') }) });
+      created = await apiFetch('/customers', { method: 'POST', headers: idempotencyHeader('customer'), body: JSON.stringify({ ...payload, group_id: chosenGroupId('customer-form') }) });
+      idempotencyDone('customer');
     }
     document.getElementById('customer-form').reset();
     document.getElementById('customer-modal').classList.remove('active');
@@ -2078,15 +2131,16 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
       document.getElementById('doc-modal').classList.add('active');
     }
   } catch (err) {
-    showBanner('customer-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingCustomerId;
+    showSaveError(err, 'customer-modal-banner', id && (async () => { startEditCustomer(await apiFetch('/customers/' + id)); loadCustomers(); }));
   } finally {
-    document.getElementById('customer-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('customer-form-submit-btn'), false);
   }
 });
 
 function startEditCustomer(customer) {
   editingCustomerId = customer.id;
+  editingVersions.customer = customer.version;
   showGroupSelect('customer-form', false);
   document.getElementById('customer-modal').classList.add('active');
   document.getElementById('customer-form-title').textContent = 'Edit customer — ' + customer.name;
@@ -2617,7 +2671,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   }
   productDupWarningAccepted = false;
   try {
-    document.getElementById('product-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('product-form-submit-btn'), true);
     let product;
     if (editingProductId) {
       // sku can't be changed via PATCH (it's the identity); unit_price is
@@ -2627,10 +2681,11 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
       const { sku, unit_price, ...updatePayload } = payload;
       product = await apiFetch('/products/' + editingProductId, {
         method: 'PATCH',
-        body: JSON.stringify(updatePayload)
+        body: JSON.stringify({ ...updatePayload, version: editingVersions.product })
       });
     } else {
-      product = await apiFetch('/products', { method: 'POST', body: JSON.stringify({ ...payload, group_id: chosenGroupId('product-form') }) });
+      product = await apiFetch('/products', { method: 'POST', headers: idempotencyHeader('product'), body: JSON.stringify({ ...payload, group_id: chosenGroupId('product-form') }) });
+      idempotencyDone('product');
     }
 
     if (fileInput.files.length > 0) {
@@ -2640,7 +2695,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
         body: formData
-      });
+      }).catch(() => ({ ok: false, json: async () => ({ detail: 'the connection failed' }) }));
       if (!uploadResponse.ok) {
         let detail = 'Catalog file upload failed.';
         try {
@@ -2649,11 +2704,19 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
         } catch (parseErr) {
           // response wasn't JSON — stick with the generic message
         }
-        showBanner('product-modal-banner', `Product saved, but the catalog file didn't upload: ${detail}`);
+        if (!editingProductId) {
+          // All or nothing for a new product: take it back out, so there's
+          // no half-saved product without its file. (An edit already saved.)
+          await apiFetch('/products/' + product.id, { method: 'DELETE' }).catch(() => {});
+          showBanner('product-modal-banner', `Nothing was saved — the catalog file didn't upload: ${detail}`);
+        } else {
+          showBanner('product-modal-banner', `Product saved, but the catalog file didn't upload: ${detail}`);
+        }
         showErrorCross("The catalog file didn't upload");
         loadProducts();
         return;
       }
+      uploadResponse.text().catch(() => {});  // drain (no-store body)
     }
 
     if (!editingProductId && pendingSubItems.length > 0) {
@@ -2682,11 +2745,11 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     loadProducts();
     showSuccessTick('Product saved');
   } catch (err) {
-    if (err.detail && err.detail.existing) showProductExistsBanner(err.detail.existing);  // 409 race
-    else showBanner('product-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingProductId;
+    if (err.detail && err.detail.existing) { showProductExistsBanner(err.detail.existing); showErrorCross(err.message); }  // 409 race
+    else showSaveError(err, 'product-modal-banner', id && (async () => { startEditProduct(await apiFetch('/products/' + id)); loadProducts(); }));
   } finally {
-    document.getElementById('product-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('product-form-submit-btn'), false);
   }
 });
 
@@ -2795,6 +2858,7 @@ async function loadProductDuplicates() {
 
 function startEditProduct(product) {
   editingProductId = product.id;
+  editingVersions.product = product.version;
   showGroupSelect('product-form', false);
   document.getElementById('product-form-title').textContent = 'Edit product — ' + product.sku;
   document.getElementById('product-sku').value = product.sku;

@@ -17,6 +17,7 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     budget_year: Optional[str] = None
     description: Optional[str] = None
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
 
 class ProjectOut(BaseModel):
@@ -28,6 +29,7 @@ class ProjectOut(BaseModel):
     description: Optional[str]
     is_deleted: bool
     created_at: datetime
+    version: int = 1
 
 
 HeaderStyle = Literal["logo", "letterhead"]
@@ -53,6 +55,7 @@ class CompanyUpdate(BaseModel):
     support_email: Optional[str] = None
     header_style: Optional[HeaderStyle] = None
     is_primary: Optional[bool] = None
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
 
 class CompanyOut(BaseModel):
@@ -70,6 +73,7 @@ class CompanyOut(BaseModel):
     is_primary: bool
     is_deleted: bool
     created_at: datetime
+    version: int = 1
 
 
 class CompanyDirectorCreate(BaseModel):
@@ -125,6 +129,7 @@ class CustomerUpdate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     billing_address: Optional[dict] = None
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
     _organization = field_validator("organization")(_blank_to_none)
 
@@ -140,6 +145,7 @@ class CustomerOut(BaseModel):
     billing_address: Optional[dict]
     is_deleted: bool
     created_at: datetime
+    version: int = 1
 
 
 class DocumentItemIn(BaseModel):
@@ -196,6 +202,7 @@ class DocumentUpdate(BaseModel):
     end_user_phone: Optional[str] = None
     end_user_email: Optional[str] = None
     items: list[DocumentItemIn] = []
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
 
 class DocumentOut(BaseModel):

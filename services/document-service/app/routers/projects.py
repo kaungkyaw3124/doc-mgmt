@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.concurrency import check_version, claim_idempotency_key, remember
 from app.core.group_scope import Scope, get_scope, scoped, get_or_404, group_for_create
 from app import models, schemas
 
@@ -37,11 +38,16 @@ def create_project(
     db: Session = Depends(get_db),
     scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _require_edit_access(x_access_level)
     data = payload.model_dump()
     data["group_id"] = group_for_create(scope, payload.group_id)
-    project = models.Project(**data)
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /projects")
+    if replay_id:
+        return get_or_404(db, models.Project, replay_id, scope, "project not found")
+    project = models.Project(id=uuid.uuid4(), **data)
+    remember(held, project.id)
     db.add(project)
     db.commit()
     db.refresh(project)
@@ -101,8 +107,9 @@ def update_project(
 ):
     _require_edit_access(x_access_level)
     project = get_or_404(db, models.Project, project_id, scope, "project not found")
+    check_version(project, payload.version)
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    for field, value in payload.model_dump(exclude_unset=True, exclude={"version"}).items():
         setattr(project, field, value)
 
     db.commit()

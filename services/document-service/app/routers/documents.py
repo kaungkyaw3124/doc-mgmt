@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.concurrency import check_version, claim_idempotency_key, next_number, peek_number, remember
 from app.core.storage import upload_file, get_presigned_url, get_file_bytes
 from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app.core.catalogue_client import (
@@ -148,33 +149,31 @@ def _manual_end_user(payload) -> dict:
     return values
 
 
-def _generate_doc_number(db: Session, company_id: uuid.UUID | None = None) -> str:
+def _doc_number_base(db: Session, company_id: uuid.UUID | None) -> str:
     """
-    e.g. SS-20260723/001 — {chosen company's short_name}-{YYYYMMDD}/{3-digit
-    sequence for that company+day, starting at 001}. Falls back to "DOC" as
-    the prefix if no company was chosen yet, or it has no short_name set.
+    e.g. "SS-20260723/" — {chosen company's short_name}-{YYYYMMDD}/, to which
+    the 3-digit sequence for that company+day (from 001) is appended. Falls
+    back to "DOC" as the prefix if no company was chosen yet, or it has no
+    short_name set.
     """
     company = db.query(models.Company).filter_by(id=company_id).first() if company_id else None
     prefix = (company.short_name if company and company.short_name else "DOC").upper()
+    return f"{prefix}-{date.today():%Y%m%d}/"
 
-    today = date.today()
-    date_part = f"{today.year}{today.month:02d}{today.day:02d}"
-    base_prefix = f"{prefix}-{date_part}/"
 
-    # Numbering is per company across ALL groups (doc_number is unique), so this
-    # deliberately looks at every document, not just the caller's.
-    existing_count = (
-        scoped(db, models.Document, ALL)
-        .filter(models.Document.doc_number.like(f"{base_prefix}%"))
-        .count()
-    )
+def _max_doc_seq(db: Session, base: str) -> int:
+    """Highest sequence already used under `base` — seeds its counter.
+    Numbering is per prefix across ALL groups (doc_number is unique)."""
+    rows = scoped(db, models.Document, ALL).with_entities(models.Document.doc_number).filter(models.Document.doc_number.like(f"{base}%"))
+    return max((int(m.group(1)) for (n,) in rows if (m := re.fullmatch(rf"{re.escape(base)}(\d+)", n))), default=0)
 
-    seq = existing_count + 1
-    while True:
-        candidate = f"{base_prefix}{seq:03d}"
-        if not scoped(db, models.Document, ALL).filter_by(doc_number=candidate).first():
-            return candidate
-        seq += 1
+
+def _generate_doc_number(db: Session, company_id: uuid.UUID | None = None, reseed: bool = False) -> str:
+    """Takes the next number from the locked per-prefix+day counter (two
+    simultaneous creates can never get the same one — see core/concurrency.py).
+    Must run inside the create's own transaction."""
+    base = _doc_number_base(db, company_id)
+    return f"{base}{next_number(db, f'doc:{base}', lambda: _max_doc_seq(db, base), reseed):03d}"
 
 
 def _check_links(db: Session, scope: Scope, group_id, customer_id, project_id):
@@ -197,14 +196,16 @@ def create_document(
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
     scope: Scope = Depends(get_scope),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _require_edit_access(x_access_level)
     group_id = group_for_create(scope, payload.group_id)
+    # First: a repeat must get the first answer, not "doc_number already exists".
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /documents")
+    if replay_id:
+        return get_or_404(db, models.Document, replay_id, scope, "document not found")
 
-    doc_number = payload.doc_number or _generate_doc_number(db, payload.company_id)
-
-    existing = scoped(db, models.Document, ALL).filter_by(doc_number=doc_number).first()  # unique across all groups
-    if existing:
+    if payload.doc_number and scoped(db, models.Document, ALL).filter_by(doc_number=payload.doc_number).first():  # unique across all groups
         raise HTTPException(status_code=409, detail="doc_number already exists")
 
     if payload.currency not in VALID_CURRENCIES:
@@ -226,10 +227,15 @@ def create_document(
         if director.company_id != payload.company_id:
             raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
+    # One transaction: header, line items, the "created" audit entry, the
+    # idempotency key and the counter bump commit together or not at all.
+    # Items first: this may call catalogue-service, and the counter row stays
+    # locked from next_number until the commit.
+    line_items, subtotal, tax_total = _process_items(payload.items, db, scope)
     doc = models.Document(
+        id=uuid.uuid4(),
         group_id=group_id,
         doc_type=payload.doc_type,
-        doc_number=doc_number,
         customer_id=payload.customer_id,
         project_id=payload.project_id,
         company_id=payload.company_id,
@@ -239,25 +245,33 @@ def create_document(
         due_date=payload.due_date,
         doc_metadata=payload.doc_metadata,
         terms_and_conditions=payload.terms_and_conditions,
+        items=line_items,
+        subtotal=subtotal,
+        tax_total=tax_total,
+        total=subtotal + tax_total,
+        status="draft",
         **end_user,
     )
-
-    line_items, subtotal, tax_total = _process_items(payload.items, db, scope)
-    doc.items = line_items
-    doc.subtotal = subtotal
-    doc.tax_total = tax_total
-    doc.total = subtotal + tax_total
-    doc.status = "draft"
-
-    db.add(doc)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="doc_number already exists")
+    remember(held, doc.id)
+    audit = models.AuditLogEntry(document_id=doc.id, username=x_username or "unknown", action="created")
+    # A generated number that still clashes (someone typed it by hand) is
+    # retried once with the counter moved past the highest number in use; the
+    # savepoint keeps the rest of the transaction.
+    for attempt in range(2):
+        doc.doc_number = payload.doc_number or _generate_doc_number(db, payload.company_id, reseed=attempt > 0)
+        try:
+            with db.begin_nested():  # add inside: begin_nested() flushes pending objects before its SAVEPOINT
+                db.add(doc)
+                db.flush()
+            break
+        except IntegrityError:
+            if payload.doc_number or attempt:
+                db.rollback()
+                raise HTTPException(status_code=409, detail="doc_number already exists")
+    db.add(audit)  # after the document row is flushed: no ORM relationship orders the FK for us
+    db.commit()
     db.refresh(doc)
-    index_document(doc)
-    log_action(db, doc.id, x_username, "created")
+    index_document(doc)  # after the commit; a failure is logged and fixed by scripts/reindex.sh
     return doc
 
 
@@ -435,7 +449,8 @@ def preview_next_doc_number(company_id: uuid.UUID | None = None, db: Session = D
     actually submitted if two people open the form at once — creation
     still re-generates and re-checks uniqueness at that point.
     """
-    return {"doc_number": _generate_doc_number(db, company_id)}
+    base = _doc_number_base(db, company_id)
+    return {"doc_number": f"{base}{peek_number(db, f'doc:{base}', lambda: _max_doc_seq(db, base)):03d}"}
 
 
 @router.get("/trash", response_model=list[schemas.DocumentOut])
@@ -553,6 +568,7 @@ def update_document(
     _require_edit_access(x_access_level)
 
     doc = get_or_404(db, models.Document, document_id, scope, "document not found")
+    check_version(doc, payload.version)
 
     if payload.currency is not None and payload.currency not in VALID_CURRENCIES:
         raise HTTPException(status_code=422, detail=f"currency must be one of {sorted(VALID_CURRENCIES)}")
@@ -590,11 +606,12 @@ def update_document(
     doc.subtotal = subtotal
     doc.tax_total = tax_total
     doc.total = subtotal + tax_total
+    doc.updated_at = datetime.utcnow()  # always UPDATE the header row, so an items-only edit still bumps (and checks) the version
+    db.add(models.AuditLogEntry(document_id=doc.id, username=x_username or "unknown", action="edited"))  # same transaction as the edit
 
     db.commit()
     db.refresh(doc)
     index_document(doc)
-    log_action(db, doc.id, x_username, "edited")
     return doc
 
 

@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.concurrency import check_version, claim_idempotency_key, remember
 from app.core.group_scope import Scope, get_scope, scoped, get_or_404, group_for_create
 from app import models, schemas
 
@@ -24,11 +25,16 @@ def create_customer(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     scope: Scope = Depends(get_scope),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _require_edit_access(x_access_level)
     data = payload.model_dump()
     data["group_id"] = group_for_create(scope, payload.group_id)
-    customer = models.Customer(**data)
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /customers")
+    if replay_id:
+        return get_or_404(db, models.Customer, replay_id, scope, "customer not found")
+    customer = models.Customer(id=uuid.uuid4(), **data)
+    remember(held, customer.id)
     db.add(customer)
     db.commit()
     db.refresh(customer)
@@ -65,8 +71,9 @@ def update_customer(
 ):
     _require_edit_access(x_access_level)
     customer = get_or_404(db, models.Customer, customer_id, scope, "customer not found")
+    check_version(customer, payload.version)
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    for field, value in payload.model_dump(exclude_unset=True, exclude={"version"}).items():
         setattr(customer, field, value)
 
     db.commit()

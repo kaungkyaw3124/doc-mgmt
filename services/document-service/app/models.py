@@ -20,6 +20,8 @@ class Project(Base):
     description = Column(Text)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
     documents = relationship("Document", back_populates="project")
 
@@ -41,6 +43,8 @@ class Company(Base):
     is_primary = Column(Boolean, default=False, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
 
 class CompanyDirector(Base):
@@ -77,6 +81,8 @@ class Customer(Base):
     billing_address = Column(JSONB)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
     documents = relationship("Document", back_populates="customer")
 
@@ -112,9 +118,11 @@ class Document(Base):
     doc_metadata = Column("metadata", JSONB)
     terms_and_conditions = Column(Text)
     file_object_key = Column(String(500))
-    version = Column(Integer, default=1)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
     customer = relationship("Customer", back_populates="documents")
     project = relationship("Project", back_populates="documents")
@@ -152,3 +160,20 @@ class AuditLogEntry(Base):
     username = Column(String(100), nullable=False)
     action = Column(String(30), nullable=False)  # "created" | "viewed" | "edited" | "status_changed" | "file_uploaded" | "deleted" | "restored"
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Counter(Base):
+    """Number counters (doc numbers per company prefix + day) — see core/concurrency.py."""
+    __tablename__ = "counters"
+
+    name = Column(String(120), primary_key=True)  # e.g. "doc:SS-20261118/"
+    value = Column(Integer, nullable=False)  # the last number handed out
+
+
+class IdempotencyKey(Base):
+    """An Idempotency-Key a create endpoint already handled, and the record it made."""
+    __tablename__ = "idempotency_keys"
+
+    key = Column(String(255), primary_key=True)  # "<endpoint>:<client key>"
+    resource_id = Column(UUID(as_uuid=True))
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
