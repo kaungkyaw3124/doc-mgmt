@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Iteration | **22** |
-| Goal | The quotation **XLSX prints with all 7 columns on every page** (No, Item, Qty, Unit, Price, Amount, Remark). Today Excel splits the sheet: columns A–E on one page, Price/Amount/Remark on a second page |
+| Goal | **Part A** — The quotation **XLSX prints with all 7 columns on every page** (No, Item, Qty, Unit, Price, Amount, Remark). Today Excel splits the sheet: columns A–E on one page, Price/Amount/Remark on a second page. **Part B** — the document **type** decides the heading: an Invoice must say INVOICE, not QUOTATION (see "Part B" at the bottom) |
 | Attempt limit | 5 per failing check |
 | Status | QUEUED |
 
@@ -54,3 +54,33 @@ Reproduced with LibreOffice: same workbook widths without fit-to-width → 2 pag
 
 ## Out of scope — record under "Found but not fixed"
 - Landscape option, other paper sizes, Excel-specific rendering differences.
+
+---
+
+## Part B — The heading follows the document type (do after Part A, same iteration)
+
+### What the user reported (with screenshots)
+In the Documents list a document was created with type **INVOICE** (e.g. `WF-20261118/001`), but the exported PDF (and Excel) says **QUOTATION** at the top and "Quotation ID" in the End User block. It must show the real type.
+
+### Root cause (found by the planner)
+The word is hardcoded: `services/document-service/app/templates/quotation.html` line ≈212 `<div class="title">QUOTATION</div>` and ≈231 `Quotation ID`; `export_quotation.py` line ≈163 `ws[f"A{row}"] = "QUOTATION"`, ≈208 `("Quotation ID", …)`, and the sheet name `ws.title = "Quotation"` (≈105). `doc_type` exists on the document (`quotation | invoice | proposal | catalogue`, `models.py` ≈89, `schemas.py` ≈163) but the export never reads it.
+
+### Decisions already made
+- Heading text from `doc_type`: `quotation` → **QUOTATION**, `invoice` → **INVOICE**, `proposal` → **PROPOSAL**. The ID label follows: **Quotation ID / Invoice ID / Proposal ID**. Single helper (e.g. a small dict next to the exporters) used by both PDF and XLSX; an unknown type falls back to the capitalised type name, never crashes.
+- Also follow the type in: the XLSX sheet name (`Quotation` / `Invoice` / `Proposal`), the download **file names** (check the export endpoints' `Content-Disposition` and the Documents list links; e.g. `invoice-WF-20261118-001.pdf`), and any other visible "Quotation" wording in exports (PDF `<title>`, running footer, XLSX document properties/title). Do not rename internal functions, routes, template file names or CSS classes.
+- **`catalogue` documents** have their own export (the "Catalogue" link) — do not change it; check that the PDF/XLSX export of a catalogue-type document still behaves as it does today and note what you saw in the report.
+- Layout, fonts, colours, the red heading style (10.5pt bold, same size as the Date line) stay exactly as they are; only the text changes. Heading widths: "PROPOSAL" is the longest — confirm it still fits the header area next to the logo/banner.
+- No change to the data model, API payloads, or the document form.
+
+### Tests
+- Unit tests (PDF via the HTML spy like the existing layout tests; XLSX via openpyxl): for each of `quotation`, `invoice`, `proposal` the heading text, ID label, sheet name and download filename match the type; the old text ("QUOTATION"/"Quotation ID") does **not** appear for invoice/proposal; the quotation output is identical to today's (existing layout/XLSX tests pass unchanged); an unknown type does not crash.
+- HTTP e2e: create one document of each type through the API, fetch `/export/pdf` and `/export/xlsx` (TestClient + `X-Internal-Secret` as in the other e2e tests) and check the extracted PDF text (pypdf/pymupdf) and the XLSX title cell.
+- Playwright (throwaway `loop-test` stack ONLY): create an Invoice in the UI, download its PDF and check the first page text contains INVOICE and "Invoice ID" and not QUOTATION. Screenshot of the PDF page 1: `loop/evidence/iter-22-invoice-pdf-p1.png`.
+
+### Acceptance checks (Part B)
+| # | Check | How to verify |
+|---|---|---|
+| B1 | Invoice/proposal exports show the right heading + ID label (PDF and XLSX) | tests + evidence PNG |
+| B2 | Sheet name and filenames follow the type | tests |
+| B3 | Quotation output unchanged; catalogue behaviour unchanged (noted) | existing tests pass untouched |
+| B4 | No regressions, data safety | `./scripts/verify.sh`, document-service suite; report states which stack tests ran on |
