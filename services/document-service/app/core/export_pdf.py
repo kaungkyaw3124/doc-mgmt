@@ -7,7 +7,7 @@ from PIL import Image
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
-from app.core.export_quotation import DEFAULT_TERMS, fit_inside, is_letterhead
+from app.core.export_quotation import DEFAULT_TERMS, doc_type_label, fit_inside, is_letterhead
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
 # autoescape=True: rendered fields include user-controlled document/company
@@ -130,6 +130,7 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         tax_rate_value = float(items_with_product[0][0].tax_rate)
 
     html_str = template.render(
+        doc_label=doc_type_label(getattr(document, "doc_type", None)),
         logo_data_uri=logo_data_uri,
         letterhead_size=letterhead_size,
         seal_data_uri=seal_data_uri,

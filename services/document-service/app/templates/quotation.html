@@ -209,7 +209,7 @@
       <div>{% if seal_data_uri %}<img class="seal" src="{{ seal_data_uri }}">{% endif %}</div>
     </div>
     {% endif %}
-    <div class="title">QUOTATION</div>
+    <div class="title">{{ doc_label|upper }}</div>
     <div class="date-line"><strong>Date:</strong> {{ issue_date }}</div>
 
     <div class="parties">
@@ -228,7 +228,7 @@
         <h3>END USER</h3>
         <table>
           <tr><td class="label">Customer Name</td><td>{{ customer.name if customer else "—" }}</td></tr>
-          <tr><td class="label">Quotation ID</td><td>{{ doc_number }}</td></tr>
+          <tr><td class="label">{{ doc_label }} ID</td><td>{{ doc_number }}</td></tr>
           <tr><td class="label">Organization</td><td>{{ customer.organization if customer else "—" }}</td></tr>
           <tr><td class="label">Address</td><td>{{ customer_address }}</td></tr>
         </table>

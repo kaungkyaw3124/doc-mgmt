@@ -1087,7 +1087,9 @@ async function downloadQuotation(documentId, docNumber, format, btn) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'Quotation-' + docNumber + '.' + extension;
+    // The server names the file after the document type (Invoice-…, Proposal-…).
+    const named = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+    a.download = named ? named[1] : 'Quotation-' + docNumber + '.' + extension;
     document.body.appendChild(a);
     a.click();
     a.remove();

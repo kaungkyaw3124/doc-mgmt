@@ -6,6 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
+from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils.units import pixels_to_EMU
@@ -75,6 +76,20 @@ def fit_inside(width, height, box_width, box_height):
     return width * scale, height * scale
 
 
+# The word a document's type puts on its exports (heading, ID label, sheet and
+# file name). Catalogue documents have their own export; their quotation
+# export keeps saying Quotation, as it always has.
+_DOC_TYPE_LABELS = {"quotation": "Quotation", "invoice": "Invoice", "proposal": "Proposal", "catalogue": "Quotation"}
+
+
+def doc_type_label(doc_type):
+    """'invoice' -> 'Invoice'. doc_type is not validated on input, so an unknown
+    type is capitalised only when it is plain ASCII letters/digits (safe in a
+    sheet name and a download header); anything else falls back to Quotation."""
+    t = (doc_type or "").lower()
+    return _DOC_TYPE_LABELS.get(t) or (t.capitalize() if t.isascii() and t.isalnum() else "Quotation")
+
+
 def is_letterhead(company, logo_bytes, logo_mime):
     return bool(company and company.get("header_style") == "letterhead" and logo_bytes and logo_mime != "image/svg+xml")
 
@@ -102,7 +117,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     """
     wb = Workbook()
     ws = wb.active
-    ws.title = "Quotation"
+    label = doc_type_label(getattr(document, "doc_type", None))
+    ws.title = label
 
     col_widths = [8, 55, 8, 8, 16, 16, 30]
     for i, w in enumerate(col_widths, start=1):
@@ -160,7 +176,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         row += 6  # reserve rows for the (now taller) logo/seal row before the title
 
     ws.merge_cells(f"A{row}:E{row}")
-    ws[f"A{row}"] = "QUOTATION"
+    ws[f"A{row}"] = label.upper()
     # Same heading treatment as the PDF (quotation.html .title): same size as the Date line
     # (11pt), bold dark red, down from 18pt black.
     ws[f"A{row}"].font = Font(name="Arial", size=11, bold=True, color="C00000")
@@ -205,7 +221,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     customer_org = _safe_str(customer.get("organization") or customer["name"]) if customer else "—"
     end_user_rows = [
         ("Customer Name", customer_name),
-        ("Quotation ID", document.doc_number),
+        (f"{label} ID", document.doc_number),
         ("Organization", customer_org),
         ("Address", customer_address),
     ]
@@ -423,6 +439,18 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # (the Supplier block above shows the director's own number, falling
     # back to this one only when the director has none).
     ws[f"B{row}"] = _safe_str(company.get("contact_no", "")) if company else ""
+
+    # The 7 columns are ~10.6in wide but A4 portrait prints ~7.3in, so without
+    # this Excel splits the sheet after column E (Price/Amount/Remark on page 2).
+    # Fit to 1 page wide, as many tall as needed; the print area stops anything
+    # outside A:G from widening the page (every image is anchored inside A:G).
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.orientation = "portrait"
+    ws.print_options.horizontalCentered = True
+    ws.print_area = f"A1:G{row}"
 
     buffer = BytesIO()
     wb.save(buffer)

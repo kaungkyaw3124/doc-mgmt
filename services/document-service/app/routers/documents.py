@@ -25,7 +25,7 @@ from app.core.catalogue_client import (
     CatalogueServiceUnavailableError,
 )
 from app.core.search_client import index_document, remove_document_from_index, rebuild_index
-from app.core.export_quotation import generate_quotation_xlsx
+from app.core.export_quotation import doc_type_label, generate_quotation_xlsx
 from app.core.export_pdf import generate_quotation_pdf
 from app.core.audit import log_action
 from app.core.group_scope import ALL, Scope, get_scope, scoped, get_or_404, group_for_create, require_superuser
@@ -922,7 +922,7 @@ def export_quotation_xlsx(
 ):
     doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, scope, x_allowed_projects)
     buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime)
-    filename = f"Quotation-{doc.doc_number}.xlsx"
+    filename = f"{doc_type_label(doc.doc_type)}-{doc.doc_number}.xlsx"
     return Response(
         content=buffer.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -939,7 +939,7 @@ def export_quotation_pdf(
 ):
     doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, scope, x_allowed_projects)
     buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime)
-    filename = f"Quotation-{doc.doc_number}.pdf"
+    filename = f"{doc_type_label(doc.doc_type)}-{doc.doc_number}.pdf"
     return Response(
         content=buffer.getvalue(),
         media_type="application/pdf",
