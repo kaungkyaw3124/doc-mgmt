@@ -140,3 +140,7 @@ None.
 - Fix the two small items in §7 (product-without-price 500, document-service logging).
 
 App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)
+
+**User stack after the rebuild:** 2 companies, 0 documents, 50 products, 1 customer and 1 project. The products, customer and project are all **unassigned**, so only superusers see them until `./scripts/assign-unassigned.sh "<group>"` is run.
+
+These counts were the same **before** this iteration touched the stack. The backup taken just before the rebuild (`backups/backup-2026-11-18-0335.tar.gz`, still at schema 0008) has documents 0, products 50 and groups 2. Yesterday's `backup-2026-11-17-1825.tar.gz` had documents 1, products 100 and groups 1. So the change happened between those two backups, outside this run. The rebuild itself only added nullable columns. If the missing document and products were not removed on purpose, `backup-2026-11-17-1825.tar.gz` still has them.
