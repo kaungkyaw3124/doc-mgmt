@@ -88,4 +88,6 @@ None. Two choices I made that the plan didn't spell out:
 - Decide whether a persistent cross-entity move audit table is wanted (§7).
 - Add a duplicate check on product moves (§7).
 
-APP_RUNNING_PLACEHOLDER
+App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)
+
+**User stack after the rebuild** (backup taken first: `backups/backup-2026-11-18-0956.tar.gz`): 0 documents, 100 products, 1 customer, 1 project. The new card shows **50 products, 1 customer and 1 project still unassigned**. Assign them with Admin → Groups → Unassigned data, or with `./scripts/assign-unassigned.sh "<group>"`.
