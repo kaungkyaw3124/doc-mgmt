@@ -106,4 +106,8 @@ None.
 - Add the two services' unit suites to `verify.sh` (they are run by hand in the service images today).
 
 ## 10. App running
-(filled in after the deploy — see the follow-up commit)
+App running at http://localhost:8080 (login: admin / CHANGE_ME, local only).
+- Backup before the rebuild: `backups/backup-2026-11-18-1040.tar.gz`. Then `up -d --build` (volumes kept), `restart nginx`, `/` → 200, all 9 services up.
+- The migrations ran on the user's data: docmgmt `0010_concurrency`, catalogue `0002_concurrency`. The SKU counter was seeded from the existing products as `sku:PRD = 100`. There are no doc-number counters because the stack has 0 documents.
+- Lists after the rebuild: products 100, customers 1, projects 1, companies 2, each with `version`. **Documents: 0**, which is not a loss: the pre-deploy backup's manifest also records `documents: 0`.
+- `/api/products` answers with `Cache-Control: no-store`.
