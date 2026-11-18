@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.group_scope import ALL, scoped
 from app.core.storage import upload_file, get_presigned_url
 from app import models, schemas
 
@@ -260,7 +261,8 @@ def delete_all_companies(
     refuse_in_production_or_view_only(x_access_level)
     keys = [k for row in db.query(models.Company.logo_object_key, models.Company.seal_object_key) for k in row]
     keys += [k for (k,) in db.query(models.CompanyDirector.seal_object_key)]
-    db.query(models.Document).update(
+    # Companies are shared by every group, so documents of ALL groups lose the link.
+    scoped(db, models.Document, ALL).update(
         {models.Document.company_id: None, models.Document.director_id: None}, synchronize_session=False
     )
     db.query(models.CompanyDirector).delete(synchronize_session=False)

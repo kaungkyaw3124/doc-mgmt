@@ -22,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
+from tests.scope_headers import ONE_GROUP
 from app.core.db import Base, get_db
 from app.main import app
 from app.routers import documents as documents_router
@@ -49,7 +50,7 @@ def client(monkeypatch):
     monkeypatch.setattr(documents_router, "index_document", lambda doc: None)
     monkeypatch.setattr(documents_router, "log_action", lambda *a, **k: None)
     # no `with`: skips startup (migrations/Postgres). The gateway secret is the real one nginx would add.
-    yield TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret})
+    yield TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret, **ONE_GROUP})
     app.dependency_overrides.clear()
 
 

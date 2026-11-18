@@ -10,7 +10,19 @@ logger = logging.getLogger(__name__)
 # catalogue-service's gateway_auth middleware requires this on every
 # request, including ones (like these) that bypass Nginx entirely —
 # see app/core/gateway_auth.py for why.
-_INTERNAL_HEADERS = {"X-Internal-Secret": settings.internal_shared_secret}
+# Explicitly superuser-scoped (group separation, see group_scope.py): these
+# calls only enrich/bundle a document the caller was already allowed to open,
+# whatever group its products belong to now. Lookups made on a user's behalf
+# pass their own scope instead (get_product(..., scope=...)).
+_INTERNAL_HEADERS = {"X-Internal-Secret": settings.internal_shared_secret, "X-Is-Superuser": "1"}
+
+
+def _scope_headers(scope) -> dict:
+    return {
+        "X-Internal-Secret": settings.internal_shared_secret,
+        "X-Is-Superuser": "1" if scope.superuser else "0",
+        "X-Group-Ids": ",".join(str(g) for g in sorted(scope.group_ids, key=str)),
+    }
 
 
 class ProductNotFoundError(Exception):
@@ -21,15 +33,16 @@ class CatalogueServiceUnavailableError(Exception):
     pass
 
 
-def get_product(product_id: uuid.UUID) -> dict:
+def get_product(product_id: uuid.UUID, scope=None) -> dict:
     """
-    Calls catalogue-service to fetch a product by id.
+    Calls catalogue-service to fetch a product by id — as `scope` (the
+    caller's groups) when given, else as the internal superuser.
     Raises ProductNotFoundError if the product doesn't exist,
     or CatalogueServiceUnavailableError if catalogue-service can't be reached.
     """
     url = f"{settings.catalogue_service_url}/products/{product_id}"
     try:
-        response = httpx.get(url, headers=_INTERNAL_HEADERS, timeout=5.0)
+        response = httpx.get(url, headers=_scope_headers(scope) if scope else _INTERNAL_HEADERS, timeout=5.0)
     except httpx.RequestError as exc:
         raise CatalogueServiceUnavailableError(
             f"could not reach catalogue-service at {settings.catalogue_service_url}: {exc}"

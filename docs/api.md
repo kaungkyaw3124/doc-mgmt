@@ -156,7 +156,8 @@ additionally require `X-Access-Level != view` via each router's
 
 | Endpoint | Method | Request | Response | Notes |
 |---|---|---|---|---|
-| `POST /documents` | POST | `DocumentCreate` (see below) | `201 DocumentOut` | Validates `currency ∈ {USD, MMK}`, and that `customer_id`/`project_id`/`company_id` (if given) exist. Auto-generates `doc_number` if omitted. Resolves each line item's `product_id` via catalogue-service (`422` if neither `product_id` nor `description`+`unit_price` given; `502` if catalogue-service is unreachable). Computes `subtotal`/`tax_total`/`total`. Indexes into Meilisearch, logs `"created"` |
+| `POST /documents/assign-unassigned` | POST | `{group_id}` | `{documents, customers, projects, reindexed}` | Superuser only: gives unassigned documents/customers/projects to that group, rebuilds the index (see [GROUPS.md](GROUPS.md)) |
+| `POST /documents` | POST | `DocumentCreate` (see below) | `201 DocumentOut` | Validates `currency ∈ {USD, MMK}`, and that `customer_id`/`project_id`/`company_id` (if given) exist. Auto-generates `doc_number` if omitted. Resolves each line item's `product_id` via catalogue-service (`422` if neither `product_id` nor `description`+`unit_price` given; `502` if catalogue-service is unreachable). Computes `subtotal`/`tax_total`/`total`. Indexes into Meilisearch, logs `"created"`. Owned by the caller's group (`group_id` required for superusers and multi-group users); customer/project must be in the same group (`422`) — see [GROUPS.md](GROUPS.md) |
 | `GET /documents` | GET | query: `doc_type?`, `status?` | `200 [DocumentOut]` | Filters `is_deleted=false`; project-restricted callers only see documents with `project_id IS NULL OR project_id IN (allowed)` |
 | `GET /documents/visible-product-ids` | GET | header `X-Allowed-Projects` | `{all: bool, product_ids: [...]}` | **Internal** — called by catalogue-service and search-service; a product is visible if it's on a line item of a document the caller could see |
 | `GET /documents/by-customer/{id}` | GET | — | `[{document_id, doc_number, doc_type, project_name}]` | "used in" popup data |
@@ -237,7 +238,8 @@ service access. Category writes additionally require
 
 | Endpoint | Method | Request | Response | Notes |
 |---|---|---|---|---|
-| `POST /products` | POST | `ProductCreate` | `201 ProductOut` | SKU auto-generated from category's `short_term` if omitted (`{PREFIX}-{seq:04d}`); indexes into Meilisearch |
+| `POST /products` | POST | `ProductCreate` | `201 ProductOut` | SKU auto-generated from category's `short_term` if omitted (`{PREFIX}-{seq:04d}`); indexes into Meilisearch. Owned by the caller's group (`group_id` required for superusers and multi-group users) |
+| `POST /products/assign-unassigned` | POST | `{group_id}` | `{products, reindexed}` | Superuser only: gives products with no group to that group, rebuilds the index (see [GROUPS.md](GROUPS.md)) |
 | `GET /products` | GET | query `category?`, `q?` (ILIKE name) | `[ProductOut]` | `is_deleted=false`; project-restricted callers see only products referenced by a document they can see (via a call to document-service) |
 | `POST /products/bulk-import` | POST | multipart `excel_file`, `catalogue_zip?` | `{created: [...], warnings: [...]}` | Excel needs a `Name` column (case-insensitive); optional zip/rar of `N.ext` files matched positionally to spreadsheet rows |
 | `GET /products/trash` | GET | — | `[ProductOut]` | soft-deleted, same visibility rule |

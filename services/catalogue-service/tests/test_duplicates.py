@@ -8,6 +8,7 @@ object storage are stubbed. No X-Allowed-Projects header -> unrestricted,
 so get_visible_product_ids makes no network call.
 """
 import io
+import uuid
 import zipfile
 
 import openpyxl
@@ -21,6 +22,9 @@ from sqlalchemy.pool import StaticPool
 
 from app import models
 from app.core.config import settings
+from tests.scope_headers import ONE_GROUP, TEST_GROUP
+
+GID = uuid.UUID(TEST_GROUP)
 from app.core.db import Base, get_db
 from app.core.duplicates import norm
 from app.main import app
@@ -50,7 +54,7 @@ def ctx(monkeypatch):
     monkeypatch.setattr(products_router, "index_product", lambda p: None)
     monkeypatch.setattr(products_router, "upload_file", lambda f, key, content_type=None: uploads.__setitem__(key, f.read()))
     # no `with`: skips startup (create_all on Postgres, Meilisearch settings)
-    client = TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret})
+    client = TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret, **ONE_GROUP})
     yield client, Session, uploads
     app.dependency_overrides.clear()
 
@@ -95,8 +99,8 @@ def test_same_name_with_a_different_description_is_allowed(ctx):
 def test_edit_price_on_an_existing_duplicate_pair_but_not_rename_into_one(ctx):
     client, Session, _ = ctx
     db = Session()  # a pair that predates the check, written straight to the DB
-    db.add_all([models.Product(sku="PRD-0001", name="Chair", description="Red"),
-                models.Product(sku="PRD-0002", name="Chair", description="Red")])
+    db.add_all([models.Product(group_id=GID, sku="PRD-0001", name="Chair", description="Red"),
+                models.Product(group_id=GID, sku="PRD-0002", name="Chair", description="Red")])
     db.commit()
     pid = db.query(models.Product).filter_by(sku="PRD-0002").one().id
     assert _ok(client.patch(f"/products/{pid}", json={"unit_price": "12.50"}), 200)["unit_price"] == "12.50"
@@ -150,12 +154,12 @@ def test_duplicates_groups(ctx):
     client, Session, _ = ctx
     db = Session()
     db.add_all([
-        models.Product(sku="A-1", name="Chair", description="Red"),
-        models.Product(sku="A-2", name="chair ", description="red"),
-        models.Product(sku="A-3", name="Chair", description="Blue"),
-        models.Product(sku="B-1", name="Bench", description="Oak"),
-        models.Product(sku="B-2", name="Bench", description="Oak", is_deleted=True),  # trashed: ignored
-        models.Product(sku="C-1", name="Cabinet", description="Tall"),               # singleton
+        models.Product(group_id=GID, sku="A-1", name="Chair", description="Red"),
+        models.Product(group_id=GID, sku="A-2", name="chair ", description="red"),
+        models.Product(group_id=GID, sku="A-3", name="Chair", description="Blue"),
+        models.Product(group_id=GID, sku="B-1", name="Bench", description="Oak"),
+        models.Product(group_id=GID, sku="B-2", name="Bench", description="Oak", is_deleted=True),  # trashed: ignored
+        models.Product(group_id=GID, sku="C-1", name="Cabinet", description="Tall"),               # singleton
     ])
     db.commit()
     r = _ok(client.get("/products/duplicates"), 200)

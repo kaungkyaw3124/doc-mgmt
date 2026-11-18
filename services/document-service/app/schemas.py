@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class ProjectCreate(BaseModel):
+    group_id: Optional[uuid.UUID] = None  # owning group; required only when the caller is in several (or is a superuser)
     name: str
     budget_year: Optional[str] = None  # e.g. "2025-2026"
     description: Optional[str] = None
@@ -20,6 +21,7 @@ class ProjectUpdate(BaseModel):
 
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    group_id: Optional[uuid.UUID] = None
     id: uuid.UUID
     name: str
     budget_year: Optional[str]
@@ -106,6 +108,7 @@ def _blank_to_none(value):
 
 
 class CustomerCreate(BaseModel):
+    group_id: Optional[uuid.UUID] = None  # owning group; required only when the caller is in several (or is a superuser)
     name: str
     organization: Optional[str] = None
     email: Optional[str] = None
@@ -128,6 +131,7 @@ class CustomerUpdate(BaseModel):
 
 class CustomerOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    group_id: Optional[uuid.UUID] = None
     id: uuid.UUID
     name: str
     organization: Optional[str] = None
@@ -155,6 +159,7 @@ class DocumentItemOut(DocumentItemIn):
 
 
 class DocumentCreate(BaseModel):
+    group_id: Optional[uuid.UUID] = None  # owning group; required only when the caller is in several (or is a superuser)
     doc_type: str  # quotation | invoice | proposal | catalogue
     doc_number: Optional[str] = None  # auto-generated if omitted, e.g. INV-2026-07-17
     customer_id: Optional[uuid.UUID] = None
@@ -195,6 +200,7 @@ class DocumentUpdate(BaseModel):
 
 class DocumentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    group_id: Optional[uuid.UUID] = None
     id: uuid.UUID
     doc_type: str
     doc_number: str
@@ -223,3 +229,7 @@ class DocumentOut(BaseModel):
     deleted_by: Optional[str] = None
     deleted_at: Optional[datetime] = None
     items: list[DocumentItemOut] = []
+
+
+class AssignUnassigned(BaseModel):
+    group_id: uuid.UUID

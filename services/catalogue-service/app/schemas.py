@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProductCreate(BaseModel):
+    group_id: Optional[uuid.UUID] = None  # owning group; required only when the caller is in several (or is a superuser)
     sku: Optional[str] = None  # auto-generated if omitted, e.g. COM-0001
     name: str
     description: Optional[str] = None
@@ -30,6 +31,7 @@ class ProductUpdate(BaseModel):
 class ProductOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    group_id: Optional[uuid.UUID] = None
     sku: str
     name: str
     description: Optional[str]
@@ -79,3 +81,7 @@ class CategoryOut(BaseModel):
     short_term: Optional[str]
     description: Optional[str]
     created_at: datetime
+
+
+class AssignUnassigned(BaseModel):
+    group_id: uuid.UUID

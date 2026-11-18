@@ -15,11 +15,11 @@ def test_category_and_product(admin, category, product):
     assert category["name"] in {c["name"] for c in listed.json()}
 
 
-def test_duplicate_product_is_blocked_and_reported(admin, product):
+def test_duplicate_product_is_blocked_and_reported(admin, product, group_id):
     """Loop iteration 8: creating the same product again (same name and
     description) is a 409; the duplicate-check / duplicates routes answer
     through the gateway. The fixture removes the product afterwards."""
-    again = admin.post("/products", json={"name": product["name"], "category": product["category"]})
+    again = admin.post("/products", json={"group_id": group_id, "name": product["name"], "category": product["category"]})
     assert again.status_code == 409, again.text
     assert again.json()["detail"]["existing"]["sku"] == product["sku"]
 

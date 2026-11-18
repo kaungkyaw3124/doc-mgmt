@@ -39,7 +39,7 @@ def test_quotation_lifecycle(admin, customer, quotation):
     assert doc_id not in {d["id"] for d in active.json()}
 
 
-def test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md(admin, customer):
+def test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md(admin, customer, group_id):
     """Loop iteration 1: the PDF's SUPPLIER heading carries the company name
     and the rows below it describe the MD picked on the document
     (director_id) — checked end to end through the gateway."""
@@ -56,7 +56,7 @@ def test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md(admi
             "address": "BUILDING NO.4", "contact_no": "09-988733966"})
         assert director.status_code == 201, director.text
 
-        doc = admin.post("/documents", json={
+        doc = admin.post("/documents", json={"group_id": group_id, 
             "doc_type": "quotation", "customer_id": customer["id"], "currency": "USD",
             "company_id": company_id, "director_id": director.json()["id"],
             "items": [{"description": unique("test-item"), "quantity": "1", "unit_price": "5.00"}]})
@@ -75,12 +75,12 @@ def test_quotation_pdf_supplier_block_shows_company_heading_and_selected_md(admi
         admin.delete(f"/companies/{company_id}")
 
 
-def test_quotation_with_one_time_manual_customer(admin):
+def test_quotation_with_one_time_manual_customer(admin, group_id):
     """Loop iteration 7: a customer typed on the document only. It prints in
     the PDF's END USER block, is never added to /customers, and the document
     is searchable by the typed name."""
     name = unique("Manual Buyer")  # unique token so search can't match an older run
-    doc = admin.post("/documents", json={
+    doc = admin.post("/documents", json={"group_id": group_id, 
         "doc_type": "quotation", "currency": "USD", "customer_id": None,
         "end_user_name": name, "end_user_organization": "Smoke Manual Org",
         "end_user_address": "No. 7, Smoke Street, Yangon", "end_user_phone": "09-000", "end_user_email": "m@x.example",
@@ -110,17 +110,17 @@ def test_quotation_with_one_time_manual_customer(admin):
         admin.delete(f"/documents/{doc_id}")
 
 
-def test_quotation_for_a_saved_customer_with_an_organization(admin):
+def test_quotation_for_a_saved_customer_with_an_organization(admin, group_id):
     """Loop iteration 9: a saved customer's optional Organization prints
     separately from its Name in the PDF's END USER block."""
     name = unique("Org Smoke Buyer")
     org = unique("Org Smoke Holdings")
-    cust = admin.post("/customers", json={"name": name, "organization": org})
+    cust = admin.post("/customers", json={"group_id": group_id, "name": name, "organization": org})
     assert cust.status_code == 201, cust.text
     assert cust.json()["organization"] == org
     doc_id = None
     try:
-        doc = admin.post("/documents", json={
+        doc = admin.post("/documents", json={"group_id": group_id, 
             "doc_type": "quotation", "currency": "USD", "customer_id": cust.json()["id"],
             "items": [{"description": unique("test-item"), "quantity": "1", "unit_price": "5.00"}]})
         assert doc.status_code == 201, doc.text

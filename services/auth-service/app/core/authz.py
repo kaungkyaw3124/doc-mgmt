@@ -96,3 +96,15 @@ def get_user_allowed_project_ids(db: Session, user: models.User):
     if not grants:
         return "ALL"
     return [str(g.project_id) for g in grants]
+
+
+def get_user_group_ids(db: Session, user: models.User) -> list[str]:
+    """The groups whose data this user may see/create (department separation,
+    forwarded by Nginx as X-Group-Ids): their ACTIVE groups — or, for a
+    superuser, every active group, so they can pick any as a record's owner."""
+    query = db.query(models.Group.id).filter(models.Group.is_active == True)  # noqa: E712
+    if not user.is_superuser:
+        query = query.join(models.UserGroup, models.UserGroup.group_id == models.Group.id).filter(
+            models.UserGroup.user_id == user.id
+        )
+    return sorted(str(row.id) for row in query.all())

@@ -284,6 +284,102 @@ async function doLogout(message = '', broadcast = true) {
   location.replace('/');
 }
 
+// ---------- department groups (loop iteration 19) ----------
+// Every document/customer/project/product belongs to one group; the server
+// only returns the caller's own (app/core/group_scope.py). The Group select
+// appears on the create forms only when there is a choice: superusers and
+// users in several groups. Records can't be moved yet, so it is hidden on edit.
+let myGroups = [];     // [{id, name}] the user may create records in
+let groupNames = {};   // id -> name, for the labels in the lists
+let defaultGroupId = '';
+const GROUP_FORMS = ['doc-form', 'project-form', 'customer-form', 'product-form'];
+
+async function loadMyGroups(me) {
+  // /admin/groups: every group for a superuser, the user's own otherwise
+  const groups = (await apiFetch('/admin/groups')) || [];
+  groups.forEach(g => { groupNames[g.id] = g.name; });
+  myGroups = groups.filter(g => g.is_active).sort((a, b) => a.name.localeCompare(b.name));
+  const mine = (me.groups || []).map(g => g.group_id);
+  const firstOwn = myGroups.find(g => mine.includes(g.id));
+  defaultGroupId = firstOwn ? firstOwn.id : (me.is_superuser ? '' : (myGroups[0] || {}).id || '');
+  GROUP_FORMS.forEach(formId => {
+    let wrap = document.getElementById(formId + '-group-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = formId + '-group-wrap';
+      wrap.innerHTML = `<label for="${formId}-group">Group</label><select id="${formId}-group"></select>`;
+      document.getElementById(formId).prepend(wrap);
+    }
+    wrap.querySelector('select').innerHTML = '<option value="">— choose a group —</option>' +
+      myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    showGroupSelect(formId, true);
+  });
+  // Bulk import: every imported product goes to this group.
+  let importWrap = document.getElementById('bulk-import-group-wrap');
+  if (!importWrap) {
+    importWrap = document.createElement('div');
+    importWrap.id = 'bulk-import-group-wrap';
+    importWrap.innerHTML = '<label for="bulk-import-group">Group (every imported product goes to it)</label><select id="bulk-import-group"></select>';
+    const btn = document.getElementById('bulk-import-submit-btn');
+    btn.parentNode.insertBefore(importWrap, btn);
+  }
+  const importSelect = importWrap.querySelector('select');
+  importSelect.innerHTML = document.getElementById('product-form-group').innerHTML;
+  importSelect.value = defaultGroupId;
+  importWrap.style.display = groupChoiceNeeded() ? '' : 'none';
+}
+
+function groupChoiceNeeded() {
+  return currentUserIsSuperuser || myGroups.length > 1;
+}
+
+function showGroupSelect(formId, creating) {
+  const wrap = document.getElementById(formId + '-group-wrap');
+  if (!wrap) return;
+  const show = creating && groupChoiceNeeded();
+  const select = wrap.querySelector('select');
+  wrap.style.display = show ? '' : 'none';
+  select.required = show;
+  if (creating) select.value = defaultGroupId;
+  if (formId === 'doc-form') refreshDocGroupPickers();
+}
+
+// The group the form's new record goes to, or undefined when the server decides (single group).
+function chosenGroupId(formId) {
+  const wrap = document.getElementById(formId + '-group-wrap');
+  return wrap && wrap.style.display !== 'none' ? (wrap.querySelector('select').value || null) : undefined;
+}
+
+// In the document form, pickers offer only rows of the document's group.
+function inDocGroup(row) {
+  const groupId = chosenGroupId('doc-form');
+  if (groupId) return row.group_id === groupId;
+  if (editingDocumentId) {
+    const doc = cachedDocuments.find(d => d.id === editingDocumentId);
+    if (doc) return row.group_id === doc.group_id;
+  }
+  return true;
+}
+
+function refreshDocGroupPickers() {
+  if (typeof refreshLineItemProductOptions === 'function') refreshLineItemProductOptions();
+  if (typeof refreshCustomerPicker === 'function') refreshCustomerPicker();
+  if (typeof refreshProjectPicker === 'function') refreshProjectPicker();
+}
+
+function groupTag(groupId) {
+  const name = groupId ? (groupNames[groupId] || 'Other group') : 'Unassigned';
+  return ` <span class="group-tag" style="display:inline-block; font-size:11px; padding:1px 6px; border-radius:8px; background:var(--surface-2, #eef); color:var(--text-dim); margin-left:4px;">${escapeHtml(name)}</span>`;
+}
+
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'doc-form-group') refreshDocGroupPickers();
+});
+['doc', 'project', 'customer', 'product'].forEach(kind => {
+  // after the form's own click handler (which resets the form)
+  document.getElementById('toggle-' + kind + '-form').addEventListener('click', () => setTimeout(() => showGroupSelect(kind + '-form', true)));
+});
+
 async function enterApp() {
   startSessionWatch();
   // Defence in depth (logout reloads the page anyway): start from "nothing
@@ -328,6 +424,7 @@ async function enterApp() {
     // Enforced server-side regardless; this only controls whether the
     // Delete button is rendered at all (never shown-then-rejected).
     currentUserCanDeleteDocuments = me.is_superuser || (me.service_access && me.service_access.includes('documents-delete'));
+    await loadMyGroups(me);
   } catch (e) {
     document.getElementById('whoami-username').textContent = '—';
   }
@@ -676,7 +773,7 @@ function addLineItem(prefill) {
     const descInput = div.querySelector('.li-desc');
     const qtyInput = div.querySelector('.li-qty');
     const remarkInput = div.querySelector('.li-remark');
-    const match = typed && cachedProducts.find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
+    const match = typed && cachedProducts.filter(inDocGroup).find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
     if (match) {
       div.dataset.resolvedProductId = match.id;
       descInput.value = match.name;
@@ -738,7 +835,7 @@ document.getElementById('doc-customer').addEventListener('input', (e) => {
 function refreshLineItemProductOptions() {
   const datalist = document.getElementById('product-datalist');
   if (!datalist) return;
-  datalist.innerHTML = cachedProducts.map(p => `<option value="${escapeHtml(p.sku)} — ${escapeHtml(p.name)}">`).join('');
+  datalist.innerHTML = cachedProducts.filter(inDocGroup).map(p => `<option value="${escapeHtml(p.sku)} — ${escapeHtml(p.name)}">`).join('');
 }
 
 document.getElementById('doc-form').addEventListener('submit', async (e) => {
@@ -827,6 +924,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       await apiFetch('/documents', {
         method: 'POST',
         body: JSON.stringify({
+          group_id: chosenGroupId('doc-form'),
           doc_type: document.getElementById('doc-type').value,
           doc_number: document.getElementById('doc-number').value || null,
           ...commonPayload
@@ -856,6 +954,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
 
 function startEditDocument(doc) {
   editingDocumentId = doc.id;
+  showGroupSelect('doc-form', false);
   document.getElementById('doc-modal').classList.add('active');
   document.getElementById('doc-form-title').textContent = 'Edit document — ' + doc.doc_number;
   document.getElementById('doc-form-submit-btn').textContent = 'Save changes';
@@ -1082,7 +1181,7 @@ function renderDocumentsTable(docs) {
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
   tbody.innerHTML = docs.map(d => `
     <tr>
-      <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button></td>
+      <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button>${groupTag(d.group_id)}</td>
       <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
       <td>${escapeHtml(docCustomerName(d))}</td>
       <td>${projectLabel(d.project_id)}</td>
@@ -1280,7 +1379,7 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     if (editingProjectId) {
       await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
-      created = await apiFetch('/projects', { method: 'POST', body: JSON.stringify(payload) });
+      created = await apiFetch('/projects', { method: 'POST', body: JSON.stringify({ ...payload, group_id: chosenGroupId('project-form') }) });
     }
     document.getElementById('project-form').reset();
     document.getElementById('project-modal').classList.remove('active');
@@ -1307,6 +1406,7 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
 
 function startEditProject(project) {
   editingProjectId = project.id;
+  showGroupSelect('project-form', false);
   document.getElementById('project-modal').classList.add('active');
   document.getElementById('project-form-title').textContent = 'Edit project — ' + project.name;
   document.getElementById('project-form-submit-btn').textContent = 'Save changes';
@@ -1363,7 +1463,7 @@ function resolveDocCompanyIdFromInput() {
 function refreshProjectPicker() {
   const datalist = document.getElementById('project-datalist');
   if (datalist) {
-    datalist.innerHTML = cachedProjects.map(p =>
+    datalist.innerHTML = cachedProjects.filter(inDocGroup).map(p =>
       `<option value="${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}">`
     ).join('');
   }
@@ -1383,7 +1483,7 @@ function resolveDocProjectIdFromInput() {
   const input = document.getElementById('doc-project');
   const typed = input.value.trim();
   if (!typed) return null;
-  const match = cachedProjects.find(p => {
+  const match = cachedProjects.filter(inDocGroup).find(p => {
     const label = `${p.name}${p.budget_year ? ' (' + p.budget_year + ')' : ''}`;
     return label.toLowerCase() === typed.toLowerCase() || p.name.toLowerCase() === typed.toLowerCase();
   });
@@ -1415,7 +1515,7 @@ function renderProjectsTable(projects) {
   }
   tbody.innerHTML = projects.map(p => `
     <tr>
-      <td>${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(p.name)}${groupTag(p.group_id)}</td>
       <td class="mono">${escapeHtml(p.budget_year || '—')}</td>
       <td>${fmtDate(p.created_at)}</td>
       <td><button class="link-btn-inline" data-view-project-id="${p.id}">View documents</button></td>
@@ -1954,7 +2054,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
     if (editingCustomerId) {
       await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
-      created = await apiFetch('/customers', { method: 'POST', body: JSON.stringify(payload) });
+      created = await apiFetch('/customers', { method: 'POST', body: JSON.stringify({ ...payload, group_id: chosenGroupId('customer-form') }) });
     }
     document.getElementById('customer-form').reset();
     document.getElementById('customer-modal').classList.remove('active');
@@ -1982,6 +2082,7 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
 
 function startEditCustomer(customer) {
   editingCustomerId = customer.id;
+  showGroupSelect('customer-form', false);
   document.getElementById('customer-modal').classList.add('active');
   document.getElementById('customer-form-title').textContent = 'Edit customer — ' + customer.name;
   document.getElementById('customer-form-submit-btn').textContent = 'Save changes';
@@ -1999,14 +2100,14 @@ function startEditCustomer(customer) {
 function refreshCustomerPicker() {
   const datalist = document.getElementById('customer-datalist');
   if (!datalist) return;
-  datalist.innerHTML = cachedCustomers.map(c => `<option value="${escapeHtml(c.name)}">`).join('');
+  datalist.innerHTML = cachedCustomers.filter(inDocGroup).map(c => `<option value="${escapeHtml(c.name)}">`).join('');
 }
 
 function resolveCustomerIdFromInput() {
   const input = document.getElementById('doc-customer');
   const typed = input.value.trim();
   if (!typed) return null;
-  const match = cachedCustomers.find(c => c.name.toLowerCase() === typed.toLowerCase());
+  const match = cachedCustomers.filter(inDocGroup).find(c => c.name.toLowerCase() === typed.toLowerCase());
   return match ? match.id : null;
 }
 
@@ -2034,7 +2135,7 @@ function renderCustomersTable(customers) {
   }
   tbody.innerHTML = customers.map(c => `
     <tr>
-      <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button></td>
+      <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button>${groupTag(c.group_id)}</td>
       <td>${c.organization ? escapeHtml(c.organization) : `<span style="color:var(--text-dim);">${escapeHtml(c.name)}</span>`}</td>
       <td>${escapeHtml(c.email || '—')}</td>
       <td>${escapeHtml(c.phone || '—')}</td>
@@ -2523,7 +2624,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
         body: JSON.stringify(updatePayload)
       });
     } else {
-      product = await apiFetch('/products', { method: 'POST', body: JSON.stringify(payload) });
+      product = await apiFetch('/products', { method: 'POST', body: JSON.stringify({ ...payload, group_id: chosenGroupId('product-form') }) });
     }
 
     if (fileInput.files.length > 0) {
@@ -2688,6 +2789,7 @@ async function loadProductDuplicates() {
 
 function startEditProduct(product) {
   editingProductId = product.id;
+  showGroupSelect('product-form', false);
   document.getElementById('product-form-title').textContent = 'Edit product — ' + product.sku;
   document.getElementById('product-sku').value = product.sku;
   document.getElementById('product-sku').disabled = true; // identity field, not editable
@@ -2738,6 +2840,8 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
   try {
     const formData = new FormData();
     formData.append('excel_file', excelInput.files[0]);
+    const importGroup = document.getElementById('bulk-import-group');
+    if (importGroup && importGroup.value) formData.append('group_id', importGroup.value);
     if (zipInput.files.length) {
       formData.append('catalogue_zip', zipInput.files[0]);
     }
@@ -3151,7 +3255,7 @@ function renderProductsTable(products) {
     <tr>
       <td class="mono">${escapeHtml(p.sku)}</td>
       <td>
-        <button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button>
+        <button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button>${groupTag(p.group_id)}
         ${p.description ? `<div style="font-size:12px; color:var(--text-dim); margin-top:2px; white-space:pre-line;">${escapeHtml(p.description)}</div>` : ''}
       </td>
       <td>${escapeHtml(p.category || '—')}</td>

@@ -227,19 +227,19 @@ print("wiped", n)
 
 @destructive
 @pytest.mark.restores_data
-def test_round_trip_restore_is_lossless(admin):
+def test_round_trip_restore_is_lossless(admin, group_id):
     # --- seed one of everything, with files ---
     cat = admin.post("/categories", json={"name": unique("bk-cat"), "short_term": "BK" + unique("")[-6:].upper()}).json()
-    product = admin.post("/products", json={"name": unique("Backup Widget"), "category": cat["name"], "unit_price": "9.50"}).json()
+    product = admin.post("/products", json={"group_id": group_id, "name": unique("Backup Widget"), "category": cat["name"], "unit_price": "9.50"}).json()
     assert admin.post(f"/products/{product['id']}/file",
                       files={"file": ("spec.pdf", b"%PDF-1.4\n% backup test\n%%EOF\n", "application/pdf")}).status_code in (200, 201)
     company = admin.post("/companies", json={"name": unique("Backup Co"), "short_name": "BK" + unique("")[-3:].upper()}).json()
     for kind, color in (("logo", (200, 30, 30)), ("seal", (30, 30, 200))):
         r = admin.post(f"/companies/{company['id']}/{kind}", files={"file": (f"{kind}.png", png(color), "image/png")})
         assert r.status_code == 200, r.text
-    customer = admin.post("/customers", json={"name": unique("Backup Customer")}).json()
-    project = admin.post("/projects", json={"name": unique("Backup Project")}).json()
-    doc = admin.post("/documents", json={
+    customer = admin.post("/customers", json={"group_id": group_id, "name": unique("Backup Customer")}).json()
+    project = admin.post("/projects", json={"group_id": group_id, "name": unique("Backup Project")}).json()
+    doc = admin.post("/documents", json={"group_id": group_id, 
         "doc_type": "quotation", "customer_id": customer["id"], "project_id": project["id"], "company_id": company["id"],
         "currency": "USD", "items": [{"description": unique("bk-item"), "quantity": "1", "unit_price": "9.50"}]}).json()
     assert admin.post(f"/documents/{doc['id']}/file",

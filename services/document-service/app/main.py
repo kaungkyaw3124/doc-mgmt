@@ -89,7 +89,7 @@ def on_startup():
     # before they can be used in search filters (e.g. ?doc_type=invoice).
     try:
         meili_client.index(MEILI_DOCS_INDEX).update_filterable_attributes(
-            ["doc_type", "status", "customer_id", "project_id"]
+            ["doc_type", "status", "customer_id", "project_id", "group_id"]
         )
     except Exception:
         pass  # Meilisearch may not be up yet on very first boot; safe to skip

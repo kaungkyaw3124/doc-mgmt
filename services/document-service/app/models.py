@@ -14,6 +14,7 @@ class Project(Base):
     __tablename__ = "projects"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     name = Column(String(255), nullable=False)
     budget_year = Column(String(20))  # e.g. "2025-2026"
     description = Column(Text)
@@ -68,6 +69,7 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     name = Column(String(255), nullable=False)
     organization = Column(String(255))  # optional; NULL means "print the name" (not a copy of it, so a rename flows through)
     email = Column(String(255))
@@ -83,6 +85,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     doc_type = Column(String(20), nullable=False, index=True)  # quotation | invoice | catalogue
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)  # soft delete — trashed, recoverable via recycle bin
     deleted_by = Column(String(100))  # username of who trashed it (from the server-verified X-Username header, never client-supplied) — cleared on restore

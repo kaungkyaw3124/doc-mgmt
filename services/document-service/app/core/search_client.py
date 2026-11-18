@@ -31,6 +31,7 @@ def index_document(doc) -> None:
 
         record = {
             "id": str(doc.id),
+            "group_id": str(doc.group_id) if doc.group_id else None,  # search-service filters on this
             "doc_type": doc.doc_type,
             "doc_number": doc.doc_number,
             "customer_id": str(doc.customer_id) if doc.customer_id else None,

@@ -18,6 +18,7 @@ def index_product(product) -> None:
     try:
         record = {
             "id": str(product.id),
+            "group_id": str(product.group_id) if product.group_id else None,  # search-service filters on this
             "sku": product.sku,
             "name": product.name,
             "description": product.description,

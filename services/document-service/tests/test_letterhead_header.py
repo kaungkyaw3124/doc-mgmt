@@ -348,8 +348,8 @@ def test_migration_chains_after_0007_as_the_single_head():
         src = f.read_text()
         revs.add(src.split('revision: str = "')[1].split('"')[0])
         downs.add(src.split('down_revision: Union[str, None] = ')[1].split("\n")[0].strip('"'))
-    assert revs - downs == {"0008_company_letterhead"}, "exactly one head"
-    assert "0007_md_position_default" in downs and len("0008_company_letterhead") <= 32
+    assert len(revs - downs) == 1, "exactly one head"   # iteration 19 added 0009_group_id on top
+    assert {"0007_md_position_default", "0008_company_letterhead"} <= downs and len("0008_company_letterhead") <= 32
 
 
 def test_migration_upgrade_and_downgrade_on_sqlite():

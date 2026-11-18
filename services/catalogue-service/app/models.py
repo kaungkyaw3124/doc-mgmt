@@ -11,6 +11,7 @@ class Product(Base):
     __tablename__ = "products"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     sku = Column(String(100), unique=True, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)  # soft delete — trashed, recoverable via recycle bin
     name = Column(String(255), nullable=False)

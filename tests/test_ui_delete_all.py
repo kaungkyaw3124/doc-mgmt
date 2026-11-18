@@ -49,12 +49,12 @@ def _open(page, view, toggle):
 
 # documents first: wiping them is not required by the others, but keeps the run tidy
 @pytest.mark.parametrize("name", ["documents", "products", "customers", "projects", "companies"])
-def test_one_click_deletes_all(admin, name):
+def test_one_click_deletes_all(admin, name, group_id):
     view, path, toggle, tbody, banner, empty, body = PAGES[name]
     # start empty so the banner count is exactly 3
     assert admin.delete(path).status_code == 200
     for _ in range(3):
-        r = admin.post(path, json=body())
+        r = admin.post(path, json={**body(), "group_id": group_id})  # companies ignore it (shared)
         assert r.status_code == 201, r.text
 
     expect = sync_api.expect

@@ -311,6 +311,8 @@ http {
             proxy_hide_header Server;
             set $service_name "documents";
             auth_request /_verify;
+            auth_request_set $group_ids $upstream_http_x_group_ids;
+            auth_request_set $is_superuser $upstream_http_x_is_superuser;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
             auth_request_set $access_level $upstream_http_x_access_level;
             auth_request_set $has_audit_log $upstream_http_x_has_audit_log;
@@ -325,6 +327,10 @@ http {
             # other path and set these trust headers itself — see
             # services/document-service/app/core/gateway_auth.py.
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            # Department separation (see app/core/group_scope.py): ALWAYS set
+            # from /verify, so a client-sent copy can never pass through.
+            proxy_set_header X-Group-Ids $group_ids;
+            proxy_set_header X-Is-Superuser $is_superuser;
             proxy_set_header X-Allowed-Projects $allowed_projects;
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Has-Audit-Log $has_audit_log;
@@ -347,11 +353,17 @@ http {
             proxy_hide_header Server;
             set $service_name "documents";
             auth_request /_verify;
+            auth_request_set $group_ids $upstream_http_x_group_ids;
+            auth_request_set $is_superuser $upstream_http_x_is_superuser;
             auth_request_set $access_level $upstream_http_x_access_level;
             rewrite ^/api/customers(.*)$ /customers$1 break;
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            # Department separation (see app/core/group_scope.py): ALWAYS set
+            # from /verify, so a client-sent copy can never pass through.
+            proxy_set_header X-Group-Ids $group_ids;
+            proxy_set_header X-Is-Superuser $is_superuser;
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Allowed-Projects "";
             proxy_set_header X-Has-Audit-Log "";
@@ -370,6 +382,9 @@ http {
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            # Shared data (not separated by group): blanked per the policy above.
+            proxy_set_header X-Group-Ids "";
+            proxy_set_header X-Is-Superuser "";
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Allowed-Projects "";
             proxy_set_header X-Has-Audit-Log "";
@@ -383,12 +398,18 @@ http {
             proxy_hide_header Server;
             set $service_name "documents";
             auth_request /_verify;
+            auth_request_set $group_ids $upstream_http_x_group_ids;
+            auth_request_set $is_superuser $upstream_http_x_is_superuser;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
             auth_request_set $access_level $upstream_http_x_access_level;
             rewrite ^/api/projects(.*)$ /projects$1 break;
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            # Department separation (see app/core/group_scope.py): ALWAYS set
+            # from /verify, so a client-sent copy can never pass through.
+            proxy_set_header X-Group-Ids $group_ids;
+            proxy_set_header X-Is-Superuser $is_superuser;
             proxy_set_header X-Allowed-Projects $allowed_projects;
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Has-Audit-Log "";
@@ -402,6 +423,8 @@ http {
             proxy_hide_header Server;
             set $service_name "products";
             auth_request /_verify;
+            auth_request_set $group_ids $upstream_http_x_group_ids;
+            auth_request_set $is_superuser $upstream_http_x_is_superuser;
             auth_request_set $has_category_access $upstream_http_x_has_category_access;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
             auth_request_set $access_level $upstream_http_x_access_level;
@@ -409,6 +432,10 @@ http {
             proxy_pass http://catalogue-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            # Department separation (see app/core/group_scope.py): ALWAYS set
+            # from /verify, so a client-sent copy can never pass through.
+            proxy_set_header X-Group-Ids $group_ids;
+            proxy_set_header X-Is-Superuser $is_superuser;
             proxy_set_header X-Has-Category-Access $has_category_access;
             proxy_set_header X-Allowed-Projects $allowed_projects;
             # Task 7/User Control gap fix: this was previously never
@@ -431,6 +458,9 @@ http {
             proxy_pass http://catalogue-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            # Shared data (not separated by group): blanked per the policy above.
+            proxy_set_header X-Group-Ids "";
+            proxy_set_header X-Is-Superuser "";
             proxy_set_header X-Has-Category-Access $has_category_access;
             proxy_set_header X-Allowed-Projects "";
             # Not read by categories.py today (it uses its own
@@ -494,11 +524,17 @@ http {
             proxy_hide_header Server;
             set $service_name "search";
             auth_request /_verify;
+            auth_request_set $group_ids $upstream_http_x_group_ids;
+            auth_request_set $is_superuser $upstream_http_x_is_superuser;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
             rewrite ^/api/search(.*)$ /search$1 break;
             proxy_pass http://search-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
+            # Department separation (see app/core/group_scope.py): ALWAYS set
+            # from /verify, so a client-sent copy can never pass through.
+            proxy_set_header X-Group-Ids $group_ids;
+            proxy_set_header X-Is-Superuser $is_superuser;
             proxy_set_header X-Allowed-Projects $allowed_projects;
         }
     }

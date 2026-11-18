@@ -1,4 +1,8 @@
 import logging
+import os
+
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
 
 from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
@@ -40,17 +44,22 @@ def _secret_problems() -> list[str]:
     return problems
 
 
+_ALEMBIC_INI = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
+
+
 @app.on_event("startup")
 def on_startup():
     enforce_production_secrets(settings.environment, _secret_problems())
 
-    # Matches document-service's current approach: create_all() for now,
-    # Alembic migrations to be introduced properly in a later session.
+    # create_all() creates missing tables; Alembic then adds columns to tables
+    # that already existed (create_all never alters one). Every migration is
+    # guarded/idempotent, so this order is safe from any starting state.
     Base.metadata.create_all(bind=engine)
+    alembic_command.upgrade(AlembicConfig(_ALEMBIC_INI), "head")
     ensure_bucket_exists()
 
     try:
-        meili_client.index(MEILI_PRODUCTS_INDEX).update_filterable_attributes(["category"])
+        meili_client.index(MEILI_PRODUCTS_INDEX).update_filterable_attributes(["category", "group_id"])
     except Exception:
         logger.warning(
             "couldn't set Meilisearch filterable attributes on startup — "

@@ -25,6 +25,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import models
 from app.core.config import settings
+from tests.scope_headers import ONE_GROUP
 from app.core.db import Base, get_db
 from app.main import app
 from app.routers import documents as documents_router
@@ -55,7 +56,7 @@ def ctx(monkeypatch):
     app.dependency_overrides[get_db] = _get_db
     monkeypatch.setattr(documents_router, "index_document", lambda doc: None)
     monkeypatch.setattr(documents_router, "log_action", lambda *a, **k: None)
-    client = TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret})
+    client = TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret, **ONE_GROUP})
     yield client, Session
     app.dependency_overrides.clear()
 
