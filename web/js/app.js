@@ -3809,6 +3809,7 @@ function syncSelection(table) {
   all.indeterminate = n > 0 && n < s.shown.length;
   s.bar.style.display = n ? 'flex' : 'none';
   s.count.textContent = `${n} selected`;
+  if (s.cartBtn) s.cartBtn.textContent = `Add to cart (${n})`;
 }
 
 Object.keys(MOVE_LINK_LABELS).forEach(table => {
@@ -3837,6 +3838,37 @@ Object.keys(MOVE_LINK_LABELS).forEach(table => {
     syncSelection(table);
   });
 });
+
+// ---------- add selected products to the cart (loop iteration 25) ----------
+// Quantity 1 each; products already in the cart are skipped (unlike the
+// single "+ Add to cart", which increments). The selection is always a subset
+// of the shown rows, which come from cachedProducts (the list is not paged).
+const BULK_CART_MAX = 200;
+function addSelectedToCart() {
+  const s = selection.products;
+  const ids = [...s.ids];
+  if (ids.length > BULK_CART_MAX) {
+    showErrorCross(`Select up to ${BULK_CART_MAX} at a time; ${ids.length} selected`);
+    return;
+  }
+  const inCart = new Set(cartItems.map(p => p.id));
+  const fresh = ids.filter(id => !inCart.has(id)).map(id => cachedProducts.find(p => p.id === id));
+  if (fresh.some(p => !p)) { showErrorCross('The product list changed — select again'); return; } // never add fewer silently
+  fresh.forEach(p => cartItems.push(Object.assign({}, p, { quantity: 1 })));
+  updateCartBadge();
+  const skipped = ids.length - fresh.length;
+  showSuccessTick(skipped ? `${fresh.length} added, ${skipped} already in cart` : `${fresh.length} added to cart`);
+  s.ids.clear();
+  applyFilterAndSort('products');
+}
+(() => {
+  const btn = selection.products.cartBtn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary';
+  btn.id = 'products-cart-selected-btn';
+  btn.addEventListener('click', addSelectedToCart);
+  selection.products.bar.appendChild(btn);
+})();
 
 function refreshMoveControls() {
   const options = myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
