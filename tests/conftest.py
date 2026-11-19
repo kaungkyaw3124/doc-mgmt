@@ -68,9 +68,26 @@ def admin(admin_token):
         yield c
 
 
+@pytest.fixture(scope="session", autouse=True)
+def group_id(admin):
+    """The group test records belong to (iteration 19: every document,
+    customer, project and product has an owning group, and the superuser
+    admin must name one). The admin is also made a member, so the UI forms
+    pre-select it. Reused across runs, never a real department."""
+    groups = {g["name"]: g for g in admin.get("/admin/groups").json()}
+    group = groups.get("Smoke Tests")
+    if group is None:
+        resp = admin.post("/admin/groups", json={"name": "Smoke Tests"})
+        assert resp.status_code == 201, f"create test group: {resp.status_code} {resp.text}"
+        group = resp.json()
+    resp = admin.post(f"/admin/groups/{group['id']}/members", json={"username": ADMIN_USERNAME})
+    assert resp.status_code in (201, 409), f"add admin to test group: {resp.status_code} {resp.text}"
+    return group["id"]
+
+
 @pytest.fixture
-def customer(admin):
-    resp = admin.post("/customers", json={"name": unique("test-customer")})
+def customer(admin, group_id):
+    resp = admin.post("/customers", json={"group_id": group_id, "name": unique("test-customer"), "group_id": group_id})
     assert resp.status_code == 201, f"create customer: {resp.status_code} {resp.text}"
     body = resp.json()
     yield body
@@ -80,10 +97,11 @@ def customer(admin):
     admin.delete(f"/customers/{body['id']}")
 
 
-def create_quotation(admin, customer_id: str, description: str) -> dict:
+def create_quotation(admin, customer_id: str, description: str, group_id: str) -> dict:
     resp = admin.post(
         "/documents",
         json={
+            "group_id": group_id,
             "doc_type": "quotation",
             "customer_id": customer_id,
             "currency": "USD",
@@ -95,8 +113,8 @@ def create_quotation(admin, customer_id: str, description: str) -> dict:
 
 
 @pytest.fixture
-def quotation(admin, customer):
-    doc = create_quotation(admin, customer["id"], unique("test-item"))
+def quotation(admin, customer, group_id):
+    doc = create_quotation(admin, customer["id"], unique("test-item"), group_id)
     yield doc
     admin.delete(f"/documents/{doc['id']}")
 
@@ -113,10 +131,10 @@ def category(admin):
 
 
 @pytest.fixture
-def product(admin, category):
+def product(admin, category, group_id):
     resp = admin.post(
         "/products",
-        json={"name": unique("test-product"), "category": category["name"], "unit_price": "12.50"},
+        json={"group_id": group_id, "name": unique("test-product"), "category": category["name"], "unit_price": "12.50"},
     )
     assert resp.status_code == 201, f"create product: {resp.status_code} {resp.text}"
     body = resp.json()

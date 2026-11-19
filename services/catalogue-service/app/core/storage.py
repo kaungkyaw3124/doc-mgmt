@@ -41,6 +41,11 @@ def upload_file(file_obj, object_key: str, content_type: str = "application/octe
     return object_key
 
 
+def delete_file(object_key: str) -> None:
+    """Removes an object nothing points at (an upload whose database save failed)."""
+    s3_client.delete_object(Bucket=settings.minio_bucket, Key=object_key)
+
+
 def get_presigned_url(object_key: str, expires_in: int = 3600, force_download: bool = False) -> str:
     """
     force_download=True adds a Content-Disposition: attachment override, so

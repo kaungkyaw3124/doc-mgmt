@@ -19,6 +19,7 @@ from sqlalchemy.pool import StaticPool
 from app import models
 from app.core import storage
 from app.core.config import settings
+from tests.scope_headers import ONE_GROUP
 from app.core.db import Base, get_db
 from app.main import app
 from app.routers import documents as documents_router
@@ -51,7 +52,7 @@ def ctx(monkeypatch):
     monkeypatch.setattr(documents_router, "remove_document_from_index", lambda d: unindexed.append(str(d)))
     monkeypatch.setattr(storage.s3_client, "delete_object", lambda Bucket, Key: deleted_keys.append(Key))
     monkeypatch.setattr(settings, "environment", "development")
-    client = TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret})
+    client = TestClient(app, headers={"X-Internal-Secret": settings.internal_shared_secret, **ONE_GROUP})
     yield client, Session, unindexed, deleted_keys
     app.dependency_overrides.clear()
 

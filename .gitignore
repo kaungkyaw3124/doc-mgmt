@@ -9,3 +9,4 @@ infra/data/redis/
 .venv-tests/
 infra/data-loop-test/
 backups/
+loop/logs/

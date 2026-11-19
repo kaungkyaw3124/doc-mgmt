@@ -145,6 +145,16 @@ decodes the JWT and checks permissions itself.
 
 ---
 
+## Simultaneous use (loop iteration 21) — applies to document-service and catalogue-service
+
+- **Numbers**: document numbers (`<SHORT>-<YYYYMMDD>/<NNN>`, per prefix + day) and SKUs (`<PREFIX>-<NNNN>`, per prefix) come from a locked `counters` row taken inside the create's transaction — unique and gapless under parallel creates. A number typed by hand that clashes with the next generated one is skipped (one retry); a clash on a typed number is `409`. `GET /documents/next-number` only previews (takes nothing); the UI sends `doc_number: null` when the preview was not changed.
+- **Version check**: documents, products, customers, projects and companies return `version` (1, +1 per update). `PATCH` accepts `version`; a stale one gives `409 {"detail": "Someone else changed this. Reload to see their changes."}`. Without `version` there is no check (scripts, bulk tools), but two saves racing on the same row still cannot both win.
+- **Idempotency-Key** (optional header) on `POST /documents|/products|/customers|/projects|/companies`: a repeat within 24 h returns the first request's record (same status 201) instead of creating another — also for parallel repeats. Not on `POST /products/bulk-import`.
+- **All or nothing**: a document, its line items and its `created`/`edited` audit entry commit together. Bulk import: a row whose catalogue file fails to upload is not created (listed in `skipped`); `POST /products/{id}/file` returns `502` and changes nothing when storage is down. Search indexing runs after the commit and never fails a save; `scripts/reindex.sh` rebuilds both indexes from the database.
+- **Caching**: every `/api/*` answer has `Cache-Control: no-store` (`infra/nginx/cors.conf`).
+
+---
+
 ## document-service
 
 Gateway mapping: `infra/nginx/nginx.conf:75-127`. All routes below require a
@@ -156,7 +166,11 @@ additionally require `X-Access-Level != view` via each router's
 
 | Endpoint | Method | Request | Response | Notes |
 |---|---|---|---|---|
-| `POST /documents` | POST | `DocumentCreate` (see below) | `201 DocumentOut` | Validates `currency ∈ {USD, MMK}`, and that `customer_id`/`project_id`/`company_id` (if given) exist. Auto-generates `doc_number` if omitted. Resolves each line item's `product_id` via catalogue-service (`422` if neither `product_id` nor `description`+`unit_price` given; `502` if catalogue-service is unreachable). Computes `subtotal`/`tax_total`/`total`. Indexes into Meilisearch, logs `"created"` |
+| `POST /documents/assign-unassigned` | POST | `{group_id}` | `{documents, customers, projects, reindexed}` | Superuser only: gives unassigned documents/customers/projects to that group, rebuilds the index (see [GROUPS.md](GROUPS.md)) |
+| `POST /{documents\|customers\|projects}/{id}/move` | POST | `{group_id, with_links=true, dry_run=false}` | `{moved: {documents, customers, projects}, dry_run}` | Superuser only: moves the row (and with `with_links` its linked customer/project/documents) to an active group; 409 if a link would cross groups, 404 unknown id, 422 unknown/disabled group (see [GROUPS.md](GROUPS.md)) |
+| `POST /{documents\|customers\|projects}/move` | POST | `{ids: [...], group_id, with_links, dry_run}` | same | Bulk version, all or nothing |
+| `GET /documents/unassigned-counts` | GET | — | `{documents, customers, projects}` | Superuser only: rows with no group (recycle bin included) |
+| `POST /documents` | POST | `DocumentCreate` (see below) | `201 DocumentOut` | Validates `currency ∈ {USD, MMK}`, and that `customer_id`/`project_id`/`company_id` (if given) exist. Auto-generates `doc_number` if omitted. Resolves each line item's `product_id` via catalogue-service (`422` if neither `product_id` nor `description`+`unit_price` given; `502` if catalogue-service is unreachable). Computes `subtotal`/`tax_total`/`total`. Indexes into Meilisearch, logs `"created"`. Owned by the caller's group (`group_id` required for superusers and multi-group users); customer/project must be in the same group (`422`) — see [GROUPS.md](GROUPS.md) |
 | `GET /documents` | GET | query: `doc_type?`, `status?` | `200 [DocumentOut]` | Filters `is_deleted=false`; project-restricted callers only see documents with `project_id IS NULL OR project_id IN (allowed)` |
 | `GET /documents/visible-product-ids` | GET | header `X-Allowed-Projects` | `{all: bool, product_ids: [...]}` | **Internal** — called by catalogue-service and search-service; a product is visible if it's on a line item of a document the caller could see |
 | `GET /documents/by-customer/{id}` | GET | — | `[{document_id, doc_number, doc_type, project_name}]` | "used in" popup data |
@@ -237,7 +251,10 @@ service access. Category writes additionally require
 
 | Endpoint | Method | Request | Response | Notes |
 |---|---|---|---|---|
-| `POST /products` | POST | `ProductCreate` | `201 ProductOut` | SKU auto-generated from category's `short_term` if omitted (`{PREFIX}-{seq:04d}`); indexes into Meilisearch |
+| `POST /products` | POST | `ProductCreate` | `201 ProductOut` | SKU auto-generated from category's `short_term` if omitted (`{PREFIX}-{seq:04d}`); indexes into Meilisearch. Owned by the caller's group (`group_id` required for superusers and multi-group users) |
+| `POST /products/assign-unassigned` | POST | `{group_id}` | `{products, reindexed}` | Superuser only: gives products with no group to that group, rebuilds the index (see [GROUPS.md](GROUPS.md)) |
+| `POST /products/{id}/move`, `POST /products/move` | POST | `{group_id, with_links, dry_run}` (+ `ids` for bulk) | `{moved: {products}, dry_run}` | Superuser only: moves products (with `with_links`, linked bundle/sub-item products too); same errors as the document moves |
+| `GET /products/unassigned-counts` | GET | — | `{products}` | Superuser only |
 | `GET /products` | GET | query `category?`, `q?` (ILIKE name) | `[ProductOut]` | `is_deleted=false`; project-restricted callers see only products referenced by a document they can see (via a call to document-service) |
 | `POST /products/bulk-import` | POST | multipart `excel_file`, `catalogue_zip?` | `{created: [...], warnings: [...]}` | Excel needs a `Name` column (case-insensitive); optional zip/rar of `N.ext` files matched positionally to spreadsheet rows |
 | `GET /products/trash` | GET | — | `[ProductOut]` | soft-deleted, same visibility rule |

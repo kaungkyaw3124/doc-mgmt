@@ -102,10 +102,10 @@ def test_document_line_items_are_separated(page):
 
 
 @pytest.fixture
-def parts(admin, category):
+def parts(admin, category, group_id):
     made = []
     for part in ("CPU", "RAM", "GPU"):
-        r = admin.post("/products", json={"name": unique(f"UI Part {part}"), "category": category["name"],
+        r = admin.post("/products", json={"group_id": group_id, "name": unique(f"UI Part {part}"), "category": category["name"],
                                           "unit_price": "1.00"})
         assert r.status_code == 201, r.text
         made.append(r.json())

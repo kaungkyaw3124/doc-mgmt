@@ -5,6 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.concurrency import check_version, claim_idempotency_key, remember
+from app.core.group_scope import Scope, get_scope, scoped, get_or_404, group_for_create
 from app import models, schemas
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -34,10 +36,18 @@ def _require_edit_access(x_access_level: str | None):
 def create_project(
     payload: schemas.ProjectCreate,
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _require_edit_access(x_access_level)
-    project = models.Project(**payload.model_dump())
+    data = payload.model_dump()
+    data["group_id"] = group_for_create(scope, payload.group_id)
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /projects")
+    if replay_id:
+        return get_or_404(db, models.Project, replay_id, scope, "project not found")
+    project = models.Project(id=uuid.uuid4(), **data)
+    remember(held, project.id)
     db.add(project)
     db.commit()
     db.refresh(project)
@@ -47,9 +57,10 @@ def create_project(
 @router.get("", response_model=list[schemas.ProjectOut])
 def list_projects(
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
-    query = db.query(models.Project).filter(models.Project.is_deleted == False)  # noqa: E712
+    query = scoped(db, models.Project, scope).filter(models.Project.is_deleted == False)  # noqa: E712
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None:
         query = query.filter(models.Project.id.in_(allowed))
@@ -59,10 +70,11 @@ def list_projects(
 @router.get("/trash", response_model=list[schemas.ProjectOut])
 def list_trashed_projects(
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
     """The recycle bin — soft-deleted projects, same project-visibility rule as the main list."""
-    query = db.query(models.Project).filter(models.Project.is_deleted == True)  # noqa: E712
+    query = scoped(db, models.Project, scope).filter(models.Project.is_deleted == True)  # noqa: E712
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None:
         query = query.filter(models.Project.id.in_(allowed))
@@ -73,11 +85,10 @@ def list_trashed_projects(
 def get_project(
     project_id: uuid.UUID,
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
-    project = db.query(models.Project).filter_by(id=project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
+    project = get_or_404(db, models.Project, project_id, scope, "project not found")
 
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None and str(project.id) not in allowed:
@@ -91,14 +102,14 @@ def update_project(
     project_id: uuid.UUID,
     payload: schemas.ProjectUpdate,
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     _require_edit_access(x_access_level)
-    project = db.query(models.Project).filter_by(id=project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
+    project = get_or_404(db, models.Project, project_id, scope, "project not found")
+    check_version(project, payload.version)
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    for field, value in payload.model_dump(exclude_unset=True, exclude={"version"}).items():
         setattr(project, field, value)
 
     db.commit()
@@ -110,6 +121,7 @@ def update_project(
 def trash_project(
     project_id: uuid.UUID,
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     """Soft delete — hides it from the main list, but keeps it recoverable
@@ -117,9 +129,7 @@ def trash_project(
     are unaffected. For a permanent purge, use DELETE /{project_id}
     instead (only called from within the recycle bin)."""
     _require_edit_access(x_access_level)
-    project = db.query(models.Project).filter_by(id=project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
+    project = get_or_404(db, models.Project, project_id, scope, "project not found")
     project.is_deleted = True
     db.commit()
     db.refresh(project)
@@ -130,12 +140,11 @@ def trash_project(
 def restore_project(
     project_id: uuid.UUID,
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     _require_edit_access(x_access_level)
-    project = db.query(models.Project).filter_by(id=project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
+    project = get_or_404(db, models.Project, project_id, scope, "project not found")
     project.is_deleted = False
     db.commit()
     db.refresh(project)
@@ -146,15 +155,22 @@ def restore_project(
 @router.delete("")
 def delete_all_projects(
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
-    """Permanently deletes EVERY project (recycle bin included). Documents
-    are kept; their project_id is cleared first so the FK can't block it."""
+    """Permanently deletes every project in the caller's groups (recycle bin
+    included; a superuser: all). Documents are kept; their project_id is
+    cleared first so the FK can't block it."""
     from app.core.dev_delete_all import refuse_in_production_or_view_only
 
     refuse_in_production_or_view_only(x_access_level)
-    db.query(models.Document).update({models.Document.project_id: None}, synchronize_session=False)
-    deleted = db.query(models.Project).delete(synchronize_session=False)
+    ids = [row.id for row in scoped(db, models.Project, scope).with_entities(models.Project.id).all()]
+    if not ids:
+        return {"deleted": 0}
+    scoped(db, models.Document, scope).filter(models.Document.project_id.in_(ids)).update(
+        {models.Document.project_id: None}, synchronize_session=False
+    )
+    deleted = scoped(db, models.Project, scope).filter(models.Project.id.in_(ids)).delete(synchronize_session=False)
     db.commit()
     return {"deleted": deleted}
 # DEV-ONLY: delete-all END
@@ -164,15 +180,14 @@ def delete_all_projects(
 def delete_project(
     project_id: uuid.UUID,
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
     """Permanent purge — only reachable from within the recycle bin.
     Blocked (with a clear message) if any document still references this
     project, rather than failing with a raw database error."""
     _require_edit_access(x_access_level)
-    project = db.query(models.Project).filter_by(id=project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
+    project = get_or_404(db, models.Project, project_id, scope, "project not found")
     try:
         db.delete(project)
         db.commit()
@@ -188,19 +203,18 @@ def delete_project(
 def get_project_documents(
     project_id: uuid.UUID,
     db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
 ):
     """What's been sent/created under this project — used when viewing a project."""
-    project = db.query(models.Project).filter_by(id=project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="project not found")
+    project = get_or_404(db, models.Project, project_id, scope, "project not found")
 
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None and str(project.id) not in allowed:
         raise HTTPException(status_code=403, detail="you don't have access to this project")
 
     return (
-        db.query(models.Document)
+        scoped(db, models.Document, scope)
         .filter_by(project_id=project_id)
         .order_by(models.Document.created_at.desc())
         .all()

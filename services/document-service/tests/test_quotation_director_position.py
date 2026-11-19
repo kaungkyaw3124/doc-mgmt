@@ -15,6 +15,7 @@ import pytest
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
+from app.core.group_scope import ALL
 from app import models, schemas
 from app.core.export_pdf import generate_quotation_pdf
 from app.core.export_quotation import generate_quotation_xlsx
@@ -156,6 +157,7 @@ def test_director_schemas_carry_position_and_it_is_optional():
 class _FakeQuery:
     def __init__(self, row): self.row = row
     def filter_by(self, **kw): return self
+    def filter(self, *a): return self
     def first(self): return self.row
 
 
@@ -168,7 +170,7 @@ def _gather(director_row):
     doc = SimpleNamespace(id=uuid.uuid4(), customer_id=None, company_id=None, director_id=director_row and uuid.uuid4(),
                           items=[], project_id=None, end_user_name=None)
     db = _FakeDB({models.Document: doc, models.CompanyDirector: director_row})
-    return documents_router._gather_export_data(doc.id, db)
+    return documents_router._gather_export_data(doc.id, db, ALL)
 
 
 def _director_row(position):

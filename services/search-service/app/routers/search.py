@@ -1,3 +1,5 @@
+import uuid
+
 import meilisearch
 from fastapi import APIRouter, Header, Query
 
@@ -26,6 +28,24 @@ def _parse_allowed_projects(x_allowed_projects: str | None):
     return set(x_allowed_projects.split(","))
 
 
+def _group_filter(x_group_ids: str | None, x_is_superuser: str | None):
+    """Department separation (see document-service app/core/group_scope.py):
+    None = no filter (superuser), "" = caller is in no group (search nothing),
+    else a Meilisearch filter on the indexed group_id. Missing headers fail
+    closed (treated as "no group")."""
+    if x_is_superuser == "1":
+        return None
+    ids = []
+    for part in (x_group_ids or "").split(","):
+        try:
+            ids.append(str(uuid.UUID(part.strip())))
+        except ValueError:
+            continue
+    if not ids:
+        return ""
+    return "group_id IN [" + ", ".join(f'"{i}"' for i in ids) + "]"
+
+
 @router.get("/search")
 def search(
     q: str = Query(..., description="Free-text search query"),
@@ -38,9 +58,14 @@ def search(
     category: str | None = Query(None, description="Filter products by category"),
     limit: int = Query(20, le=100),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_group_ids: str | None = Header(default=None, alias="X-Group-Ids"),
+    x_is_superuser: str | None = Header(default=None, alias="X-Is-Superuser"),
 ):
     results = {}
     allowed_projects = _parse_allowed_projects(x_allowed_projects)
+    group_filter = _group_filter(x_group_ids, x_is_superuser)
+    if group_filter == "":
+        return {"documents": [], "products": []} if index == "all" else {index: []}
 
     if index in ("documents", "all"):
         if allowed_projects is not None and not allowed_projects:
@@ -48,7 +73,7 @@ def search(
             # there's nothing to search rather than calling Meilisearch.
             results["documents"] = []
         else:
-            filters = []
+            filters = [group_filter] if group_filter else []
             if doc_type:
                 filters.append(f'doc_type = "{_escape_filter_value(doc_type)}"')
             if project_id:
@@ -73,7 +98,7 @@ def search(
         if visible_product_ids is not None and not visible_product_ids:
             results["products"] = []
         else:
-            filters = []
+            filters = [group_filter] if group_filter else []
             if category:
                 filters.append(f'category = "{_escape_filter_value(category)}"')
             # Over-fetch when project-restricted, since results are

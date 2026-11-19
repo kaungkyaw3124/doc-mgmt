@@ -17,9 +17,9 @@ def test_product_becomes_searchable(admin, product):
 
 
 @pytest.fixture
-def searchable_quotation(admin, customer):
+def searchable_quotation(admin, customer, group_id):
     token = unique("searchtok")
-    doc = create_quotation(admin, customer["id"], f"widget {token}")
+    doc = create_quotation(admin, customer["id"], f"widget {token}", group_id)
     yield doc, token
     admin.delete(f"/documents/{doc['id']}")
 

@@ -90,6 +90,7 @@ erDiagram
 
     PRODUCTS {
         uuid id PK
+        uuid group_id "owning group (auth groups.id, no FK); NULL = unassigned"
         string sku UK
         bool is_deleted
         string name
@@ -129,6 +130,7 @@ erDiagram
 
     CUSTOMERS {
         uuid id PK
+        uuid group_id "owning group (auth groups.id, no FK); NULL = unassigned"
         string name
         string email
         string phone
@@ -138,6 +140,7 @@ erDiagram
     }
     PROJECTS {
         uuid id PK
+        uuid group_id "owning group (auth groups.id, no FK); NULL = unassigned"
         string name
         string budget_year
         text description
@@ -169,6 +172,7 @@ erDiagram
     }
     DOCUMENTS {
         uuid id PK
+        uuid group_id "owning group (auth groups.id, no FK); NULL = unassigned"
         string doc_type "quotation|invoice|proposal|catalogue"
         bool is_deleted
         string doc_number UK

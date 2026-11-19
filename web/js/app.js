@@ -104,7 +104,7 @@ function refreshAccessToken() {
       if (since >= 0 && since < 3000) await new Promise(r => setTimeout(r, 3000 - since));
       try { localStorage.setItem(REFRESH_AT_KEY, String(Date.now())); } catch (e) {}
       const res = await fetch(API_BASE + '/auth/refresh', { method: 'POST', credentials: 'include' });
-      if (!res.ok) throw new Error('refresh failed');
+      if (!res.ok) { res.text().catch(() => {}); throw new Error('refresh failed'); }  // drain: an unread no-store body keeps its connection busy
       applySession(await res.json());
       return token;
     })().finally(() => { refreshPromise = null; });
@@ -144,10 +144,44 @@ async function apiFetch(path, options = {}, _retriedAfterRefresh = false) {
     if (res.status === 403) detail = "You don't have access to this. (" + detail + ")";
     const error = new Error(detail);
     error.detail = rawDetail;  // e.g. the duplicate-product 409's {message, existing}
+    error.status = res.status;
     throw error;
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+// ---------- safe simultaneous use (loop iteration 21) ----------
+// The server's answer when an edit was made on an older copy of the record.
+const CONFLICT_MESSAGE = 'Someone else changed this. Reload to see their changes.';
+const editingVersions = {};  // form -> the version of the record it was opened with
+const idempotencyKeys = {};  // form -> Idempotency-Key, kept until that form's create succeeds
+function newRequestKey() {  // crypto.randomUUID needs https; getRandomValues works on plain-http LAN too
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+}
+// A repeated create (double click, retry after a lost answer) gets the first result back.
+function idempotencyHeader(form) { return { 'Idempotency-Key': idempotencyKeys[form] ||= newRequestKey() }; }
+function idempotencyDone(form) { delete idempotencyKeys[form]; }
+function setBusy(btn, busy) {
+  btn.disabled = busy;
+  btn.setAttribute('aria-busy', String(busy));
+  if (busy) { btn.dataset.label = btn.textContent; btn.textContent = 'Saving…'; }
+  else if (btn.textContent === 'Saving…') btn.textContent = btn.dataset.label;  // a success path may already have set the next label
+}
+// Save failed: a version conflict gets a Reload button (the typed text stays
+// in the form until the user clicks it); anything else is a plain banner.
+function showSaveError(err, bannerId, reload) {
+  if (err.status === 409 && err.message === CONFLICT_MESSAGE && reload) {
+    const el = document.getElementById(bannerId);
+    el.innerHTML = `<div class="banner banner-error conflict-banner">${escapeHtml(CONFLICT_MESSAGE)} <button type="button" class="btn btn-secondary conflict-reload-btn">Reload</button></div>`;
+    el.querySelector('.conflict-reload-btn').addEventListener('click', async () => {
+      try { await reload(); showBanner(bannerId, ''); } catch (e) { showBanner(bannerId, e.message); }
+    });
+    el.scrollIntoView({ block: 'center' });  // Save sits at the bottom of a long modal; the banner is at the top, under a sticky header
+  } else {
+    showBanner(bannerId, err.message);
+  }
+  showErrorCross(err.message);
 }
 
 function showBanner(elId, message, type = 'error') {
@@ -273,7 +307,7 @@ async function doLogout(message = '', broadcast = true) {
     // sign back in with it.
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), 2000);
-    await fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include', signal: abort.signal }).catch(() => {});
+    await fetch(API_BASE + '/auth/logout', { method: 'POST', credentials: 'include', signal: abort.signal }).then(r => r.text()).catch(() => {});
     clearTimeout(timer);
     try { localStorage.setItem(LOGOUT_KEY, Date.now() + '|' + message); } catch (e) {}
   }
@@ -284,12 +318,109 @@ async function doLogout(message = '', broadcast = true) {
   location.replace('/');
 }
 
+// ---------- department groups (loop iteration 19) ----------
+// Every document/customer/project/product belongs to one group; the server
+// only returns the caller's own (app/core/group_scope.py). The Group select
+// appears on the create forms only when there is a choice: superusers and
+// users in several groups. Hidden on edit: a superuser moves records with "Move…" instead.
+let myGroups = [];     // [{id, name}] the user may create records in
+let groupNames = {};   // id -> name, for the labels in the lists
+let defaultGroupId = '';
+const GROUP_FORMS = ['doc-form', 'project-form', 'customer-form', 'product-form'];
+
+async function loadMyGroups(me) {
+  // /admin/groups: every group for a superuser, the user's own otherwise
+  const groups = (await apiFetch('/admin/groups')) || [];
+  groups.forEach(g => { groupNames[g.id] = g.name; });
+  myGroups = groups.filter(g => g.is_active).sort((a, b) => a.name.localeCompare(b.name));
+  const mine = (me.groups || []).map(g => g.group_id);
+  const firstOwn = myGroups.find(g => mine.includes(g.id));
+  defaultGroupId = firstOwn ? firstOwn.id : (me.is_superuser ? '' : (myGroups[0] || {}).id || '');
+  GROUP_FORMS.forEach(formId => {
+    let wrap = document.getElementById(formId + '-group-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = formId + '-group-wrap';
+      wrap.innerHTML = `<label for="${formId}-group">Group</label><select id="${formId}-group"></select>`;
+      document.getElementById(formId).prepend(wrap);
+    }
+    wrap.querySelector('select').innerHTML = '<option value="">— choose a group —</option>' +
+      myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    showGroupSelect(formId, true);
+  });
+  // Bulk import: every imported product goes to this group.
+  let importWrap = document.getElementById('bulk-import-group-wrap');
+  if (!importWrap) {
+    importWrap = document.createElement('div');
+    importWrap.id = 'bulk-import-group-wrap';
+    importWrap.innerHTML = '<label for="bulk-import-group">Group (every imported product goes to it)</label><select id="bulk-import-group"></select>';
+    const btn = document.getElementById('bulk-import-submit-btn');
+    btn.parentNode.insertBefore(importWrap, btn);
+  }
+  const importSelect = importWrap.querySelector('select');
+  importSelect.innerHTML = document.getElementById('product-form-group').innerHTML;
+  importSelect.value = defaultGroupId;
+  importWrap.style.display = groupChoiceNeeded() ? '' : 'none';
+  refreshMoveControls();
+}
+
+function groupChoiceNeeded() {
+  return currentUserIsSuperuser || myGroups.length > 1;
+}
+
+function showGroupSelect(formId, creating) {
+  const wrap = document.getElementById(formId + '-group-wrap');
+  if (!wrap) return;
+  const show = creating && groupChoiceNeeded();
+  const select = wrap.querySelector('select');
+  wrap.style.display = show ? '' : 'none';
+  select.required = show;
+  if (creating) select.value = defaultGroupId;
+  if (formId === 'doc-form') refreshDocGroupPickers();
+}
+
+// The group the form's new record goes to, or undefined when the server decides (single group).
+function chosenGroupId(formId) {
+  const wrap = document.getElementById(formId + '-group-wrap');
+  return wrap && wrap.style.display !== 'none' ? (wrap.querySelector('select').value || null) : undefined;
+}
+
+// In the document form, pickers offer only rows of the document's group.
+function inDocGroup(row) {
+  const groupId = chosenGroupId('doc-form');
+  if (groupId) return row.group_id === groupId;
+  if (editingDocumentId) {
+    const doc = cachedDocuments.find(d => d.id === editingDocumentId);
+    if (doc) return row.group_id === doc.group_id;
+  }
+  return true;
+}
+
+function refreshDocGroupPickers() {
+  if (typeof refreshLineItemProductOptions === 'function') refreshLineItemProductOptions();
+  if (typeof refreshCustomerPicker === 'function') refreshCustomerPicker();
+  if (typeof refreshProjectPicker === 'function') refreshProjectPicker();
+}
+
+function groupTag(groupId) {
+  const name = groupId ? (groupNames[groupId] || 'Other group') : 'Unassigned';
+  return ` <span class="group-tag" style="display:inline-block; font-size:11px; padding:1px 6px; border-radius:8px; background:var(--surface-2, #eef); color:var(--text-dim); margin-left:4px;">${escapeHtml(name)}</span>`;
+}
+
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'doc-form-group') refreshDocGroupPickers();
+});
+['doc', 'project', 'customer', 'product'].forEach(kind => {
+  // after the form's own click handler (which resets the form)
+  document.getElementById('toggle-' + kind + '-form').addEventListener('click', () => setTimeout(() => showGroupSelect(kind + '-form', true)));
+});
+
 async function enterApp() {
   startSessionWatch();
   // Defence in depth (logout reloads the page anyway): start from "nothing
   // permission-gated is shown, Documents view", then let /admin/me show
   // what this user may see.
-  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap']
+  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap', 'unassigned-card']
     .forEach(id => { document.getElementById(id).style.display = 'none'; });
   currentUserIsSuperuser = false;
   currentUserCanDeleteDocuments = false;
@@ -320,6 +451,8 @@ async function enterApp() {
       document.getElementById('new-group-form-wrap').style.display = 'block';
       // Superuser only — the gateway refuses /api/backup/* to anyone else too.
       document.getElementById('backup-nav-item').style.display = 'block';
+      document.getElementById('unassigned-card').style.display = 'block';
+      loadUnassignedCard();
     }
     const canManageCategories = me.is_superuser || (me.service_access && me.service_access.includes('categories'));
     document.getElementById('category-split-btn-wrap').style.display = canManageCategories ? 'inline-flex' : 'none';
@@ -328,6 +461,7 @@ async function enterApp() {
     // Enforced server-side regardless; this only controls whether the
     // Delete button is rendered at all (never shown-then-rejected).
     currentUserCanDeleteDocuments = me.is_superuser || (me.service_access && me.service_access.includes('documents-delete'));
+    await loadMyGroups(me);
   } catch (e) {
     document.getElementById('whoami-username').textContent = '—';
   }
@@ -603,6 +737,7 @@ async function prefillNextDocNumber(forceOverwrite = false) {
     const field = document.getElementById('doc-number');
     if ((forceOverwrite || !field.value) && !editingDocumentId) {
       field.value = result.doc_number;
+      field.dataset.preview = result.doc_number;  // untouched preview -> let the server take the number (its counter is locked)
     }
   } catch (err) {
     // non-fatal — the field just stays blank and the server will
@@ -666,6 +801,8 @@ function addLineItem(prefill) {
     <div style="max-width:70px;"><label>Qty</label><input type="text" class="li-qty" placeholder="1" value="${prefill ? safeVal(prefill.quantity) : ''}"></div>
     <div style="max-width:80px;"><label>Unit</label><input type="text" class="li-unit" placeholder="Nos" value="${prefill ? escapeHtml(prefill.unit || 'Nos') : 'Nos'}"></div>
     <div><label>Unit price</label><input type="text" class="li-price" placeholder="20.00" value="${prefill ? safeVal(prefill.unit_price) : ''}"></div>
+    <div class="labour-only" style="max-width:110px;"><label>Labour unit price</label><input type="text" class="li-labour" placeholder="optional" value="${prefill ? safeVal(prefill.labour_unit_price) : ''}"></div>
+    <div class="labour-only li-line-totals" style="max-width:150px;"><label>Material / Labour total</label><span class="li-mat-total">0.00</span> / <span class="li-lab-total">-</span></div>
     <div><label>Remark</label><input type="text" class="li-remark" placeholder="Optional note" value="${prefill ? escapeHtml(prefill.remark || '') : ''}"></div>
     <button type="button" class="remove-line" data-line-id="${id}">Remove</button>
   `;
@@ -676,7 +813,7 @@ function addLineItem(prefill) {
     const descInput = div.querySelector('.li-desc');
     const qtyInput = div.querySelector('.li-qty');
     const remarkInput = div.querySelector('.li-remark');
-    const match = typed && cachedProducts.find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
+    const match = typed && cachedProducts.filter(inDocGroup).find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
     if (match) {
       div.dataset.resolvedProductId = match.id;
       descInput.value = match.name;
@@ -695,22 +832,36 @@ function addLineItem(prefill) {
 document.getElementById('add-line-btn').addEventListener('click', addLineItem);
 
 document.getElementById('line-items').addEventListener('input', (e) => {
-  if (e.target.matches('.li-qty, .li-price')) updateDocumentTotals();
+  if (e.target.matches('.li-qty, .li-price, .li-labour')) updateDocumentTotals();
 });
 document.getElementById('doc-tax-rate').addEventListener('input', updateDocumentTotals);
+document.getElementById('doc-include-labour').addEventListener('change', updateDocumentTotals);
 
+// Live preview only — the server recalculates every total on save. Tax is on
+// materials only; labour is added untaxed when "Include labour" is ticked.
 function updateDocumentTotals() {
+  const withLabour = document.getElementById('doc-include-labour').checked;
+  document.getElementById('doc-form').classList.toggle('with-labour', withLabour);
   let subtotal = 0;
+  let labour = 0;
   document.querySelectorAll('#line-items .line-item-row').forEach(row => {
     const qty = Number(row.querySelector('.li-qty').value) || 0;
     const price = Number(row.querySelector('.li-price').value) || 0;
+    const lab = qty * (Number(row.querySelector('.li-labour').value) || 0);
     subtotal += qty * price;
+    labour += lab;
+    row.querySelector('.li-mat-total').textContent = (qty * price).toFixed(2);
+    row.querySelector('.li-lab-total').textContent = lab ? lab.toFixed(2) : '-';
   });
+  if (!withLabour) labour = 0;
   const taxRate = Number(document.getElementById('doc-tax-rate').value) || 0;
   const taxTotal = subtotal * (taxRate / 100);
   const currency = document.getElementById('doc-currency').value;
+  document.getElementById('doc-totals-subtotal-label').style.display = withLabour ? 'none' : '';
+  document.getElementById('doc-totals-grand-label').textContent = withLabour ? 'Grand Total' : 'Total with tax';
   document.getElementById('doc-totals-subtotal').textContent = subtotal.toFixed(2) + ' ' + currency;
-  document.getElementById('doc-totals-grand').textContent = (subtotal + taxTotal).toFixed(2) + ' ' + currency;
+  document.getElementById('doc-totals-labour').textContent = labour.toFixed(2) + ' ' + currency;
+  document.getElementById('doc-totals-grand').textContent = (subtotal + taxTotal + labour).toFixed(2) + ' ' + currency;
 }
 document.getElementById('doc-currency').addEventListener('change', updateDocumentTotals);
 
@@ -738,14 +889,15 @@ document.getElementById('doc-customer').addEventListener('input', (e) => {
 function refreshLineItemProductOptions() {
   const datalist = document.getElementById('product-datalist');
   if (!datalist) return;
-  datalist.innerHTML = cachedProducts.map(p => `<option value="${escapeHtml(p.sku)} — ${escapeHtml(p.name)}">`).join('');
+  datalist.innerHTML = cachedProducts.filter(inDocGroup).map(p => `<option value="${escapeHtml(p.sku)} — ${escapeHtml(p.name)}">`).join('');
 }
 
 document.getElementById('doc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showBanner('doc-modal-banner', '');
-  document.querySelectorAll('#line-items .li-price.field-error').forEach(el => el.classList.remove('field-error'));
+  document.querySelectorAll('#line-items .li-price.field-error, #line-items .li-labour.field-error').forEach(el => el.classList.remove('field-error'));
   const overallTaxRate = Number(document.getElementById('doc-tax-rate').value) || 0;
+  const includeLabour = document.getElementById('doc-include-labour').checked;
   const items = [];
   const incompleteRows = [];
   document.querySelectorAll('#line-items .line-item-row').forEach((row, rowIndex) => {
@@ -780,6 +932,12 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       incompleteRows.push(`Row ${rowIndex + 1}: unit price must be a number`);
       return;
     }
+    const labour = row.querySelector('.li-labour').value.trim();
+    if (includeLabour && labour && !(Number(labour) >= 0)) {
+      row.querySelector('.li-labour').classList.add('field-error');
+      incompleteRows.push(`Row ${rowIndex + 1}: labour unit price must be a number, 0 or more`);
+      return;
+    }
     if (!product_id && !description) description = remark; // free-text row — use the remark as its name/description too, so exports aren't blank
 
     const item = { quantity: Number(quantity), tax_rate: overallTaxRate, unit };
@@ -787,6 +945,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     if (description) item.description = description;
     if (remark) item.remark = remark;
     if (unit_price) item.unit_price = Number(unit_price);
+    if (includeLabour && labour) item.labour_unit_price = Number(labour); // unticked: labour is dropped on save
     items.push(item);
   });
   if (incompleteRows.length > 0) {
@@ -809,8 +968,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     endUser['end_user_' + f] = manualCustomer ? (document.getElementById('doc-end-user-' + f).value.trim() || null) : null;
   });
   try {
-    const submitBtn = document.getElementById('doc-form-submit-btn');
-    submitBtn.disabled = true;
+    setBusy(document.getElementById('doc-form-submit-btn'), true);
     const commonPayload = {
       customer_id: manualCustomer ? null : resolveCustomerIdFromInput(),
       ...endUser,
@@ -819,16 +977,19 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
       director_id: document.getElementById('doc-director').value || null,
       currency: document.getElementById('doc-currency').value,
       terms_and_conditions: document.getElementById('doc-terms').value || null,
+      include_labour: includeLabour,
       items
     };
     if (editingDocumentId) {
-      await apiFetch('/documents/' + editingDocumentId, { method: 'PATCH', body: JSON.stringify(commonPayload) });
+      await apiFetch('/documents/' + editingDocumentId, { method: 'PATCH', body: JSON.stringify({ ...commonPayload, version: editingVersions.document }) });
     } else {
       await apiFetch('/documents', {
         method: 'POST',
+        headers: idempotencyHeader('document'),
         body: JSON.stringify({
+          group_id: chosenGroupId('doc-form'),
           doc_type: document.getElementById('doc-type').value,
-          doc_number: document.getElementById('doc-number').value || null,
+          doc_number: (v => (v && v !== document.getElementById('doc-number').dataset.preview) ? v : null)(document.getElementById('doc-number').value),
           ...commonPayload
         })
       });
@@ -844,18 +1005,21 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     document.getElementById('doc-type').disabled = false;
     document.getElementById('doc-number').disabled = false;
     editingDocumentId = null;
+    idempotencyDone('document');
     loadDocuments();
     showSuccessTick('Document saved');
   } catch (err) {
-    showBanner('doc-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingDocumentId;
+    showSaveError(err, 'doc-modal-banner', id && (async () => { startEditDocument(await apiFetch('/documents/' + id)); loadDocuments(); }));
   } finally {
-    document.getElementById('doc-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('doc-form-submit-btn'), false);
   }
 });
 
 function startEditDocument(doc) {
   editingDocumentId = doc.id;
+  editingVersions.document = doc.version;
+  showGroupSelect('doc-form', false);
   document.getElementById('doc-modal').classList.add('active');
   document.getElementById('doc-form-title').textContent = 'Edit document — ' + doc.doc_number;
   document.getElementById('doc-form-submit-btn').textContent = 'Save changes';
@@ -883,6 +1047,7 @@ function startEditDocument(doc) {
   refreshDocDirectorPicker(doc.director_id);
   document.getElementById('doc-terms').value = doc.terms_and_conditions || '';
 
+  document.getElementById('doc-include-labour').checked = !!doc.include_labour;
   document.getElementById('line-items').innerHTML = '';
   lineItemCount = 0;
   doc.items.forEach(item => addLineItem(item));
@@ -948,7 +1113,9 @@ async function downloadQuotation(documentId, docNumber, format, btn) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'Quotation-' + docNumber + '.' + extension;
+    // The server names the file after the document type (Invoice-…, Proposal-…).
+    const named = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+    a.download = named ? named[1] : 'Quotation-' + docNumber + '.' + extension;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1062,6 +1229,7 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
     <div style="text-align:right; margin-top:10px; font-size:14px;">
       <div>Subtotal: <span class="mono">${fmtMoney(doc.subtotal)}</span></div>
       <div>Tax: <span class="mono">${fmtMoney(doc.tax_total)}</span></div>
+      ${doc.include_labour ? `<div>Labour (not taxed): <span class="mono">${fmtMoney((doc.items || []).reduce((s, i) => s + Number(i.quantity || 0) * Number(i.labour_unit_price || 0), 0))}</span></div>` : ''}
       <div style="font-weight:600; margin-top:4px;">Total: <span class="mono">${fmtMoney(doc.total)} ${escapeHtml(doc.currency || '')}</span></div>
     </div>
     ${doc.terms_and_conditions ? `
@@ -1076,7 +1244,7 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
 function renderDocumentsTable(docs) {
   const tbody = document.getElementById('documents-tbody');
   if (!docs.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No documents match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">No documents match.</td></tr>';
     return;
   }
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
@@ -1109,6 +1277,7 @@ function renderDocumentsTable(docs) {
       <td>${currentUserCanDeleteDocuments
         ? `<button class="link-btn-inline" data-trash-doc-id="${d.id}" data-trash-doc-number="${escapeHtml(d.doc_number)}" style="color:var(--danger);">Delete</button>`
         : '<span style="color:var(--text-dim);">—</span>'}</td>
+      ${groupCell('documents', d)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-goto-project-id]').forEach(btn => {
@@ -1275,12 +1444,13 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
     description: document.getElementById('project-description').value || null
   };
   try {
-    document.getElementById('project-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('project-form-submit-btn'), true);
     let created = null;
     if (editingProjectId) {
-      await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify(payload) });
+      await apiFetch('/projects/' + editingProjectId, { method: 'PATCH', body: JSON.stringify({ ...payload, version: editingVersions.project }) });
     } else {
-      created = await apiFetch('/projects', { method: 'POST', body: JSON.stringify(payload) });
+      created = await apiFetch('/projects', { method: 'POST', headers: idempotencyHeader('project'), body: JSON.stringify({ ...payload, group_id: chosenGroupId('project-form') }) });
+      idempotencyDone('project');
     }
     document.getElementById('project-form').reset();
     document.getElementById('project-modal').classList.remove('active');
@@ -1298,15 +1468,17 @@ document.getElementById('project-form').addEventListener('submit', async (e) => 
       document.getElementById('doc-modal').classList.add('active');
     }
   } catch (err) {
-    showBanner('project-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingProjectId;
+    showSaveError(err, 'project-modal-banner', id && (async () => { startEditProject(await apiFetch('/projects/' + id)); loadProjects(); }));
   } finally {
-    document.getElementById('project-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('project-form-submit-btn'), false);
   }
 });
 
 function startEditProject(project) {
   editingProjectId = project.id;
+  editingVersions.project = project.version;
+  showGroupSelect('project-form', false);
   document.getElementById('project-modal').classList.add('active');
   document.getElementById('project-form-title').textContent = 'Edit project — ' + project.name;
   document.getElementById('project-form-submit-btn').textContent = 'Save changes';
@@ -1363,7 +1535,7 @@ function resolveDocCompanyIdFromInput() {
 function refreshProjectPicker() {
   const datalist = document.getElementById('project-datalist');
   if (datalist) {
-    datalist.innerHTML = cachedProjects.map(p =>
+    datalist.innerHTML = cachedProjects.filter(inDocGroup).map(p =>
       `<option value="${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}">`
     ).join('');
   }
@@ -1383,7 +1555,7 @@ function resolveDocProjectIdFromInput() {
   const input = document.getElementById('doc-project');
   const typed = input.value.trim();
   if (!typed) return null;
-  const match = cachedProjects.find(p => {
+  const match = cachedProjects.filter(inDocGroup).find(p => {
     const label = `${p.name}${p.budget_year ? ' (' + p.budget_year + ')' : ''}`;
     return label.toLowerCase() === typed.toLowerCase() || p.name.toLowerCase() === typed.toLowerCase();
   });
@@ -1410,7 +1582,7 @@ async function loadProjects() {
 function renderProjectsTable(projects) {
   const tbody = document.getElementById('projects-tbody');
   if (!projects.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No projects match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No projects match.</td></tr>';
     return;
   }
   tbody.innerHTML = projects.map(p => `
@@ -1421,6 +1593,7 @@ function renderProjectsTable(projects) {
       <td><button class="link-btn-inline" data-view-project-id="${p.id}">View documents</button></td>
       <td><button class="link-btn-inline" data-edit-project-id="${p.id}">Edit</button></td>
       <td><button class="link-btn-inline" data-trash-project-id="${p.id}" data-trash-project-name="${escapeHtml(p.name)}" style="color:var(--danger);">Delete</button></td>
+      ${groupCell('projects', p)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-view-project-id]').forEach(btn => {
@@ -1604,6 +1777,7 @@ document.getElementById('company-modal-close').addEventListener('click', () => {
   document.getElementById('company-modal').classList.remove('active');
 });
 
+let ownSaveDone = false;  // company form: this submit's own PATCH already succeeded
 document.getElementById('company-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showBanner('company-modal-banner', '');
@@ -1630,12 +1804,14 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     return;
   }
   try {
-    document.getElementById('company-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('company-form-submit-btn'), true);
+    ownSaveDone = false;
     let company;
     if (editingCompanyId) {
-      company = await apiFetch('/companies/' + editingCompanyId, { method: 'PATCH', body: JSON.stringify(payload) });
+      company = await apiFetch('/companies/' + editingCompanyId, { method: 'PATCH', body: JSON.stringify({ ...payload, version: editingVersions.company }) });
+      ownSaveDone = true;
     } else {
-      company = await apiFetch('/companies', { method: 'POST', body: JSON.stringify(payload) });
+      company = await apiFetch('/companies', { method: 'POST', headers: idempotencyHeader('company'), body: JSON.stringify(payload) });
     }
 
     const savedImages = [];
@@ -1690,6 +1866,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
         loadCompanies();
         return;
       }
+      uploadResponse.text().catch(() => {});  // drain (no-store body)
     }
 
     // Flush the director rows: create any new ones, rename existing ones,
@@ -1739,6 +1916,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
           loadCompanies();
           return;
         }
+        uploadResponse.text().catch(() => {});  // drain (no-store body)
       }
     }
 
@@ -1750,18 +1928,26 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
     document.getElementById('company-form-submit-btn').textContent = 'Create company';
     editingCompanyId = null;
     editingCompany = null;
+    idempotencyDone('company');  // only now: an image that failed above leaves the key, so Save again reuses the same company
     loadCompanies();
     showSuccessTick(logoNote ? 'Company saved — ' + logoNote : 'Company saved');
   } catch (err) {
-    showBanner('company-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingCompanyId;
+    showSaveError(err, 'company-modal-banner', id && (async () => { startEditCompany(await apiFetch('/companies/' + id)); loadCompanies(); }));
   } finally {
-    document.getElementById('company-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('company-form-submit-btn'), false);
+    // Our PATCH went through but a logo/seal/MD step stopped early: those
+    // uploads bumped the version too, so take it over for the next Save.
+    // shortcut: someone else's edit in that same second would be taken over too; fine at this size.
+    if (ownSaveDone && editingCompanyId) {
+      apiFetch('/companies/' + editingCompanyId).then(c => { editingVersions.company = c.version; }).catch(() => {});
+    }
   }
 });
 
 function startEditCompany(company) {
   editingCompanyId = company.id;
+  editingVersions.company = company.version;
   editingCompany = company;
   document.getElementById('company-modal').classList.add('active');
   document.getElementById('company-form-title').textContent = 'Edit company — ' + company.name;
@@ -1949,12 +2135,13 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
       : null
   };
   try {
-    document.getElementById('customer-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('customer-form-submit-btn'), true);
     let created = null;
     if (editingCustomerId) {
-      await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify(payload) });
+      await apiFetch('/customers/' + editingCustomerId, { method: 'PATCH', body: JSON.stringify({ ...payload, version: editingVersions.customer }) });
     } else {
-      created = await apiFetch('/customers', { method: 'POST', body: JSON.stringify(payload) });
+      created = await apiFetch('/customers', { method: 'POST', headers: idempotencyHeader('customer'), body: JSON.stringify({ ...payload, group_id: chosenGroupId('customer-form') }) });
+      idempotencyDone('customer');
     }
     document.getElementById('customer-form').reset();
     document.getElementById('customer-modal').classList.remove('active');
@@ -1973,15 +2160,17 @@ document.getElementById('customer-form').addEventListener('submit', async (e) =>
       document.getElementById('doc-modal').classList.add('active');
     }
   } catch (err) {
-    showBanner('customer-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingCustomerId;
+    showSaveError(err, 'customer-modal-banner', id && (async () => { startEditCustomer(await apiFetch('/customers/' + id)); loadCustomers(); }));
   } finally {
-    document.getElementById('customer-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('customer-form-submit-btn'), false);
   }
 });
 
 function startEditCustomer(customer) {
   editingCustomerId = customer.id;
+  editingVersions.customer = customer.version;
+  showGroupSelect('customer-form', false);
   document.getElementById('customer-modal').classList.add('active');
   document.getElementById('customer-form-title').textContent = 'Edit customer — ' + customer.name;
   document.getElementById('customer-form-submit-btn').textContent = 'Save changes';
@@ -1999,14 +2188,14 @@ function startEditCustomer(customer) {
 function refreshCustomerPicker() {
   const datalist = document.getElementById('customer-datalist');
   if (!datalist) return;
-  datalist.innerHTML = cachedCustomers.map(c => `<option value="${escapeHtml(c.name)}">`).join('');
+  datalist.innerHTML = cachedCustomers.filter(inDocGroup).map(c => `<option value="${escapeHtml(c.name)}">`).join('');
 }
 
 function resolveCustomerIdFromInput() {
   const input = document.getElementById('doc-customer');
   const typed = input.value.trim();
   if (!typed) return null;
-  const match = cachedCustomers.find(c => c.name.toLowerCase() === typed.toLowerCase());
+  const match = cachedCustomers.filter(inDocGroup).find(c => c.name.toLowerCase() === typed.toLowerCase());
   return match ? match.id : null;
 }
 
@@ -2029,7 +2218,7 @@ async function loadCustomers() {
 function renderCustomersTable(customers) {
   const tbody = document.getElementById('customers-tbody');
   if (!customers.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No customers match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No customers match.</td></tr>';
     return;
   }
   tbody.innerHTML = customers.map(c => `
@@ -2041,6 +2230,7 @@ function renderCustomersTable(customers) {
       <td>${fmtDate(c.created_at)}</td>
       <td><button class="link-btn-inline" data-edit-customer-id="${c.id}">Edit</button></td>
       <td><button class="link-btn-inline" data-trash-customer-id="${c.id}" data-trash-customer-name="${escapeHtml(c.name)}" style="color:var(--danger);">Delete</button></td>
+      ${groupCell('customers', c)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-view-customer-id]').forEach(btn => {
@@ -2510,7 +2700,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   }
   productDupWarningAccepted = false;
   try {
-    document.getElementById('product-form-submit-btn').disabled = true;
+    setBusy(document.getElementById('product-form-submit-btn'), true);
     let product;
     if (editingProductId) {
       // sku can't be changed via PATCH (it's the identity); unit_price is
@@ -2520,10 +2710,11 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
       const { sku, unit_price, ...updatePayload } = payload;
       product = await apiFetch('/products/' + editingProductId, {
         method: 'PATCH',
-        body: JSON.stringify(updatePayload)
+        body: JSON.stringify({ ...updatePayload, version: editingVersions.product })
       });
     } else {
-      product = await apiFetch('/products', { method: 'POST', body: JSON.stringify(payload) });
+      product = await apiFetch('/products', { method: 'POST', headers: idempotencyHeader('product'), body: JSON.stringify({ ...payload, group_id: chosenGroupId('product-form') }) });
+      idempotencyDone('product');
     }
 
     if (fileInput.files.length > 0) {
@@ -2533,7 +2724,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token },
         body: formData
-      });
+      }).catch(() => ({ ok: false, json: async () => ({ detail: 'the connection failed' }) }));
       if (!uploadResponse.ok) {
         let detail = 'Catalog file upload failed.';
         try {
@@ -2542,11 +2733,19 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
         } catch (parseErr) {
           // response wasn't JSON — stick with the generic message
         }
-        showBanner('product-modal-banner', `Product saved, but the catalog file didn't upload: ${detail}`);
+        if (!editingProductId) {
+          // All or nothing for a new product: take it back out, so there's
+          // no half-saved product without its file. (An edit already saved.)
+          await apiFetch('/products/' + product.id, { method: 'DELETE' }).catch(() => {});
+          showBanner('product-modal-banner', `Nothing was saved — the catalog file didn't upload: ${detail}`);
+        } else {
+          showBanner('product-modal-banner', `Product saved, but the catalog file didn't upload: ${detail}`);
+        }
         showErrorCross("The catalog file didn't upload");
         loadProducts();
         return;
       }
+      uploadResponse.text().catch(() => {});  // drain (no-store body)
     }
 
     if (!editingProductId && pendingSubItems.length > 0) {
@@ -2575,11 +2774,11 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     loadProducts();
     showSuccessTick('Product saved');
   } catch (err) {
-    if (err.detail && err.detail.existing) showProductExistsBanner(err.detail.existing);  // 409 race
-    else showBanner('product-modal-banner', err.message);
-    showErrorCross(err.message);
+    const id = editingProductId;
+    if (err.detail && err.detail.existing) { showProductExistsBanner(err.detail.existing); showErrorCross(err.message); }  // 409 race
+    else showSaveError(err, 'product-modal-banner', id && (async () => { startEditProduct(await apiFetch('/products/' + id)); loadProducts(); }));
   } finally {
-    document.getElementById('product-form-submit-btn').disabled = false;
+    setBusy(document.getElementById('product-form-submit-btn'), false);
   }
 });
 
@@ -2688,6 +2887,8 @@ async function loadProductDuplicates() {
 
 function startEditProduct(product) {
   editingProductId = product.id;
+  editingVersions.product = product.version;
+  showGroupSelect('product-form', false);
   document.getElementById('product-form-title').textContent = 'Edit product — ' + product.sku;
   document.getElementById('product-sku').value = product.sku;
   document.getElementById('product-sku').disabled = true; // identity field, not editable
@@ -2738,6 +2939,8 @@ document.getElementById('bulk-import-submit-btn').addEventListener('click', asyn
   try {
     const formData = new FormData();
     formData.append('excel_file', excelInput.files[0]);
+    const importGroup = document.getElementById('bulk-import-group');
+    if (importGroup && importGroup.value) formData.append('group_id', importGroup.value);
     if (zipInput.files.length) {
       formData.append('catalogue_zip', zipInput.files[0]);
     }
@@ -3144,7 +3347,7 @@ function renderProductSubItemsReadonly(subItems) {
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
@@ -3163,6 +3366,7 @@ function renderProductsTable(products) {
       <td><button class="link-btn-inline" data-add-to-cart-id="${p.id}">+ Add to cart</button></td>
       <td><button class="link-btn-inline" data-edit-id="${p.id}">Edit</button></td>
       <td><button class="link-btn-inline" data-trash-product-id="${p.id}" data-trash-product-sku="${escapeHtml(p.sku)}" style="color:var(--danger);">Delete</button></td>
+      ${groupCell('products', p)}
     </tr>
   `).join('');
   tbody.querySelectorAll('[data-add-to-cart-id]').forEach(btn => {
@@ -3510,6 +3714,157 @@ function applyFilterAndSort(tableName) {
   }
   config.render(list);
 }
+
+// ---------- moving records between groups (superuser, loop iteration 20) ----------
+// Each of the four lists gets a Group column (checkbox + label + "Move…"),
+// a group filter and a "Move selected…" button. The server decides what has
+// to move together (a document with its customer/project, a customer with
+// its documents, a bundle with its sub-items); the modal shows that via a
+// dry run before anything changes.
+const MOVE_LINK_LABELS = {
+  documents: 'Also move its customer and project',
+  customers: 'Also move its documents',
+  projects: 'Also move its documents',
+  products: 'Also move linked products (bundle / sub-items)',
+};
+const MOVE_RELOAD = { documents: () => loadDocuments(), customers: () => loadCustomers(), projects: () => loadProjects(), products: () => loadProducts() };
+let moveState = null; // {table, ids}
+
+function groupCell(table, row) {
+  if (!currentUserIsSuperuser) return `<td>${groupTag(row.group_id)}</td>`;
+  return `<td style="white-space:nowrap;"><input type="checkbox" class="move-select" data-move-table="${table}" value="${row.id}" aria-label="Select for moving" style="width:auto; margin:0 4px 0 0;">${groupTag(row.group_id)}
+    <button class="link-btn-inline" data-move-table="${table}" data-move-id="${row.id}">Move…</button></td>`;
+}
+
+Object.keys(MOVE_LINK_LABELS).forEach(table => {
+  const filter = document.createElement('select');
+  filter.id = table + '-group-filter';
+  filter.setAttribute('aria-label', 'Filter by group');
+  filter.style.maxWidth = '240px';
+  filter.style.display = 'none';
+  filter.addEventListener('change', () => applyFilterAndSort(table));
+  const bulk = document.createElement('button');
+  bulk.type = 'button';
+  bulk.className = 'btn-secondary';
+  bulk.id = table + '-move-selected-btn';
+  bulk.textContent = 'Move selected to group…';
+  bulk.style.display = 'none';
+  bulk.addEventListener('click', () => {
+    const ids = [...document.querySelectorAll(`.move-select[data-move-table="${table}"]:checked`)].map(cb => cb.value);
+    if (!ids.length) { showErrorCross('Select rows first'); return; }
+    openMoveModal(table, ids);
+  });
+  const reset = document.getElementById(table + '-reset-filters-btn');
+  reset.parentNode.insertBefore(filter, reset);
+  reset.parentNode.insertBefore(bulk, reset.nextSibling);
+  reset.addEventListener('click', () => { filter.value = ''; applyFilterAndSort(table); });
+  tableConfig[table].extraFilters = (tableConfig[table].extraFilters || []).concat({
+    selectId: filter.id,
+    matchFn: (item, val) => (val === 'none' ? !item.group_id : item.group_id === val),
+  });
+  document.getElementById(table + '-tbody').addEventListener('click', e => {
+    const btn = e.target.closest('[data-move-id]');
+    if (btn) openMoveModal(table, [btn.dataset.moveId]);
+  });
+});
+
+function refreshMoveControls() {
+  const options = myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  Object.keys(MOVE_LINK_LABELS).forEach(table => {
+    const filter = document.getElementById(table + '-group-filter');
+    const current = filter.value;
+    filter.innerHTML = '<option value="">All groups</option>' + options + '<option value="none">Unassigned</option>';
+    filter.value = current;
+    filter.style.display = currentUserIsSuperuser ? '' : 'none';
+    document.getElementById(table + '-move-selected-btn').style.display = currentUserIsSuperuser ? '' : 'none';
+  });
+  document.getElementById('move-group-target').innerHTML = '<option value="">— choose a group —</option>' + options;
+  document.getElementById('unassigned-target').innerHTML = '<option value="">— choose a group —</option>' + options;
+}
+
+function describeMoved(moved) {
+  const parts = Object.entries(moved).filter(([, n]) => n).map(([e, n]) => `${n} ${n === 1 ? e.slice(0, -1) : e}`);
+  return parts.join(', ') || 'nothing (already in that group)';
+}
+
+function openMoveModal(table, ids) {
+  moveState = { table, ids };
+  document.getElementById('move-group-title').textContent = `Move ${ids.length} ${ids.length === 1 ? table.slice(0, -1) : table} to group`;
+  document.getElementById('move-group-links-label').textContent = MOVE_LINK_LABELS[table];
+  document.getElementById('move-group-links').checked = true;
+  document.getElementById('move-group-target').value = '';
+  document.getElementById('move-group-preview').textContent = 'Choose a group.';
+  showBanner('move-group-banner', '');
+  document.getElementById('move-group-modal').classList.add('active');
+}
+
+async function postMove(dryRun) {
+  const { table, ids } = moveState;
+  const body = {
+    group_id: document.getElementById('move-group-target').value,
+    with_links: document.getElementById('move-group-links').checked,
+    dry_run: dryRun,
+  };
+  if (ids.length === 1) return apiFetch(`/${table}/${ids[0]}/move`, { method: 'POST', body: JSON.stringify(body) });
+  return apiFetch(`/${table}/move`, { method: 'POST', body: JSON.stringify({ ...body, ids }) });
+}
+
+async function previewMove() {
+  const preview = document.getElementById('move-group-preview');
+  showBanner('move-group-banner', '');
+  if (!document.getElementById('move-group-target').value) { preview.textContent = 'Choose a group.'; return; }
+  preview.textContent = 'Checking…';
+  try {
+    preview.textContent = 'Will move: ' + describeMoved((await postMove(true)).moved);
+  } catch (err) {
+    preview.textContent = '';
+    showBanner('move-group-banner', err.message);
+  }
+}
+document.getElementById('move-group-target').addEventListener('change', previewMove);
+document.getElementById('move-group-links').addEventListener('change', previewMove);
+document.getElementById('move-group-close').addEventListener('click', () => {
+  document.getElementById('move-group-modal').classList.remove('active');
+});
+document.getElementById('move-group-submit').addEventListener('click', async () => {
+  if (!document.getElementById('move-group-target').value) { showBanner('move-group-banner', 'Choose a group.'); return; }
+  try {
+    const result = await postMove(false);
+    document.getElementById('move-group-modal').classList.remove('active');
+    showSuccessTick('Moved ' + describeMoved(result.moved));
+    // a move can touch the other lists too (a document's customer/project)
+    Object.values(MOVE_RELOAD).forEach(reload => reload());
+  } catch (err) {
+    showBanner('move-group-banner', err.message);
+    showErrorCross(err.message);
+  }
+});
+
+async function loadUnassignedCard() {
+  const el = document.getElementById('unassigned-counts');
+  try {
+    const [docs, prods] = await Promise.all([apiFetch('/documents/unassigned-counts'), apiFetch('/products/unassigned-counts')]);
+    el.textContent = `Documents ${docs.documents} · Products ${prods.products} · Customers ${docs.customers} · Projects ${docs.projects}`;
+  } catch (err) {
+    el.textContent = err.message;
+  }
+}
+document.getElementById('unassigned-assign-btn').addEventListener('click', async () => {
+  const select = document.getElementById('unassigned-target');
+  if (!select.value) { showErrorCross('Choose a group'); return; }
+  const name = select.options[select.selectedIndex].textContent;
+  if (!confirm(`Give every unassigned document, product, customer and project to "${name}"?`)) return;
+  try {
+    const body = JSON.stringify({ group_id: select.value });
+    await apiFetch('/documents/assign-unassigned', { method: 'POST', body });
+    await apiFetch('/products/assign-unassigned', { method: 'POST', body });
+    showSuccessTick('Assigned to ' + name);
+    loadUnassignedCard();
+    Object.values(MOVE_RELOAD).forEach(reload => reload());
+  } catch (err) {
+    showErrorCross(err.message);
+  }
+});
 
 document.querySelectorAll('.sort-btn').forEach(btn => {
   btn.addEventListener('click', () => {

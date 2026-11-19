@@ -6,6 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
+from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils.units import pixels_to_EMU
@@ -75,6 +76,57 @@ def fit_inside(width, height, box_width, box_height):
     return width * scale, height * scale
 
 
+# The word a document's type puts on its exports (heading, ID label, sheet and
+# file name). Catalogue documents have their own export; their quotation
+# export keeps saying Quotation, as it always has.
+_DOC_TYPE_LABELS = {"quotation": "Quotation", "invoice": "Invoice", "proposal": "Proposal", "catalogue": "Quotation"}
+
+
+def doc_type_label(doc_type):
+    """'invoice' -> 'Invoice'. doc_type is not validated on input, so an unknown
+    type is capitalised only when it is plain ASCII letters/digits (safe in a
+    sheet name and a download header); anything else falls back to Quotation."""
+    t = (doc_type or "").lower()
+    return _DOC_TYPE_LABELS.get(t) or (t.capitalize() if t.isascii() and t.isalnum() else "Quotation")
+
+
+# Zero shows as "-" (a line with no labour), like the user's own sheets.
+LABOUR_FORMAT = '#,##0.00;-#,##0.00;"-"'
+
+
+def _labour_totals(ws, row, item_rows, tax_rate):
+    """SUB Total (materials F | labour H) -> Tax on materials (only if taxed) ->
+    Grand Total = materials + labour + tax. Labour is never taxed. Live formulas,
+    every cell bordered and bold. Returns the row after the block + 1 blank."""
+    def line(label, cells, merge_amount=False):
+        ws.merge_cells(f"A{row}:E{row}")
+        if merge_amount:
+            ws.merge_cells(f"F{row}:H{row}")
+        for c in range(1, 10):  # after merging: merging resets the merged-over cells' style
+            ws.cell(row=row, column=c).border = BORDER
+            ws.cell(row=row, column=c).font = Font(name="Arial", bold=True)
+        ws[f"A{row}"] = label
+        ws[f"A{row}"].alignment = Alignment(horizontal="center")
+        for col, formula, fmt in cells:
+            ws[f"{col}{row}"] = formula
+            ws[f"{col}{row}"].number_format = fmt
+
+    def total(col):
+        return ("=" + "+".join(f"{col}{r}" for r in item_rows)) if item_rows else 0
+
+    sub_row = row
+    line("SUB Total", [("F", total("F"), "#,##0.00"), ("H", total("H"), LABOUR_FORMAT)])
+    row += 1
+    grand = f"=F{sub_row}+H{sub_row}"
+    if tax_rate > 0:
+        line(f"Tax on materials ({tax_rate:g}%)", [("F", f"=F{sub_row}*{tax_rate}/100", "#,##0.00")])
+        grand += f"+F{row}"
+        row += 1
+    line("Grand Total", [("F", grand, "#,##0.00")], merge_amount=True)
+    ws[f"F{row}"].alignment = Alignment(horizontal="center")
+    return row + 2
+
+
 def is_letterhead(company, logo_bytes, logo_mime):
     return bool(company and company.get("header_style") == "letterhead" and logo_bytes and logo_mime != "image/svg+xml")
 
@@ -102,9 +154,14 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     """
     wb = Workbook()
     ws = wb.active
-    ws.title = "Quotation"
+    label = doc_type_label(getattr(document, "doc_type", None))
+    ws.title = label
 
-    col_widths = [8, 55, 8, 8, 16, 16, 30]
+    include_labour = bool(getattr(document, "include_labour", False))
+    # Labour adds Labour unit price / total (G, H) before Remark; Item gives up some width.
+    col_widths = [8, 45, 8, 8, 16, 16, 16, 16, 30] if include_labour else [8, 55, 8, 8, 16, 16, 30]
+    last_col = get_column_letter(len(col_widths))  # G, or I with labour
+    seal_col = get_column_letter(len(col_widths) - 1)  # seal sits over the last two columns
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -129,7 +186,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         try:
             banner = XLImage(BytesIO(logo_bytes))
             col_px = [int((256 * w + 128 // 7) / 256 * 7) for w in col_widths]  # Excel's own px-per-column formula
-            box_w = sum(col_px[:5]) - 10 if seal_bytes and seal_mime != "image/svg+xml" else sum(col_px)
+            box_w = sum(col_px[:-2]) - 10 if seal_bytes and seal_mime != "image/svg+xml" else sum(col_px)
             banner.width, banner.height = (round(v) for v in fit_inside(banner.width, banner.height, box_w, 115))
             ws.add_image(banner, f"A{row}")
             banner_placed = True
@@ -152,7 +209,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             seal_img = XLImage(BytesIO(seal_bytes))
             seal_img.width = 90
             seal_img.height = 90
-            ws.add_image(seal_img, f"F{row}")
+            ws.add_image(seal_img, f"{seal_col}{row}")
         except Exception:
             pass  # bad/unsupported image format shouldn't block the whole export
 
@@ -160,7 +217,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         row += 6  # reserve rows for the (now taller) logo/seal row before the title
 
     ws.merge_cells(f"A{row}:E{row}")
-    ws[f"A{row}"] = "QUOTATION"
+    ws[f"A{row}"] = label.upper()
     # Same heading treatment as the PDF (quotation.html .title): same size as the Date line
     # (11pt), bold dark red, down from 18pt black.
     ws[f"A{row}"].font = Font(name="Arial", size=11, bold=True, color="C00000")
@@ -205,7 +262,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     customer_org = _safe_str(customer.get("organization") or customer["name"]) if customer else "—"
     end_user_rows = [
         ("Customer Name", customer_name),
-        ("Quotation ID", document.doc_number),
+        (f"{label} ID", document.doc_number),
         ("Organization", customer_org),
         ("Address", customer_address),
     ]
@@ -223,13 +280,30 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         row += 1
     row += 1
 
-    headers = ["No", "Item", "Qty", "Unit", f"Price ({document.currency})", f"Amount ({document.currency})", "Remark"]
-    for col, h in enumerate(headers, start=1):
-        cell = ws.cell(row=row, column=col, value=h)
-        cell.font = Font(name="Arial", bold=True, size=10)
-        cell.fill = HEADER_FILL
-        cell.border = BORDER
-        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+    if include_labour:
+        # Two header rows: Material / Labour each span their Unit Price + Total
+        # Price; No, Item, Qty, Unit and Remark span both rows.
+        top = ["No", "Item", "Qty", "Unit", f"Material ({document.currency})", None, f"Labour ({document.currency})", None, "Remark"]
+        for col, h in enumerate(top, start=1):
+            for r, v in ((row, h), (row + 1, ["Unit Price", "Total Price"][(col - 5) % 2] if 5 <= col <= 8 else None)):
+                cell = ws.cell(row=r, column=col, value=v)
+                cell.font = Font(name="Arial", bold=True, size=10)
+                cell.fill = HEADER_FILL
+                cell.border = BORDER
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for c in "ABCDI":
+            ws.merge_cells(f"{c}{row}:{c}{row + 1}")
+        ws.merge_cells(f"E{row}:F{row}")
+        ws.merge_cells(f"G{row}:H{row}")
+        row += 1
+    else:
+        headers = ["No", "Item", "Qty", "Unit", f"Price ({document.currency})", f"Amount ({document.currency})", "Remark"]
+        for col, h in enumerate(headers, start=1):
+            cell = ws.cell(row=row, column=col, value=h)
+            cell.font = Font(name="Arial", bold=True, size=10)
+            cell.fill = HEADER_FILL
+            cell.border = BORDER
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
     # Same intent as the PDF, where the whole header repeats on every page:
     # when the sheet is printed, rows 1 through this column-titles row
     # (title, date, SUPPLIER / END USER, column titles) repeat at the top of
@@ -253,14 +327,20 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         remark = _safe_str(item.remark or (product.get("remark") if product else None) or "")
 
         values = [idx, item_cell_text, float(item.quantity or 0), item.unit or "Nos", float(item.unit_price or 0), float(line_amount), remark]
+        if include_labour:
+            # Labour total is a live formula; a line with no labour shows an empty price and "-".
+            labour_price = getattr(item, "labour_unit_price", None)
+            values[6:6] = [float(labour_price) if labour_price else None, f"=C{row}*G{row}"]
         for col, v in enumerate(values, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             if col != 2:  # Item column carries its own rich-text formatting (bold name + normal description) — don't override it
                 cell.font = Font(name="Arial", size=10)
             cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=(col in (2, 7)))
-            if col in (5, 6):
+            cell.alignment = Alignment(vertical="top", wrap_text=(col in (2, len(values))))
+            if col in (5, 6) or (include_labour and col == 7):
                 cell.number_format = "#,##0.00"
+            if include_labour and col == 8:
+                cell.number_format = LABOUR_FORMAT
         main_item_rows.append(row)
         row += 1
 
@@ -282,6 +362,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                     sub_price,
                     "",
                 ]
+                if include_labour:
+                    sub_values[6:6] = ["", ""]  # sub-items carry no labour
                 for col, v in enumerate(sub_values, start=1):
                     cell = ws.cell(row=row, column=col, value=v)
                     if col != 2:
@@ -303,7 +385,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         tax_rate_value = float(items_with_product[0][0].tax_rate)
     subtotal_formula = ("=" + "+".join(f"F{r}" for r in main_item_rows)) if main_item_rows else 0
 
-    if tax_rate_value > 0:
+    if include_labour:
+        row = _labour_totals(ws, row, main_item_rows, tax_rate_value)
+    elif tax_rate_value > 0:
         ws.merge_cells(f"A{row}:E{row}")
         ws[f"A{row}"] = "Subtotal:"
         ws[f"A{row}"].font = Font(name="Arial", bold=True)
@@ -332,23 +416,24 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     else:
         total_formula = subtotal_formula
 
-    ws.merge_cells(f"A{row}:E{row}")
-    ws[f"A{row}"] = "Total:"
-    ws[f"A{row}"].font = Font(name="Arial", bold=True)
-    ws[f"A{row}"].alignment = Alignment(horizontal="right")
-    total_cell = ws.cell(row=row, column=6)
-    total_cell.value = total_formula
-    total_cell.font = Font(name="Arial", bold=True)
-    total_cell.number_format = "#,##0.00"
-    total_cell.border = BORDER
-    row += 2
+    if not include_labour:
+        ws.merge_cells(f"A{row}:E{row}")
+        ws[f"A{row}"] = "Total:"
+        ws[f"A{row}"].font = Font(name="Arial", bold=True)
+        ws[f"A{row}"].alignment = Alignment(horizontal="right")
+        total_cell = ws.cell(row=row, column=6)
+        total_cell.value = total_formula
+        total_cell.font = Font(name="Arial", bold=True)
+        total_cell.number_format = "#,##0.00"
+        total_cell.border = BORDER
+        row += 2
 
     ws[f"A{row}"] = "Terms and Conditions"
     ws[f"A{row}"].font = Font(name="Arial", bold=True, size=12)
     row += 1
     terms_text = document.terms_and_conditions or DEFAULT_TERMS
     for line in terms_text.split("\n"):
-        ws.merge_cells(f"A{row}:G{row}")
+        ws.merge_cells(f"A{row}:{last_col}{row}")
         ws[f"A{row}"] = _safe_str(line)
         ws[f"A{row}"].font = Font(name="Arial", size=10)
         row += 1
@@ -370,9 +455,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         # the text. The no-seal fallback below rewrites this as F:G merged,
         # centered over the name/position lines instead.
         regards_row = row
-        ws[f"G{row}"] = "Regards,"
-        ws[f"G{row}"].font = Font(name="Arial", bold=True)
-        ws[f"G{row}"].alignment = Alignment(horizontal="center")
+        ws[f"{last_col}{row}"] = "Regards,"
+        ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
+        ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
         row += 1
         if director_seal_bytes and director_seal_mime != "image/svg+xml":
             try:
@@ -383,9 +468,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                 # trunc((256*w + trunc(128/7)) / 256 * 7) px: 30 -> 210px. A
                 # plain "G{row}" anchor would put the 100px seal at G's left
                 # edge, 55px left of where the centered "Regards," sits.
-                g_px = int((256 * col_widths[6] + 128 // 7) / 256 * 7)
+                g_px = int((256 * col_widths[-1] + 128 // 7) / 256 * 7)
                 md_seal_img.anchor = OneCellAnchor(
-                    _from=AnchorMarker(col=6, colOff=pixels_to_EMU((g_px - 100) // 2), row=row - 1, rowOff=0),
+                    _from=AnchorMarker(col=len(col_widths) - 1, colOff=pixels_to_EMU((g_px - 100) // 2), row=row - 1, rowOff=0),
                     ext=XDRPositiveSize2D(pixels_to_EMU(100), pixels_to_EMU(100)),
                 )
                 ws.add_image(md_seal_img)
@@ -394,20 +479,20 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             except Exception:
                 pass  # bad/unsupported image format shouldn't block the whole export
         if not seal_placed:
-            ws[f"G{regards_row}"] = None
-            ws.merge_cells(f"F{regards_row}:G{regards_row}")
-            ws[f"F{regards_row}"] = "Regards,"
-            ws[f"F{regards_row}"].font = Font(name="Arial", bold=True)
-            ws[f"F{regards_row}"].alignment = Alignment(horizontal="center")
-            ws.merge_cells(f"F{row}:G{row}")
-            ws[f"F{row}"] = _safe_str(director.get("name", ""))
-            ws[f"F{row}"].font = Font(name="Arial", bold=True)
-            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            ws[f"{last_col}{regards_row}"] = None
+            ws.merge_cells(f"{seal_col}{regards_row}:{last_col}{regards_row}")
+            ws[f"{seal_col}{regards_row}"] = "Regards,"
+            ws[f"{seal_col}{regards_row}"].font = Font(name="Arial", bold=True)
+            ws[f"{seal_col}{regards_row}"].alignment = Alignment(horizontal="center")
+            ws.merge_cells(f"{seal_col}{row}:{last_col}{row}")
+            ws[f"{seal_col}{row}"] = _safe_str(director.get("name", ""))
+            ws[f"{seal_col}{row}"].font = Font(name="Arial", bold=True)
+            ws[f"{seal_col}{row}"].alignment = Alignment(horizontal="center")
             row += 1
-            ws.merge_cells(f"F{row}:G{row}")
-            ws[f"F{row}"] = _safe_str(director.get("position")) or "Managing Director"
-            ws[f"F{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
-            ws[f"F{row}"].alignment = Alignment(horizontal="center")
+            ws.merge_cells(f"{seal_col}{row}:{last_col}{row}")
+            ws[f"{seal_col}{row}"] = _safe_str(director.get("position")) or "Managing Director"
+            ws[f"{seal_col}{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
+            ws[f"{seal_col}{row}"].alignment = Alignment(horizontal="center")
             row += 1
         row = max(row, seal_row + 7) + 1
 
@@ -423,6 +508,18 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # (the Supplier block above shows the director's own number, falling
     # back to this one only when the director has none).
     ws[f"B{row}"] = _safe_str(company.get("contact_no", "")) if company else ""
+
+    # The 7 columns are ~10.6in wide but A4 portrait prints ~7.3in, so without
+    # this Excel splits the sheet after column E (Price/Amount/Remark on page 2).
+    # Fit to 1 page wide, as many tall as needed; the print area stops anything
+    # outside A:G from widening the page (every image is anchored inside A:G).
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.orientation = "portrait"
+    ws.print_options.horizontalCentered = True
+    ws.print_area = f"A1:{last_col}{row}"
 
     buffer = BytesIO()
     wb.save(buffer)

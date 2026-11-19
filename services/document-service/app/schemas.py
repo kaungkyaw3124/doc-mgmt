@@ -3,10 +3,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProjectCreate(BaseModel):
+    group_id: Optional[uuid.UUID] = None  # owning group; required only when the caller is in several (or is a superuser)
     name: str
     budget_year: Optional[str] = None  # e.g. "2025-2026"
     description: Optional[str] = None
@@ -16,16 +17,19 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     budget_year: Optional[str] = None
     description: Optional[str] = None
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
 
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    group_id: Optional[uuid.UUID] = None
     id: uuid.UUID
     name: str
     budget_year: Optional[str]
     description: Optional[str]
     is_deleted: bool
     created_at: datetime
+    version: int = 1
 
 
 HeaderStyle = Literal["logo", "letterhead"]
@@ -51,6 +55,7 @@ class CompanyUpdate(BaseModel):
     support_email: Optional[str] = None
     header_style: Optional[HeaderStyle] = None
     is_primary: Optional[bool] = None
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
 
 class CompanyOut(BaseModel):
@@ -68,6 +73,7 @@ class CompanyOut(BaseModel):
     is_primary: bool
     is_deleted: bool
     created_at: datetime
+    version: int = 1
 
 
 class CompanyDirectorCreate(BaseModel):
@@ -106,6 +112,7 @@ def _blank_to_none(value):
 
 
 class CustomerCreate(BaseModel):
+    group_id: Optional[uuid.UUID] = None  # owning group; required only when the caller is in several (or is a superuser)
     name: str
     organization: Optional[str] = None
     email: Optional[str] = None
@@ -122,12 +129,14 @@ class CustomerUpdate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     billing_address: Optional[dict] = None
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
     _organization = field_validator("organization")(_blank_to_none)
 
 
 class CustomerOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    group_id: Optional[uuid.UUID] = None
     id: uuid.UUID
     name: str
     organization: Optional[str] = None
@@ -136,6 +145,7 @@ class CustomerOut(BaseModel):
     billing_address: Optional[dict]
     is_deleted: bool
     created_at: datetime
+    version: int = 1
 
 
 class DocumentItemIn(BaseModel):
@@ -146,6 +156,7 @@ class DocumentItemIn(BaseModel):
     quantity: Decimal
     unit_price: Optional[Decimal] = None
     tax_rate: Decimal = Decimal("0")
+    labour_unit_price: Optional[Decimal] = Field(default=None, ge=0)  # used only when the document's include_labour is on
 
 
 class DocumentItemOut(DocumentItemIn):
@@ -155,6 +166,7 @@ class DocumentItemOut(DocumentItemIn):
 
 
 class DocumentCreate(BaseModel):
+    group_id: Optional[uuid.UUID] = None  # owning group; required only when the caller is in several (or is a superuser)
     doc_type: str  # quotation | invoice | proposal | catalogue
     doc_number: Optional[str] = None  # auto-generated if omitted, e.g. INV-2026-07-17
     customer_id: Optional[uuid.UUID] = None
@@ -173,6 +185,7 @@ class DocumentCreate(BaseModel):
     end_user_address: Optional[str] = None
     end_user_phone: Optional[str] = None
     end_user_email: Optional[str] = None
+    include_labour: bool = False
     items: list[DocumentItemIn] = []
 
 
@@ -190,11 +203,14 @@ class DocumentUpdate(BaseModel):
     end_user_address: Optional[str] = None
     end_user_phone: Optional[str] = None
     end_user_email: Optional[str] = None
+    include_labour: Optional[bool] = None  # omit to leave unchanged
     items: list[DocumentItemIn] = []
+    version: Optional[int] = None  # the version the client loaded; stale -> 409 (omit = no check)
 
 
 class DocumentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    group_id: Optional[uuid.UUID] = None
     id: uuid.UUID
     doc_type: str
     doc_number: str
@@ -212,6 +228,7 @@ class DocumentOut(BaseModel):
     subtotal: Optional[Decimal]
     tax_total: Optional[Decimal]
     total: Optional[Decimal]
+    include_labour: bool = False
     issue_date: Optional[date]
     due_date: Optional[date]
     doc_metadata: Optional[dict]
@@ -223,3 +240,20 @@ class DocumentOut(BaseModel):
     deleted_by: Optional[str] = None
     deleted_at: Optional[datetime] = None
     items: list[DocumentItemOut] = []
+
+
+class AssignUnassigned(BaseModel):
+    group_id: uuid.UUID
+
+
+class MoveToGroup(BaseModel):
+    """Body of POST /{documents|customers|projects}/{id}/move (superuser).
+    with_links: also move the linked customer/project/documents (see
+    app/core/group_move.py). dry_run: only count what would move."""
+    group_id: uuid.UUID
+    with_links: bool = True
+    dry_run: bool = False
+
+
+class BulkMoveToGroup(MoveToGroup):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=1000)

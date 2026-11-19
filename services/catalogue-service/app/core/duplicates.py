@@ -2,6 +2,7 @@
 Duplicate-product detection, shared by create/edit/restore, bulk import,
 GET /products/duplicate-check and GET /products/duplicates.
 
+Duplicates are looked for within one group (department) only.
 Two products are EXACT duplicates when norm(name) and norm(description)
 are equal; SAME NAME when only norm(name) is; SIMILAR when the normalized
 names are close (difflib ratio >= SIMILAR_RATIO). Only active (not
@@ -14,6 +15,7 @@ normalized name/description into indexed columns and a trigram search.
 from difflib import SequenceMatcher
 
 from app import models
+from app.core.group_scope import ALL, scoped
 
 SIMILAR_RATIO = 0.88
 SIMILAR_LIMIT = 5
@@ -28,8 +30,14 @@ def key(name, description) -> tuple[str, str]:
     return norm(name), norm(description)
 
 
-def active_products(db, exclude_id=None, visible_ids=None) -> list:
-    query = db.query(models.Product).filter(models.Product.is_deleted == False)  # noqa: E712
+_ANY_GROUP = object()
+
+
+def active_products(db, scope, exclude_id=None, visible_ids=None, group_id=_ANY_GROUP) -> list:
+    """Active products the caller (`scope`) can see; group_id limits them to one group."""
+    query = scoped(db, models.Product, scope).filter(models.Product.is_deleted == False)  # noqa: E712
+    if group_id is not _ANY_GROUP:
+        query = query.filter(models.Product.group_id == group_id if group_id else models.Product.group_id.is_(None))
     if exclude_id is not None:
         query = query.filter(models.Product.id != exclude_id)
     if visible_ids is not None:
@@ -37,11 +45,14 @@ def active_products(db, exclude_id=None, visible_ids=None) -> list:
     return query.all()
 
 
-def find_exact(db, name, description, exclude_id=None):
-    """The first active product that is an exact duplicate, or None. Not
-    filtered by visibility: uniqueness is catalogue-wide."""
+def find_exact(db, name, description, group_id, exclude_id=None):
+    """The first active product of `group_id` that is an exact duplicate, or
+    None. Not filtered by the caller's visibility: uniqueness is per group."""
     wanted = key(name, description)
-    return next((p for p in active_products(db, exclude_id) if key(p.name, p.description) == wanted), None)
+    return next(
+        (p for p in active_products(db, ALL, exclude_id, group_id=group_id) if key(p.name, p.description) == wanted),
+        None,
+    )
 
 
 def check(products, name, description) -> dict:
@@ -67,8 +78,8 @@ def groups(products) -> dict:
     by_key, by_name = {}, {}
     for p in products:
         k = key(p.name, p.description)
-        by_key.setdefault(k, []).append(p)
-        by_name.setdefault(k[0], []).append(p)
+        by_key.setdefault((p.group_id, k), []).append(p)  # per group: two departments may sell the same item
+        by_name.setdefault((p.group_id, k[0]), []).append(p)
 
     def _sorted(gs):
         return sorted((sorted(g, key=lambda p: p.sku) for g in gs), key=lambda g: (norm(g[0].name), g[0].sku))

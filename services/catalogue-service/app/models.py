@@ -11,6 +11,7 @@ class Product(Base):
     __tablename__ = "products"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     sku = Column(String(100), unique=True, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)  # soft delete — trashed, recoverable via recycle bin
     name = Column(String(255), nullable=False)
@@ -23,6 +24,9 @@ class Product(Base):
     image_object_key = Column(String(500))  # pointer into MinIO, reusing document-service's bucket approach
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
+
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
 
 class Category(Base):
@@ -59,3 +63,20 @@ class ProductSubItem(Base):
     sub_product_id = Column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
     sequence_number = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Counter(Base):
+    """Number counters (SKU per category prefix) — see core/concurrency.py."""
+    __tablename__ = "counters"
+
+    name = Column(String(120), primary_key=True)  # e.g. "sku:COM"
+    value = Column(Integer, nullable=False)  # the last number handed out
+
+
+class IdempotencyKey(Base):
+    """An Idempotency-Key a create endpoint already handled, and the record it made."""
+    __tablename__ = "idempotency_keys"
+
+    key = Column(String(255), primary_key=True)  # "<endpoint>:<client key>"
+    resource_id = Column(UUID(as_uuid=True))
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)

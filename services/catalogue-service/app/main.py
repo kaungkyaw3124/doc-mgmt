@@ -1,10 +1,17 @@
 import logging
+import os
+
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
 
 from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.db import Base, engine, get_db
+from app.core.concurrency import CONFLICT_DETAIL
 from app import models
 from app.core.storage import ensure_bucket_exists
 from app.core.search_client import _client as meili_client, _INDEX_NAME as MEILI_PRODUCTS_INDEX, rebuild_index
@@ -17,6 +24,13 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Catalogue Service", version="0.1.0")
 
 app.middleware("http")(verify_gateway_secret)
+
+
+@app.exception_handler(StaleDataError)
+def _lost_update(request, exc):
+    """Two saves of the same version raced: the second one's UPDATE matched no
+    row (models' version_id_col). Same answer as a stale version in the body."""
+    return JSONResponse(status_code=409, content={"detail": CONFLICT_DETAIL})
 
 app.include_router(products.router)
 app.include_router(categories.router)
@@ -40,17 +54,22 @@ def _secret_problems() -> list[str]:
     return problems
 
 
+_ALEMBIC_INI = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
+
+
 @app.on_event("startup")
 def on_startup():
     enforce_production_secrets(settings.environment, _secret_problems())
 
-    # Matches document-service's current approach: create_all() for now,
-    # Alembic migrations to be introduced properly in a later session.
+    # create_all() creates missing tables; Alembic then adds columns to tables
+    # that already existed (create_all never alters one). Every migration is
+    # guarded/idempotent, so this order is safe from any starting state.
     Base.metadata.create_all(bind=engine)
+    alembic_command.upgrade(AlembicConfig(_ALEMBIC_INI), "head")
     ensure_bucket_exists()
 
     try:
-        meili_client.index(MEILI_PRODUCTS_INDEX).update_filterable_attributes(["category"])
+        meili_client.index(MEILI_PRODUCTS_INDEX).update_filterable_attributes(["category", "group_id"])
     except Exception:
         logger.warning(
             "couldn't set Meilisearch filterable attributes on startup — "

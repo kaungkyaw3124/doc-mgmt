@@ -14,11 +14,14 @@ class Project(Base):
     __tablename__ = "projects"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     name = Column(String(255), nullable=False)
     budget_year = Column(String(20))  # e.g. "2025-2026"
     description = Column(Text)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
     documents = relationship("Document", back_populates="project")
 
@@ -40,6 +43,8 @@ class Company(Base):
     is_primary = Column(Boolean, default=False, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
 
 class CompanyDirector(Base):
@@ -68,6 +73,7 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     name = Column(String(255), nullable=False)
     organization = Column(String(255))  # optional; NULL means "print the name" (not a copy of it, so a rename flows through)
     email = Column(String(255))
@@ -75,6 +81,8 @@ class Customer(Base):
     billing_address = Column(JSONB)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
     documents = relationship("Document", back_populates="customer")
 
@@ -83,6 +91,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # owning department (auth-service groups.id, no FK across services); NULL = unassigned, superusers only
     doc_type = Column(String(20), nullable=False, index=True)  # quotation | invoice | catalogue
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)  # soft delete — trashed, recoverable via recycle bin
     deleted_by = Column(String(100))  # username of who trashed it (from the server-verified X-Username header, never client-supplied) — cleared on restore
@@ -103,15 +112,18 @@ class Document(Base):
     currency = Column(String(3), default="USD")
     subtotal = Column(Numeric(12, 2))
     tax_total = Column(Numeric(12, 2))
-    total = Column(Numeric(12, 2))
+    total = Column(Numeric(12, 2))  # subtotal + tax_total (+ labour when include_labour)
+    include_labour = Column(Boolean, default=False, nullable=False, server_default="false")  # shows the Labour columns on the form and exports
     issue_date = Column(Date)
     due_date = Column(Date)
     doc_metadata = Column("metadata", JSONB)
     terms_and_conditions = Column(Text)
     file_object_key = Column(String(500))
-    version = Column(Integer, default=1)
+    version = Column(Integer, nullable=False, default=1, server_default="1")  # optimistic locking: +1 on every update (see core/concurrency.py)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __mapper_args__ = {"version_id_col": version}  # UPDATE … WHERE version = <loaded>: a lost race raises StaleDataError → 409
 
     customer = relationship("Customer", back_populates="documents")
     project = relationship("Project", back_populates="documents")
@@ -131,7 +143,8 @@ class LineItem(Base):
     quantity = Column(Numeric(12, 2))
     unit_price = Column(Numeric(12, 2))
     tax_rate = Column(Numeric(5, 2))
-    line_total = Column(Numeric(12, 2))
+    line_total = Column(Numeric(12, 2))  # material only: quantity * unit_price
+    labour_unit_price = Column(Numeric(12, 2))  # optional; labour total = quantity * this, never taxed
 
     document = relationship("Document", back_populates="items")
 
@@ -149,3 +162,20 @@ class AuditLogEntry(Base):
     username = Column(String(100), nullable=False)
     action = Column(String(30), nullable=False)  # "created" | "viewed" | "edited" | "status_changed" | "file_uploaded" | "deleted" | "restored"
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Counter(Base):
+    """Number counters (doc numbers per company prefix + day) — see core/concurrency.py."""
+    __tablename__ = "counters"
+
+    name = Column(String(120), primary_key=True)  # e.g. "doc:SS-20261118/"
+    value = Column(Integer, nullable=False)  # the last number handed out
+
+
+class IdempotencyKey(Base):
+    """An Idempotency-Key a create endpoint already handled, and the record it made."""
+    __tablename__ = "idempotency_keys"
+
+    key = Column(String(255), primary_key=True)  # "<endpoint>:<client key>"
+    resource_id = Column(UUID(as_uuid=True))
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)

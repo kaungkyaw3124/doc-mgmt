@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.concurrency import check_version, claim_idempotency_key, remember
+from app.core.group_scope import ALL, scoped
 from app.core.storage import upload_file, get_presigned_url
 from app import models, schemas
 
@@ -137,11 +139,16 @@ def create_company(
     payload: schemas.CompanyCreate,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _require_edit_access(x_access_level)
     data = payload.model_dump()
     data["short_name"] = _clean_short_name(data["short_name"])
-    company = models.Company(**data)
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /companies")
+    if replay_id:
+        return get_company(replay_id, db)
+    company = models.Company(id=uuid.uuid4(), **data)
+    remember(held, company.id)
 
     # If this is the first company ever created, or explicitly marked primary,
     # make sure only one company is ever "primary" at a time (used as the
@@ -196,8 +203,9 @@ def update_company(
     company = db.query(models.Company).filter_by(id=company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
+    check_version(company, payload.version)
 
-    update_data = payload.model_dump(exclude_unset=True)
+    update_data = payload.model_dump(exclude_unset=True, exclude={"version"})
     if "short_name" in update_data:
         update_data["short_name"] = _clean_short_name(update_data["short_name"])
     if update_data.get("is_primary") is True:
@@ -260,7 +268,8 @@ def delete_all_companies(
     refuse_in_production_or_view_only(x_access_level)
     keys = [k for row in db.query(models.Company.logo_object_key, models.Company.seal_object_key) for k in row]
     keys += [k for (k,) in db.query(models.CompanyDirector.seal_object_key)]
-    db.query(models.Document).update(
+    # Companies are shared by every group, so documents of ALL groups lose the link.
+    scoped(db, models.Document, ALL).update(
         {models.Document.company_id: None, models.Document.director_id: None}, synchronize_session=False
     )
     db.query(models.CompanyDirector).delete(synchronize_session=False)

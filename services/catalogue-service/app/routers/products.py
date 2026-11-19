@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import re
 import shutil
@@ -9,21 +10,24 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 
 import openpyxl
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header
 from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.search_client import index_product, remove_product_from_index
-from app.core.storage import upload_file, get_presigned_url, download_file_bytes
+from app.core.concurrency import check_version, claim_idempotency_key, next_number, remember
+from app.core.group_scope import ALL, Scope, get_scope, scoped, get_or_404, group_for_create, require_superuser
+from app.core.search_client import index_product, remove_product_from_index, rebuild_index
+from app.core.storage import upload_file, delete_file, get_presigned_url, download_file_bytes
 from app.core.document_client import get_visible_product_ids
 from app.core import duplicates as dup
 from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app import models, schemas
 
 router = APIRouter(prefix="/products", tags=["products"])
+logger = logging.getLogger(__name__)
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -139,11 +143,12 @@ def _extract_archive_entries(filename: str | None, file_bytes: bytes):
     return _extract_zip_entries(file_bytes)
 
 
-def _raise_if_exact_duplicate(db: Session, name, description, x_allowed_projects: str | None, exclude_id=None):
-    """409 if another active product has the same normalized name AND
-    description. The block is catalogue-wide, but the existing product's
-    details are only included when the caller is allowed to see it."""
-    existing = dup.find_exact(db, name, description, exclude_id)
+def _raise_if_exact_duplicate(db: Session, name, description, x_allowed_projects: str | None, group_id, exclude_id=None):
+    """409 if another active product of the same group has the same
+    normalized name AND description (each department keeps its own
+    catalogue). The existing product's details are only included when the
+    caller is allowed to see it (project rule)."""
+    existing = dup.find_exact(db, name, description, group_id, exclude_id)
     if existing is None:
         return
     visible_ids = get_visible_product_ids(x_allowed_projects)
@@ -154,29 +159,47 @@ def _raise_if_exact_duplicate(db: Session, name, description, x_allowed_projects
     })
 
 
-def _generate_sku(db: Session, category_name: str | None) -> str:
+def _sku_prefix(db: Session, category_name: str | None) -> str:
     """
-    e.g. COM-0001 for a product in the "Computer" category — using that
-    category's manually-set short_term as the prefix (not derived from
-    the category name itself). Falls back to "PRD" if no category was
-    given, or the category has no short_term set. Finds the next free
-    number for that prefix, so it stays sequential per-category.
+    e.g. "COM" for a product in the "Computer" category — that category's
+    manually-set short_term (not derived from the category name itself).
+    Falls back to "PRD" if no category was given, or the category has no
+    short_term set.
     """
-    prefix = "PRD"
     if category_name:
         category = db.query(models.Category).filter_by(name=category_name).first()
         if category and category.short_term:
-            prefix = category.short_term.upper()
+            return category.short_term.upper()
+    return "PRD"
 
-    existing_skus = [
-        p.sku for p in db.query(models.Product.sku).filter(models.Product.sku.like(f"{prefix}-%")).all()
-    ]
-    max_n = 0
-    for sku in existing_skus:
-        match = re.match(rf"^{re.escape(prefix)}-(\d+)$", sku)
-        if match:
-            max_n = max(max_n, int(match.group(1)))
-    return f"{prefix}-{max_n + 1:04d}"
+
+def _max_sku_number(db: Session, prefix: str) -> int:
+    """Highest N in "<prefix>-N" already used — seeds the prefix's counter.
+    sku is unique across ALL groups, so this looks at every product."""
+    rows = scoped(db, models.Product, ALL).with_entities(models.Product.sku).filter(models.Product.sku.like(f"{prefix}-%"))
+    return max((int(m.group(1)) for (sku,) in rows if (m := re.fullmatch(rf"{re.escape(prefix)}-(\d+)", sku))), default=0)
+
+
+def _add_with_next_sku(db: Session, product, category_name: str | None) -> None:
+    """
+    Gives `product` the next SKU of its category (e.g. COM-0001), from the
+    locked per-prefix counter — two simultaneous creates can never get the
+    same one, and a rolled-back create gives its number back — then adds and
+    flushes it. A clash with a hand-typed SKU is retried once with the
+    counter moved past the highest SKU in use (a savepoint keeps the rest of
+    the transaction, e.g. the held idempotency key).
+    """
+    prefix = _sku_prefix(db, category_name)
+    for attempt in range(2):
+        product.sku = f"{prefix}-{next_number(db, f'sku:{prefix}', lambda: _max_sku_number(db, prefix), reseed=attempt > 0):04d}"
+        try:
+            with db.begin_nested():  # add inside: begin_nested() flushes pending objects before its SAVEPOINT
+                db.add(product)
+                db.flush()
+            return
+        except IntegrityError:
+            pass
+    raise HTTPException(status_code=409, detail="sku already exists")
 
 
 @router.post("", response_model=schemas.ProductOut, status_code=201)
@@ -185,26 +208,31 @@ def create_product(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
-    _raise_if_exact_duplicate(db, payload.name, payload.description, x_allowed_projects)
-    sku = payload.sku or _generate_sku(db, payload.category)
-
-    existing = db.query(models.Product).filter_by(sku=sku).first()
-    if existing:
+    group_id = group_for_create(scope, payload.group_id)
+    # First: a repeat must get the first answer, not "duplicate"/"sku exists".
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /products")
+    if replay_id:
+        return _attach_sub_item_count(db, get_or_404(db, models.Product, replay_id, scope, "product not found"))
+    _raise_if_exact_duplicate(db, payload.name, payload.description, x_allowed_projects, group_id)
+    if payload.sku and scoped(db, models.Product, ALL).filter_by(sku=payload.sku).first():  # unique across all groups
         raise HTTPException(status_code=409, detail="sku already exists")
-
-    data = payload.model_dump()
-    data["sku"] = sku
-    product = models.Product(**data)
-    db.add(product)
+    product = models.Product(**{**payload.model_dump(), "id": uuid.uuid4(), "group_id": group_id})
+    remember(held, product.id)
+    if payload.sku:
+        db.add(product)
+    else:
+        _add_with_next_sku(db, product, payload.category)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="sku already exists")
     db.refresh(product)
-    index_product(product)
+    index_product(product)  # after the commit; a failure is logged and fixed by scripts/reindex.sh
     return _attach_sub_item_count(db, product)
 
 
@@ -214,8 +242,9 @@ def list_products(
     q: str | None = None,   # simple name search, e.g. ?q=widget
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
-    query = db.query(models.Product).filter(models.Product.is_deleted == False)  # noqa: E712
+    query = scoped(db, models.Product, scope).filter(models.Product.is_deleted == False)  # noqa: E712
     if category:
         query = query.filter(models.Product.category == category)
     if q:
@@ -235,10 +264,11 @@ def duplicate_check(
     exclude_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """Exact / same-name / similar active products for a name+description
     about to be saved (the product form calls this before submitting)."""
-    products = dup.active_products(db, exclude_id, get_visible_product_ids(x_allowed_projects))
+    products = dup.active_products(db, scope, exclude_id, get_visible_product_ids(x_allowed_projects))
     return {kind: [dup.brief(p) for p in matches] for kind, matches in dup.check(products, name, description).items()}
 
 
@@ -246,10 +276,11 @@ def duplicate_check(
 def list_duplicates(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """Groups of possible duplicates across the active catalogue, for the
     "Possible duplicates" review page."""
-    products = dup.active_products(db, visible_ids=get_visible_product_ids(x_allowed_projects))
+    products = dup.active_products(db, scope, visible_ids=get_visible_product_ids(x_allowed_projects))
     return {kind: [[dup.brief(p) for p in g] for g in gs] for kind, gs in dup.groups(products).items()}
 
 
@@ -283,8 +314,10 @@ def download_product_bulk_import_template():
 def bulk_import_products(
     excel_file: UploadFile = File(...),
     catalogue_zip: UploadFile | None = File(None),
+    group_id: uuid.UUID | None = Form(None),
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     """
     Creates many products at once from a spreadsheet, optionally matched
@@ -311,6 +344,7 @@ def bulk_import_products(
     plain-text warnings).
     """
     _require_edit_access(x_access_level)
+    group_id = group_for_create(scope, group_id)  # every created row belongs to the importer's group
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(excel_file.file.read()), data_only=True)
     except Exception:
@@ -357,7 +391,7 @@ def bulk_import_products(
     # Normalized (name, description) -> existing sku, and normalized name ->
     # sku, both kept up to date as rows are created, so later rows in the
     # same file are checked against earlier ones too.
-    existing = dup.active_products(db)
+    existing = dup.active_products(db, ALL, group_id=group_id)  # duplicates are per group
     sku_by_key = {dup.key(p.name, p.description): p.sku for p in existing}
     sku_by_name = {dup.norm(p.name): p.sku for p in existing}
     row_by_key = {}
@@ -393,26 +427,41 @@ def bulk_import_products(
         if row_key[0] in sku_by_name:
             name_warnings.append({"row": position, "name": name, "reason": f"same name as {sku_by_name[row_key[0]]}"})
 
-        sku = _generate_sku(db, category)
-        product = models.Product(sku=sku, name=name, category=category, unit_price=price, description=description)
-        db.add(product)
-        db.commit()
+        product = models.Product(name=name, category=category, unit_price=price, description=description, group_id=group_id)
+        _add_with_next_sku(db, product, category)
+        sku = product.sku
+        entry = {"sku": sku, "name": name, "row": position, "has_file": False}
+
+        # All or nothing per row: the file goes up before the commit, a failed
+        # upload drops the row (and gives its SKU back), and a failed commit
+        # removes the uploaded object again — no row without its file, no
+        # orphan file without a row.
+        object_key = None
+        if position in files_by_position:
+            filename, file_bytes = files_by_position.pop(position)
+            object_key = f"{sku}/{filename}"
+            try:
+                upload_file(io.BytesIO(file_bytes), object_key, content_type="application/octet-stream")
+            except Exception:
+                logger.exception("bulk import: catalogue file upload failed for row %s", position)
+                db.rollback()
+                skipped.append({"row": position, "name": name, "reason": "catalogue file upload failed — row not created", "existing_sku": ""})
+                continue
+            product.image_object_key = object_key
+            entry["has_file"] = True
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            if object_key:
+                delete_file(object_key)
+            raise
         db.refresh(product)
         index_product(product)
 
         sku_by_key[row_key] = sku
         sku_by_name.setdefault(row_key[0], sku)
         row_by_key[row_key] = position
-
-        entry = {"sku": sku, "name": name, "row": position, "has_file": False}
-
-        if position in files_by_position:
-            filename, file_bytes = files_by_position.pop(position)
-            object_key = f"{sku}/{filename}"
-            upload_file(io.BytesIO(file_bytes), object_key, content_type="application/octet-stream")
-            product.image_object_key = object_key
-            db.commit()
-            entry["has_file"] = True
 
         created.append(entry)
 
@@ -422,6 +471,88 @@ def bulk_import_products(
         warnings.append(f"{len(files_by_position)} catalogue file(s) didn't match any spreadsheet row (numbers: {leftover})")
 
     return {"created": created, "skipped": skipped, "warnings": warnings + name_warnings}
+
+
+@router.post("/assign-unassigned")
+def assign_unassigned(payload: schemas.AssignUnassigned, db: Session = Depends(get_db), scope: Scope = Depends(get_scope)):
+    """Superuser only: gives every product with no group yet (group_id NULL —
+    data from before groups existed) to one group, then rebuilds the products
+    search index. Safe to run again: the second run finds nothing."""
+    require_superuser(scope)
+    if payload.group_id not in scope.group_ids:
+        raise HTTPException(status_code=422, detail="That group does not exist or is disabled.")
+    count = scoped(db, models.Product, scope).filter(models.Product.group_id == None).update(  # noqa: E711
+        {models.Product.group_id: payload.group_id}, synchronize_session=False
+    )
+    db.commit()
+    return {"products": count, "reindexed": rebuild_index(scoped(db, models.Product, scope).all())}
+
+
+# ---------- moving products to another group (superuser, loop iteration 20) ----------
+# A bundle and its sub-items must stay in one group (add_sub_item refuses a
+# cross-group link), so a move works on the connected set: the selected
+# products plus every bundle/sub-item linked to them, transitively. Products
+# already in the target group are not followed (their links are there too).
+# with_links=False moves only the selection and refuses (409) when that would
+# leave a cross-group link. Documents keep their snapshot lines either way.
+audit_logger = logging.getLogger("app.audit")
+audit_logger.setLevel(logging.INFO)  # root is WARN (alembic.ini); its console handler still prints these
+
+
+def _move_products(ids, payload: schemas.MoveToGroup, db: Session, scope: Scope, username: str | None):
+    require_superuser(scope)
+    if payload.group_id not in scope.group_ids:  # a superuser's scope = every ACTIVE group
+        raise HTTPException(status_code=422, detail="That group does not exist or is disabled.")
+    P, S, target = models.Product, models.ProductSubItem, payload.group_id
+    ids = set(ids)
+    rows = {p.id: p for p in scoped(db, P, ALL).filter(P.id.in_(ids)).all()}
+    if len(rows) != len(ids):
+        raise HTTPException(status_code=404, detail="product not found")
+    while True:
+        follow = [i for i, p in rows.items() if p.group_id != target]
+        links = db.query(S.parent_product_id, S.sub_product_id).filter(
+            S.parent_product_id.in_(follow) | S.sub_product_id.in_(follow)).all() if follow else []
+        new_ids = {i for link in links for i in link} - rows.keys()
+        if not new_ids:
+            break
+        rows.update({p.id: p for p in scoped(db, P, ALL).filter(P.id.in_(new_ids)).all()})
+    extra = sum(1 for i, p in rows.items() if i not in ids and p.group_id != target)
+    if extra and not payload.with_links:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Not moved: it is linked (bundle/sub-item) to {extra} product{'s' if extra > 1 else ''} "
+                   "in another group. Tick “also move linked products” to move them together.",
+        )
+    to_move = [p for i, p in rows.items() if p.group_id != target and (payload.with_links or i in ids)]
+    if not payload.dry_run:
+        moved = [(p.id, p.group_id) for p in to_move]
+        for p in to_move:
+            p.group_id = target
+        db.commit()
+        for row_id, old in moved:
+            audit_logger.info("group_move user=%s product=%s from=%s to=%s", username or "unknown", row_id, old, target)
+        for p in to_move:
+            index_product(p)  # the old group stops finding it in search, the new one does at once
+    return {"moved": {"products": len(to_move)}, "dry_run": payload.dry_run}
+
+
+@router.post("/move")
+def bulk_move_products(payload: schemas.BulkMoveToGroup, db: Session = Depends(get_db), scope: Scope = Depends(get_scope),
+                       x_username: str | None = Header(default=None, alias="X-Username")):
+    return _move_products(payload.ids, payload, db, scope, x_username)
+
+
+@router.post("/{product_id}/move")
+def move_product(product_id: uuid.UUID, payload: schemas.MoveToGroup, db: Session = Depends(get_db),
+                 scope: Scope = Depends(get_scope), x_username: str | None = Header(default=None, alias="X-Username")):
+    return _move_products([product_id], payload, db, scope, x_username)
+
+
+@router.get("/unassigned-counts")
+def unassigned_product_counts(db: Session = Depends(get_db), scope: Scope = Depends(get_scope)):
+    """Admin → Groups "Unassigned data" card (recycle bin included, like assign-unassigned)."""
+    require_superuser(scope)
+    return {"products": scoped(db, models.Product, ALL).filter(models.Product.group_id == None).count()}  # noqa: E711
 
 
 # DEV-ONLY: delete-all BEGIN — temporary tool for clearing the
@@ -439,10 +570,12 @@ def dev_config():
 def delete_all_products(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
-    """Permanently deletes EVERY product (recycle bin included) — no
-    project-visibility filter, on purpose: the point is an empty catalogue.
-    Refused in production so it can never wipe the live VPS. Categories stay."""
+    """Permanently deletes every product of the caller's groups (recycle bin
+    included; a superuser: all) — no project-visibility filter, on purpose:
+    the point is an empty catalogue. Refused in production so it can never
+    wipe the live VPS. Categories stay."""
     import logging
     from app.core.config import settings
     from app.core.storage import s3_client
@@ -451,11 +584,15 @@ def delete_all_products(
         raise HTTPException(status_code=403, detail="delete-all is disabled in production")
     _require_edit_access(x_access_level)
 
-    products = db.query(models.Product.id, models.Product.image_object_key).all()
-    # Sub-item links first: sub_product_id has no ON DELETE CASCADE, so a
-    # product used as someone's component would otherwise fail the FK.
-    db.query(models.ProductSubItem).delete(synchronize_session=False)
-    db.query(models.Product).delete(synchronize_session=False)
+    products = scoped(db, models.Product, scope).with_entities(models.Product.id, models.Product.image_object_key).all()
+    ids = [product_id for product_id, _ in products]
+    if ids:
+        # Sub-item links first: sub_product_id has no ON DELETE CASCADE, so a
+        # product used as someone's component would otherwise fail the FK.
+        db.query(models.ProductSubItem).filter(
+            models.ProductSubItem.parent_product_id.in_(ids) | models.ProductSubItem.sub_product_id.in_(ids)
+        ).delete(synchronize_session=False)
+        scoped(db, models.Product, scope).filter(models.Product.id.in_(ids)).delete(synchronize_session=False)
     db.commit()
 
     for product_id, object_key in products:
@@ -473,10 +610,11 @@ def delete_all_products(
 def list_trashed_products(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """The recycle bin — soft-deleted products, same project-visibility
     rule as the main list."""
-    query = db.query(models.Product).filter(models.Product.is_deleted == True)  # noqa: E712
+    query = scoped(db, models.Product, scope).filter(models.Product.is_deleted == True)  # noqa: E712
 
     visible_ids = get_visible_product_ids(x_allowed_projects)
     if visible_ids is not None:
@@ -497,14 +635,13 @@ def trash_product(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     """Soft delete — hides it from the catalogue and main list, but keeps
     it recoverable via the recycle bin. For a permanent purge, use
     DELETE /{product_id} instead (only called from within the recycle bin)."""
     _require_edit_access(x_access_level)
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="product not found")
+    product = get_or_404(db, models.Product, product_id, scope, "product not found")
     _check_product_visible(product, x_allowed_projects)
     product.is_deleted = True
     db.commit()
@@ -518,13 +655,12 @@ def restore_product(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="product not found")
+    product = get_or_404(db, models.Product, product_id, scope, "product not found")
     _check_product_visible(product, x_allowed_projects)
-    _raise_if_exact_duplicate(db, product.name, product.description, x_allowed_projects, exclude_id=product.id)
+    _raise_if_exact_duplicate(db, product.name, product.description, x_allowed_projects, product.group_id, exclude_id=product.id)
     product.is_deleted = False
     db.commit()
     db.refresh(product)
@@ -536,10 +672,9 @@ def get_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="product not found")
+    product = get_or_404(db, models.Product, product_id, scope, "product not found")
 
     visible_ids = get_visible_product_ids(x_allowed_projects)
     if visible_ids is not None and str(product.id) not in visible_ids:
@@ -555,20 +690,20 @@ def update_product(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="product not found")
+    product = get_or_404(db, models.Product, product_id, scope, "product not found")
     _check_product_visible(product, x_allowed_projects)
+    check_version(product, payload.version)
 
-    changes = payload.model_dump(exclude_unset=True)
+    changes = payload.model_dump(exclude_unset=True, exclude={"version"})
     new_name = changes.get("name", product.name)
     new_description = changes.get("description", product.description)
     # Only when the text changes: products that were already duplicates
     # must still accept price/category/file edits.
     if (new_name, new_description) != (product.name, product.description):
-        _raise_if_exact_duplicate(db, new_name, new_description, x_allowed_projects, exclude_id=product.id)
+        _raise_if_exact_duplicate(db, new_name, new_description, x_allowed_projects, product.group_id, exclude_id=product.id)
 
     for field, value in changes.items():
         setattr(product, field, value)
@@ -585,11 +720,10 @@ def delete_product(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="product not found")
+    product = get_or_404(db, models.Product, product_id, scope, "product not found")
     _check_product_visible(product, x_allowed_projects)
     db.delete(product)
     db.commit()
@@ -603,11 +737,10 @@ def upload_product_file(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="product not found")
+    product = get_or_404(db, models.Product, product_id, scope, "product not found")
     _check_product_visible(product, x_allowed_projects)
 
     sanitized_filename = _sanitize_filename(file.filename)
@@ -628,10 +761,20 @@ def upload_product_file(
     object_key = f"{product.sku}/{sanitized_filename}"
     # Content-Type is derived from the filename server-side, NEVER trusted
     # from the client's upload — see app/core/upload_safety.py.
-    upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
+    try:
+        upload_file(file.file, object_key, content_type=safe_content_type(sanitized_filename))
+    except Exception:
+        logger.exception("catalogue file upload failed for product %s", product.id)
+        raise HTTPException(status_code=502, detail="The file couldn't be stored (file storage unavailable). Nothing was changed — try again.")
 
-    product.image_object_key = object_key
-    db.commit()
+    previous_key, product.image_object_key = product.image_object_key, object_key
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        if object_key != previous_key:  # same key = the upload replaced the file the row still points at
+            delete_file(object_key)  # the row doesn't point at it: don't leave an orphan
+        raise
     return {"image_object_key": object_key}
 
 
@@ -640,9 +783,10 @@ def get_product_file_url(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product or not product.image_object_key:
+    product = get_or_404(db, models.Product, product_id, scope, "no file attached to this product")
+    if not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
     _check_product_visible(product, x_allowed_projects)
     return {
@@ -657,6 +801,7 @@ def get_product_file_content(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """
     Called by document-service (internally, no X-Allowed-Projects header —
@@ -668,8 +813,8 @@ def get_product_file_content(
     no presigned convenience, no download filename handling — the
     browser-facing equivalent is /file-url.
     """
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product or not product.image_object_key:
+    product = get_or_404(db, models.Product, product_id, scope, "no file attached to this product")
+    if not product.image_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this product")
     _check_product_visible(product, x_allowed_projects)
     try:
@@ -697,7 +842,8 @@ def _renumber_sub_items(db: Session, parent_product_id: uuid.UUID):
 
 
 @router.get("/{product_id}/sub-items", response_model=list[schemas.SubItemOut])
-def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db)):
+def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db), scope: Scope = Depends(get_scope)):
+    get_or_404(db, models.Product, product_id, scope, "product not found")
     rows = (
         db.query(models.ProductSubItem)
         .filter_by(parent_product_id=product_id)
@@ -706,9 +852,9 @@ def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db)):
     )
     result = []
     for row in rows:
-        sub_product = db.query(models.Product).filter_by(id=row.sub_product_id).first()
+        sub_product = scoped(db, models.Product, scope).filter_by(id=row.sub_product_id).first()
         if not sub_product:
-            continue  # the referenced product was hard-deleted since — skip it rather than error
+            continue  # hard-deleted since, or not visible to the caller — skip it rather than error
         result.append(schemas.SubItemOut(
             id=row.id,
             sequence_number=row.sequence_number,
@@ -729,18 +875,17 @@ def add_sub_item(
     payload: schemas.SubItemAdd,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
-    parent = db.query(models.Product).filter_by(id=product_id).first()
-    if not parent:
-        raise HTTPException(status_code=404, detail="product not found")
+    parent = get_or_404(db, models.Product, product_id, scope, "product not found")
 
     if payload.product_id == product_id:
         raise HTTPException(status_code=400, detail="a product can't be its own sub-item")
 
-    sub_product = db.query(models.Product).filter_by(id=payload.product_id).first()
-    if not sub_product:
-        raise HTTPException(status_code=404, detail="that product doesn't exist")
+    sub_product = get_or_404(db, models.Product, payload.product_id, scope, "that product doesn't exist")
+    if sub_product.group_id != parent.group_id:
+        raise HTTPException(status_code=422, detail="That product belongs to another group than this one.")
 
     next_seq = (
         db.query(func.max(models.ProductSubItem.sequence_number))
@@ -776,8 +921,10 @@ def remove_sub_item(
     sub_item_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
+    get_or_404(db, models.Product, product_id, scope, "product not found")
     sub_item = (
         db.query(models.ProductSubItem)
         .filter_by(id=sub_item_id, parent_product_id=product_id)
@@ -795,6 +942,7 @@ def download_product_bundle(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """
     For a product with sub-items: fetches every sub-item's catalogue file,
@@ -803,9 +951,7 @@ def download_product_bundle(
     sub-items, the frontend should use /file-url instead — this endpoint
     only makes sense once there's something to bundle.
     """
-    product = db.query(models.Product).filter_by(id=product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="product not found")
+    product = get_or_404(db, models.Product, product_id, scope, "product not found")
     _check_product_visible(product, x_allowed_projects)
 
     sub_items = (
@@ -821,7 +967,7 @@ def download_product_bundle(
     added_any = False
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in sub_items:
-            sub_product = db.query(models.Product).filter_by(id=item.sub_product_id).first()
+            sub_product = scoped(db, models.Product, scope).filter_by(id=item.sub_product_id).first()
             if not sub_product or not sub_product.image_object_key:
                 continue  # nothing to include for this one — skip rather than fail the whole zip
             ext = ""

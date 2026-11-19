@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import create_engine, inspect, text
 
 from app import models
+from tests.scope_headers import TEST_GROUP
 from tests.test_manual_end_user import MANUAL, _create, _end_user_pdf, _end_user_xlsx, ctx  # noqa: F401  (ctx is a fixture)
 
 
@@ -66,7 +67,7 @@ def test_manual_customer_output_is_unchanged(ctx):
 def test_an_old_customer_row_without_organization_still_exports_its_name(ctx):
     client, Session = ctx
     db = Session()
-    old = models.Customer(name="Legacy Buyer Ltd.")  # as it exists before 0006: no organization value
+    old = models.Customer(name="Legacy Buyer Ltd.", group_id=uuid.UUID(TEST_GROUP))  # as it exists before 0006: no organization value
     db.add(old)
     db.commit()
     doc_id = _create(client, customer_id=str(old.id)).json()["id"]

@@ -2,7 +2,7 @@
 the newest version after an update: `Cache-Control: no-cache` plus a
 validator on index.html and js/app.js, every security header still sent,
 and index.html's <script src> carries app.js's version (its mtime, written
-in by infra/nginx/static-version.js). /api responses are left alone."""
+in by infra/nginx/static-version.js). /api responses are `no-store` since iteration 21."""
 import os
 import pathlib
 import re
@@ -67,7 +67,9 @@ def test_script_version_changes_when_app_js_changes():
     assert _script_version(httpx.get(SITE + "/").text) == _script_version(before.text)
 
 
-def test_api_responses_get_no_new_cache_control():
+def test_api_responses_are_never_cached():
+    # Iteration 9 left /api alone; iteration 21 ("no stale screens") made
+    # every API answer `no-store` (infra/nginx/cors.conf).
     r = httpx.get(BASE_URL + "/auth/groups-public")
     assert r.status_code == 200, r.text
-    assert "cache-control" not in r.headers
+    assert r.headers.get("cache-control") == "no-store"

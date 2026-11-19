@@ -3,21 +3,32 @@ import os
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.db import Base, engine, get_db
+from app.core.concurrency import CONFLICT_DETAIL
 from app import models
 from app.core.storage import ensure_bucket_exists
 from app.core.search_client import _client as meili_client, _INDEX_NAME as MEILI_DOCS_INDEX, rebuild_index
 from app.core.secrets_check import db_password_from_url, enforce_production_secrets, is_insecure
 from app.core.gateway_auth import verify_gateway_secret
-from app.routers import documents, customers, companies, projects
+from app.routers import documents, customers, companies, projects, moves
 
 app = FastAPI(title="Document Service", version="0.1.0")
 
 app.middleware("http")(verify_gateway_secret)
 
+
+@app.exception_handler(StaleDataError)
+def _lost_update(request, exc):
+    """Two saves of the same version raced: the second one's UPDATE matched no
+    row (models' version_id_col). Same answer as a stale version in the body."""
+    return JSONResponse(status_code=409, content={"detail": CONFLICT_DETAIL})
+
+app.include_router(moves.router)  # first: its fixed paths must win over /documents/{id}
 app.include_router(documents.router)
 app.include_router(customers.router)
 app.include_router(companies.router)
@@ -89,7 +100,7 @@ def on_startup():
     # before they can be used in search filters (e.g. ?doc_type=invoice).
     try:
         meili_client.index(MEILI_DOCS_INDEX).update_filterable_attributes(
-            ["doc_type", "status", "customer_id", "project_id"]
+            ["doc_type", "status", "customer_id", "project_id", "group_id"]
         )
     except Exception:
         pass  # Meilisearch may not be up yet on very first boot; safe to skip

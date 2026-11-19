@@ -12,7 +12,7 @@ from app.core.db import get_db
 from app.core.jwt_utils import create_access_token, decode_access_token
 from app.core.security import hash_password, verify_password
 from app.core.deps import get_current_user, require_live_session, require_superuser
-from app.core.authz import user_has_service_access, get_user_allowed_project_ids, get_user_access_level
+from app.core.authz import user_has_service_access, get_user_allowed_project_ids, get_user_access_level, get_user_group_ids
 from app.core.rate_limit import RateLimitExceeded, check_login_rate_limit, get_client_ip, record_failed_attempt
 from app.core.refresh_tokens import (
     active_sessions, issue_refresh_token, revoke_all_user_tokens, revoke_refresh_token, rotate_refresh_token,
@@ -296,6 +296,10 @@ def verify(
         "ALL" if allowed_projects == "ALL" else ",".join(allowed_projects) if allowed_projects else "NONE"
     )
     response.headers["X-Username"] = user.username
+    # Department separation: services show/create rows only for these groups
+    # (a superuser sees everything). Nginx always overwrites client copies.
+    response.headers["X-Group-Ids"] = ",".join(get_user_group_ids(db, user))
+    response.headers["X-Is-Superuser"] = "1" if user.is_superuser else "0"
     if x_service:
         response.headers["X-Access-Level"] = get_user_access_level(db, user, x_service)
     response.headers["X-Has-Audit-Log"] = str(user_has_service_access(db, user, "audit-log")).lower()

@@ -47,7 +47,7 @@ def test_normal_user_cannot_see_backup_page(editor_user):
 
 @destructive
 @pytest.mark.restores_data
-def test_download_then_restore_from_the_page(admin, tmp_path):
+def test_download_then_restore_from_the_page(admin, tmp_path, group_id):
     expect = sync_api.expect
     with sync_api.sync_playwright() as p:
         browser = p.chromium.launch()
@@ -69,7 +69,7 @@ def test_download_then_restore_from_the_page(admin, tmp_path):
             _shot(page, "iter-16-backup-page.png")
 
             # data created after the backup must be gone after the restore
-            extra = admin.post("/products", json={"name": unique("Added after backup")})
+            extra = admin.post("/products", json={"group_id": group_id, "name": unique("Added after backup")})
             assert extra.status_code == 201, extra.text
 
             page.set_input_files("#restore-file", str(archive))

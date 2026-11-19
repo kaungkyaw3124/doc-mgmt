@@ -7,7 +7,7 @@ from PIL import Image
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
-from app.core.export_quotation import DEFAULT_TERMS, fit_inside, is_letterhead
+from app.core.export_quotation import DEFAULT_TERMS, doc_type_label, fit_inside, is_letterhead
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
 # autoescape=True: rendered fields include user-controlled document/company
@@ -65,8 +65,10 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         elif customer.get("billing_address"):
             customer_address = ", ".join(str(v) for v in customer["billing_address"].values())
 
+    include_labour = bool(getattr(document, "include_labour", False))
     items = []
     total = 0
+    labour_sum = 0.0
     catalogue_number = 0  # matches the Catalogue zip export's numbering — only product-based items count
     for item, product, sub_items in items_with_product:
         item_name = product["name"] if product else (item.description or "")
@@ -86,6 +88,9 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         description = (product.get("description") if product else None) or item_description_override or ""
         amount = float(item.quantity or 0) * float(item.unit_price or 0)
         total += amount
+        labour_price = getattr(item, "labour_unit_price", None)
+        labour_amount = float(item.quantity or 0) * float(labour_price or 0)
+        labour_sum += labour_amount
 
         if item.product_id:
             catalogue_number += 1
@@ -97,6 +102,8 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
             "unit": item.unit or "Nos",
             "price": f"{float(item.unit_price or 0):,.2f}",
             "amount": f"{amount:,.2f}",
+            "labour_price": f"{float(labour_price):,.2f}" if labour_price else "",  # empty when no labour
+            "labour_amount": f"{labour_amount:,.2f}" if labour_amount else "-",
             "remark": item.remark or (product.get("remark") if product else None) or "",
             "sub_items": [
                 {
@@ -119,7 +126,7 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
     # only covers a document saved before tax_total existed.
     subtotal_value = float(document.subtotal) if document.subtotal is not None else total
     tax_total_value = float(document.tax_total) if document.tax_total is not None else 0.0
-    grand_total_value = float(document.total) if document.total is not None else subtotal_value + tax_total_value
+    grand_total_value = float(document.total) if document.total is not None else subtotal_value + tax_total_value + (labour_sum if include_labour else 0)
     # Tax is a single rate applied uniformly to every line item (see the
     # document-level "Tax rate %" field in web/js/app.js) — reading it off
     # the first item mirrors how the app's own document-detail view labels
@@ -130,6 +137,7 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         tax_rate_value = float(items_with_product[0][0].tax_rate)
 
     html_str = template.render(
+        doc_label=doc_type_label(getattr(document, "doc_type", None)),
         logo_data_uri=logo_data_uri,
         letterhead_size=letterhead_size,
         seal_data_uri=seal_data_uri,
@@ -147,6 +155,8 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
         tax_total=f"{tax_total_value:,.2f}",
         has_tax=tax_total_value > 0,
         total=f"{grand_total_value:,.2f}",
+        include_labour=include_labour,
+        labour_total=f"{labour_sum:,.2f}" if labour_sum else "-",
         terms_text=document.terms_and_conditions or DEFAULT_TERMS,
     )
 

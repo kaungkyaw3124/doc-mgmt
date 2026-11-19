@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.group_scope import ALL, scoped
 from app.core.category_utils import generate_short_term
 from app import models, schemas
 
@@ -83,7 +84,8 @@ def update_category(
         # Product.category is a loosely-coupled plain string, not a FK — a
         # rename would otherwise silently strand existing products under
         # the old name, dropping them out of category filtering/grouping.
-        db.query(models.Product).filter_by(category=old_name).update(
+        # Categories are shared by every group, so this renames it on ALL products.
+        scoped(db, models.Product, ALL).filter_by(category=old_name).update(
             {models.Product.category: category.name}
         )
         db.commit()
@@ -108,7 +110,8 @@ def sync_categories_from_products(
         raise HTTPException(status_code=403, detail="you don't have permission to create categories")
 
     distinct_categories = [
-        row[0] for row in db.query(models.Product.category).distinct().all() if row[0]
+        # Categories are shared: every group's products feed the one category list.
+        row[0] for row in scoped(db, models.Product, ALL).with_entities(models.Product.category).distinct().all() if row[0]
     ]
     existing_names = {c.name for c in db.query(models.Category.name).all()}
 

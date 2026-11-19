@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.concurrency import check_version, claim_idempotency_key, next_number, peek_number, remember
 from app.core.storage import upload_file, get_presigned_url, get_file_bytes
 from app.core.upload_safety import safe_content_type, should_force_download, content_matches_extension
 from app.core.catalogue_client import (
@@ -23,10 +24,11 @@ from app.core.catalogue_client import (
     ProductNotFoundError,
     CatalogueServiceUnavailableError,
 )
-from app.core.search_client import index_document, remove_document_from_index
-from app.core.export_quotation import generate_quotation_xlsx
+from app.core.search_client import index_document, remove_document_from_index, rebuild_index
+from app.core.export_quotation import doc_type_label, generate_quotation_xlsx
 from app.core.export_pdf import generate_quotation_pdf
 from app.core.audit import log_action
+from app.core.group_scope import ALL, Scope, get_scope, scoped, get_or_404, group_for_create, require_superuser
 from app import models, schemas
 
 logger = logging.getLogger(__name__)
@@ -76,20 +78,26 @@ def _require_delete_access(x_has_document_delete: str | None):
         raise HTTPException(status_code=403, detail="your role does not have permission to delete documents")
 
 
-def _process_items(items_payload, db: Session):
+def _process_items(items_payload, db: Session, scope: Scope):
     """Validates/builds LineItem objects from a list of DocumentItemIn,
-    returning (line_items, subtotal, tax_total). Shared between create and
-    full-update so both paths handle product linking identically."""
+    returning (line_items, subtotal, tax_total, labour_total). subtotal is
+    materials only and the only taxed amount; labour_total is always summed,
+    and the caller adds it to the total only when include_labour is on. Shared between create and
+    full-update so both paths handle product linking identically. Products
+    are looked up as the caller (their groups); a product the caller can't
+    see only works when the item already carries its own description and
+    price snapshot (e.g. re-saving a document whose product was deleted)."""
     line_items = []
     subtotal = Decimal("0")
     tax_total = Decimal("0")
+    labour_total = Decimal("0")
     for index, item_in in enumerate(items_payload):
         description = item_in.description
         unit_price = item_in.unit_price
 
-        if item_in.product_id:
+        if item_in.product_id and (description is None or unit_price is None):
             try:
-                product = get_product(item_in.product_id)
+                product = get_product(item_in.product_id, scope=scope)
             except ProductNotFoundError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             except CatalogueServiceUnavailableError as exc:
@@ -110,6 +118,7 @@ def _process_items(items_payload, db: Session):
         tax_amount = line_total * (item_in.tax_rate / Decimal("100"))
         subtotal += line_total
         tax_total += tax_amount
+        labour_total += item_in.quantity * (item_in.labour_unit_price or 0)
         line_items.append(
             models.LineItem(
                 product_id=item_in.product_id,
@@ -120,10 +129,11 @@ def _process_items(items_payload, db: Session):
                 unit_price=unit_price,
                 tax_rate=item_in.tax_rate,
                 line_total=line_total,
+                labour_unit_price=item_in.labour_unit_price,
                 sort_order=index,
             )
         )
-    return line_items, subtotal, tax_total
+    return line_items, subtotal, tax_total, labour_total
 
 
 END_USER_FIELDS = ("end_user_name", "end_user_organization", "end_user_address", "end_user_phone", "end_user_email")
@@ -144,31 +154,44 @@ def _manual_end_user(payload) -> dict:
     return values
 
 
-def _generate_doc_number(db: Session, company_id: uuid.UUID | None = None) -> str:
+def _doc_number_base(db: Session, company_id: uuid.UUID | None) -> str:
     """
-    e.g. SS-20260723/001 — {chosen company's short_name}-{YYYYMMDD}/{3-digit
-    sequence for that company+day, starting at 001}. Falls back to "DOC" as
-    the prefix if no company was chosen yet, or it has no short_name set.
+    e.g. "SS-20260723/" — {chosen company's short_name}-{YYYYMMDD}/, to which
+    the 3-digit sequence for that company+day (from 001) is appended. Falls
+    back to "DOC" as the prefix if no company was chosen yet, or it has no
+    short_name set.
     """
     company = db.query(models.Company).filter_by(id=company_id).first() if company_id else None
     prefix = (company.short_name if company and company.short_name else "DOC").upper()
+    return f"{prefix}-{date.today():%Y%m%d}/"
 
-    today = date.today()
-    date_part = f"{today.year}{today.month:02d}{today.day:02d}"
-    base_prefix = f"{prefix}-{date_part}/"
 
-    existing_count = (
-        db.query(models.Document)
-        .filter(models.Document.doc_number.like(f"{base_prefix}%"))
-        .count()
-    )
+def _max_doc_seq(db: Session, base: str) -> int:
+    """Highest sequence already used under `base` — seeds its counter.
+    Numbering is per prefix across ALL groups (doc_number is unique)."""
+    rows = scoped(db, models.Document, ALL).with_entities(models.Document.doc_number).filter(models.Document.doc_number.like(f"{base}%"))
+    return max((int(m.group(1)) for (n,) in rows if (m := re.fullmatch(rf"{re.escape(base)}(\d+)", n))), default=0)
 
-    seq = existing_count + 1
-    while True:
-        candidate = f"{base_prefix}{seq:03d}"
-        if not db.query(models.Document).filter_by(doc_number=candidate).first():
-            return candidate
-        seq += 1
+
+def _generate_doc_number(db: Session, company_id: uuid.UUID | None = None, reseed: bool = False) -> str:
+    """Takes the next number from the locked per-prefix+day counter (two
+    simultaneous creates can never get the same one — see core/concurrency.py).
+    Must run inside the create's own transaction."""
+    base = _doc_number_base(db, company_id)
+    return f"{base}{next_number(db, f'doc:{base}', lambda: _max_doc_seq(db, base), reseed):03d}"
+
+
+def _check_links(db: Session, scope: Scope, group_id, customer_id, project_id):
+    """A document's saved customer and project must be visible to the caller
+    and belong to the document's own group — no cross-group links."""
+    for model, row_id, label in ((models.Customer, customer_id, "customer"), (models.Project, project_id, "project")):
+        if not row_id:
+            continue
+        row = scoped(db, model, scope).filter(model.id == row_id).first()
+        if not row:
+            raise HTTPException(status_code=400, detail=f"{label} {row_id} not found")
+        if row.group_id != group_id:
+            raise HTTPException(status_code=422, detail=f"That {label} belongs to another group than this document.")
 
 
 @router.post("", response_model=schemas.DocumentOut, status_code=201)
@@ -177,13 +200,17 @@ def create_document(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
+    scope: Scope = Depends(get_scope),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _require_edit_access(x_access_level)
+    group_id = group_for_create(scope, payload.group_id)
+    # First: a repeat must get the first answer, not "doc_number already exists".
+    held, replay_id = claim_idempotency_key(db, idempotency_key, "POST /documents")
+    if replay_id:
+        return get_or_404(db, models.Document, replay_id, scope, "document not found")
 
-    doc_number = payload.doc_number or _generate_doc_number(db, payload.company_id)
-
-    existing = db.query(models.Document).filter_by(doc_number=doc_number).first()
-    if existing:
+    if payload.doc_number and scoped(db, models.Document, ALL).filter_by(doc_number=payload.doc_number).first():  # unique across all groups
         raise HTTPException(status_code=409, detail="doc_number already exists")
 
     if payload.currency not in VALID_CURRENCIES:
@@ -191,15 +218,7 @@ def create_document(
 
     end_user = _manual_end_user(payload)
 
-    if payload.customer_id:
-        customer = db.query(models.Customer).filter_by(id=payload.customer_id).first()
-        if not customer:
-            raise HTTPException(status_code=400, detail=f"customer {payload.customer_id} not found")
-
-    if payload.project_id:
-        project = db.query(models.Project).filter_by(id=payload.project_id).first()
-        if not project:
-            raise HTTPException(status_code=400, detail=f"project {payload.project_id} not found")
+    _check_links(db, scope, group_id, payload.customer_id, payload.project_id)
 
     if payload.company_id:
         company = db.query(models.Company).filter_by(id=payload.company_id).first()
@@ -213,9 +232,15 @@ def create_document(
         if director.company_id != payload.company_id:
             raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
+    # One transaction: header, line items, the "created" audit entry, the
+    # idempotency key and the counter bump commit together or not at all.
+    # Items first: this may call catalogue-service, and the counter row stays
+    # locked from next_number until the commit.
+    line_items, subtotal, tax_total, labour_total = _process_items(payload.items, db, scope)
     doc = models.Document(
+        id=uuid.uuid4(),
+        group_id=group_id,
         doc_type=payload.doc_type,
-        doc_number=doc_number,
         customer_id=payload.customer_id,
         project_id=payload.project_id,
         company_id=payload.company_id,
@@ -225,25 +250,34 @@ def create_document(
         due_date=payload.due_date,
         doc_metadata=payload.doc_metadata,
         terms_and_conditions=payload.terms_and_conditions,
+        items=line_items,
+        subtotal=subtotal,
+        tax_total=tax_total,
+        total=subtotal + tax_total + (labour_total if payload.include_labour else 0),
+        include_labour=payload.include_labour,
+        status="draft",
         **end_user,
     )
-
-    line_items, subtotal, tax_total = _process_items(payload.items, db)
-    doc.items = line_items
-    doc.subtotal = subtotal
-    doc.tax_total = tax_total
-    doc.total = subtotal + tax_total
-    doc.status = "draft"
-
-    db.add(doc)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="doc_number already exists")
+    remember(held, doc.id)
+    audit = models.AuditLogEntry(document_id=doc.id, username=x_username or "unknown", action="created")
+    # A generated number that still clashes (someone typed it by hand) is
+    # retried once with the counter moved past the highest number in use; the
+    # savepoint keeps the rest of the transaction.
+    for attempt in range(2):
+        doc.doc_number = payload.doc_number or _generate_doc_number(db, payload.company_id, reseed=attempt > 0)
+        try:
+            with db.begin_nested():  # add inside: begin_nested() flushes pending objects before its SAVEPOINT
+                db.add(doc)
+                db.flush()
+            break
+        except IntegrityError:
+            if payload.doc_number or attempt:
+                db.rollback()
+                raise HTTPException(status_code=409, detail="doc_number already exists")
+    db.add(audit)  # after the document row is flushed: no ORM relationship orders the FK for us
+    db.commit()
     db.refresh(doc)
-    index_document(doc)
-    log_action(db, doc.id, x_username, "created")
+    index_document(doc)  # after the commit; a failure is logged and fixed by scripts/reindex.sh
     return doc
 
 
@@ -278,7 +312,9 @@ def get_visible_product_ids(
     if allowed is None:
         return {"all": True, "product_ids": []}
 
-    doc_query = db.query(models.Document.id).filter(
+    # Internal (catalogue/search-service): returns product ids only, which the
+    # caller then filters by its OWN group scope — so the project rule alone here.
+    doc_query = scoped(db, models.Document, ALL).with_entities(models.Document.id).filter(
         (models.Document.project_id == None) | (models.Document.project_id.in_(allowed))  # noqa: E711
     )
     doc_ids = [d.id for d in doc_query.all()]
@@ -301,8 +337,9 @@ def list_documents(
     status: str | None = None,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
-    query = db.query(models.Document).filter(models.Document.is_deleted == False)  # noqa: E712
+    query = scoped(db, models.Document, scope).filter(models.Document.is_deleted == False)  # noqa: E712
     if doc_type:
         query = query.filter(models.Document.doc_type == doc_type)
     if status:
@@ -325,13 +362,14 @@ def get_documents_by_customer(
     customer_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """
     Which documents belong to this customer, and which project each of
     those documents belongs to — used by the customer detail popup to
     show "used in" context.
     """
-    query = db.query(models.Document).filter(models.Document.customer_id == customer_id)
+    query = scoped(db, models.Document, scope).filter(models.Document.customer_id == customer_id)
 
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None:
@@ -347,7 +385,7 @@ def get_documents_by_customer(
     project_ids = {doc.project_id for doc in docs if doc.project_id}
     projects_by_id = {}
     if project_ids:
-        for project in db.query(models.Project).filter(models.Project.id.in_(project_ids)).all():
+        for project in scoped(db, models.Project, scope).filter(models.Project.id.in_(project_ids)).all():
             projects_by_id[project.id] = project.name
 
     return [
@@ -366,22 +404,21 @@ def get_documents_by_product(
     product_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """
     Which documents include this product as a line item, and which
     project each of those documents belongs to — used by the product
     detail popup to show "used in" context.
     """
-    line_items = (
-        db.query(models.LineItem)
-        .filter(models.LineItem.product_id == product_id)
-        .all()
-    )
-    doc_ids = {item.document_id for item in line_items}
+    doc_ids = {
+        row.document_id
+        for row in db.query(models.LineItem.document_id).filter(models.LineItem.product_id == product_id).all()
+    }
     if not doc_ids:
         return []
 
-    doc_query = db.query(models.Document).filter(models.Document.id.in_(doc_ids))
+    doc_query = scoped(db, models.Document, scope).filter(models.Document.id.in_(doc_ids))
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None:
         doc_query = doc_query.filter(
@@ -392,7 +429,7 @@ def get_documents_by_product(
     project_ids = {doc.project_id for doc in docs if doc.project_id}
     projects_by_id = {}
     if project_ids:
-        for project in db.query(models.Project).filter(models.Project.id.in_(project_ids)).all():
+        for project in scoped(db, models.Project, scope).filter(models.Project.id.in_(project_ids)).all():
             projects_by_id[project.id] = project.name
 
     return [
@@ -418,17 +455,19 @@ def preview_next_doc_number(company_id: uuid.UUID | None = None, db: Session = D
     actually submitted if two people open the form at once — creation
     still re-generates and re-checks uniqueness at that point.
     """
-    return {"doc_number": _generate_doc_number(db, company_id)}
+    base = _doc_number_base(db, company_id)
+    return {"doc_number": f"{base}{peek_number(db, f'doc:{base}', lambda: _max_doc_seq(db, base)):03d}"}
 
 
 @router.get("/trash", response_model=list[schemas.DocumentOut])
 def list_trashed_documents(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """The recycle bin — soft-deleted documents, same project-visibility
     rule as the main list, so you only see what you could delete."""
-    query = db.query(models.Document).filter(models.Document.is_deleted == True)  # noqa: E712
+    query = scoped(db, models.Document, scope).filter(models.Document.is_deleted == True)  # noqa: E712
 
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None:
@@ -447,6 +486,7 @@ def trash_document(
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
     x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
+    scope: Scope = Depends(get_scope),
 ):
     """Soft delete — hides it from the main list and marks it recoverable.
     For a permanent purge, use DELETE /{document_id} instead (only ever
@@ -468,9 +508,7 @@ def trash_document(
     docs/SECURITY_HARDENING_LOG.md's Recycle Bin entry for why."""
     _require_edit_access(x_access_level)
     _require_delete_access(x_has_document_delete)
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
     doc.is_deleted = True
     doc.deleted_by = x_username
     doc.deleted_at = datetime.utcnow()
@@ -486,11 +524,10 @@ def restore_document(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
     doc.is_deleted = False
     doc.deleted_by = None
     doc.deleted_at = None
@@ -506,10 +543,9 @@ def get_document(
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
     x_username: str | None = Header(default=None, alias="X-Username"),
+    scope: Scope = Depends(get_scope),
 ):
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
 
     allowed = _parse_allowed_projects(x_allowed_projects)
     if allowed is not None and doc.project_id is not None and str(doc.project_id) not in allowed:
@@ -526,6 +562,7 @@ def update_document(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
+    scope: Scope = Depends(get_scope),
 ):
     """
     Full edit of an existing document: customer, project, company, currency,
@@ -536,24 +573,15 @@ def update_document(
     """
     _require_edit_access(x_access_level)
 
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
+    check_version(doc, payload.version)
 
     if payload.currency is not None and payload.currency not in VALID_CURRENCIES:
         raise HTTPException(status_code=422, detail=f"currency must be one of {sorted(VALID_CURRENCIES)}")
 
     end_user = _manual_end_user(payload)
 
-    if payload.customer_id:
-        customer = db.query(models.Customer).filter_by(id=payload.customer_id).first()
-        if not customer:
-            raise HTTPException(status_code=400, detail=f"customer {payload.customer_id} not found")
-
-    if payload.project_id:
-        project = db.query(models.Project).filter_by(id=payload.project_id).first()
-        if not project:
-            raise HTTPException(status_code=400, detail=f"project {payload.project_id} not found")
+    _check_links(db, scope, doc.group_id, payload.customer_id, payload.project_id)
 
     if payload.company_id:
         company = db.query(models.Company).filter_by(id=payload.company_id).first()
@@ -567,7 +595,7 @@ def update_document(
         if director.company_id != payload.company_id:
             raise HTTPException(status_code=400, detail="director does not belong to the selected company")
 
-    line_items, subtotal, tax_total = _process_items(payload.items, db)
+    line_items, subtotal, tax_total, labour_total = _process_items(payload.items, db, scope)
 
     # Full edit: switching to a saved customer clears the manual fields
     # (end_user is all None), and switching to manual leaves customer_id None.
@@ -580,15 +608,18 @@ def update_document(
     if payload.currency is not None:
         doc.currency = payload.currency
     doc.terms_and_conditions = payload.terms_and_conditions
+    if payload.include_labour is not None:
+        doc.include_labour = payload.include_labour
     doc.items = line_items  # SQLAlchemy replaces the collection (old ones deleted via cascade)
     doc.subtotal = subtotal
     doc.tax_total = tax_total
-    doc.total = subtotal + tax_total
+    doc.total = subtotal + tax_total + (labour_total if doc.include_labour else 0)
+    doc.updated_at = datetime.utcnow()  # always UPDATE the header row, so an items-only edit still bumps (and checks) the version
+    db.add(models.AuditLogEntry(document_id=doc.id, username=x_username or "unknown", action="edited"))  # same transaction as the edit
 
     db.commit()
     db.refresh(doc)
     index_document(doc)
-    log_action(db, doc.id, x_username, "edited")
     return doc
 
 
@@ -599,15 +630,14 @@ def update_status(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
 
     if new_status not in VALID_STATUSES:
         raise HTTPException(status_code=422, detail=f"status must be one of {sorted(VALID_STATUSES)}")
 
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
     doc.status = new_status
     db.commit()
     db.refresh(doc)
@@ -622,12 +652,11 @@ def upload_document_file(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_username: str | None = Header(default=None, alias="X-Username"),
+    scope: Scope = Depends(get_scope),
 ):
     _require_edit_access(x_access_level)
 
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
 
     sanitized_filename = _sanitize_filename(file.filename)
 
@@ -656,24 +685,51 @@ def upload_document_file(
     return {"file_object_key": object_key}
 
 
+@router.post("/assign-unassigned")
+def assign_unassigned(
+    payload: schemas.AssignUnassigned,
+    db: Session = Depends(get_db),
+    scope: Scope = Depends(get_scope),
+):
+    """Superuser only: gives every document, customer and project that has no
+    group yet (group_id NULL — data from before groups existed) to one group,
+    then rebuilds the documents search index so it is searchable by that
+    group. Safe to run again: the second run finds nothing to assign."""
+    require_superuser(scope)
+    if payload.group_id not in scope.group_ids:
+        raise HTTPException(status_code=422, detail="That group does not exist or is disabled.")
+    counts = {}
+    for name, model in (("documents", models.Document), ("customers", models.Customer), ("projects", models.Project)):
+        counts[name] = scoped(db, model, scope).filter(model.group_id == None).update(  # noqa: E711
+            {model.group_id: payload.group_id}, synchronize_session=False
+        )
+    db.commit()
+    counts["reindexed"] = rebuild_index(scoped(db, models.Document, scope).all())
+    return counts
+
+
 # DEV-ONLY: delete-all BEGIN — one-click wipe for dev testing (loop iteration 15)
 @router.delete("")
 def delete_all_documents(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
+    scope: Scope = Depends(get_scope),
 ):
-    """Permanently deletes EVERY document (recycle bin included), its line
-    items and audit log, its search entry and its stored file."""
+    """Permanently deletes every document in the caller's groups (recycle bin
+    included; a superuser: all), its line items and audit log, its search
+    entry and its stored file."""
     from app.core.dev_delete_all import refuse_in_production_or_view_only, delete_files
 
     refuse_in_production_or_view_only(x_access_level)
     _require_delete_access(x_has_document_delete)
-    docs = db.query(models.Document.id, models.Document.file_object_key).all()
-    # explicit, not FK cascade: a bulk delete skips the ORM cascade and SQLite doesn't enforce ON DELETE
-    db.query(models.LineItem).delete(synchronize_session=False)
-    db.query(models.AuditLogEntry).delete(synchronize_session=False)
-    db.query(models.Document).delete(synchronize_session=False)
+    docs = scoped(db, models.Document, scope).with_entities(models.Document.id, models.Document.file_object_key).all()
+    ids = [doc_id for doc_id, _ in docs]
+    if ids:
+        # explicit, not FK cascade: a bulk delete skips the ORM cascade and SQLite doesn't enforce ON DELETE
+        db.query(models.LineItem).filter(models.LineItem.document_id.in_(ids)).delete(synchronize_session=False)
+        db.query(models.AuditLogEntry).filter(models.AuditLogEntry.document_id.in_(ids)).delete(synchronize_session=False)
+        scoped(db, models.Document, scope).filter(models.Document.id.in_(ids)).delete(synchronize_session=False)
     db.commit()
     for doc_id, _ in docs:
         remove_document_from_index(doc_id)  # logs, never raises
@@ -688,14 +744,13 @@ def delete_document(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
+    scope: Scope = Depends(get_scope),
 ):
     """Permanent purge — same Delete permission requirement as the
     soft-delete trash action above."""
     _require_edit_access(x_access_level)
     _require_delete_access(x_has_document_delete)
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
     db.delete(doc)
     db.commit()
     remove_document_from_index(document_id)
@@ -706,9 +761,10 @@ def get_document_file_url(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc or not doc.file_object_key:
+    doc = get_or_404(db, models.Document, document_id, scope, "no file attached to this document")
+    if not doc.file_object_key:
         raise HTTPException(status_code=404, detail="no file attached to this document")
 
     allowed = _parse_allowed_projects(x_allowed_projects)
@@ -723,15 +779,14 @@ def get_audit_log(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_has_audit_log: str | None = Header(default=None, alias="X-Has-Audit-Log"),
+    scope: Scope = Depends(get_scope),
 ):
     """Who viewed/edited this document, and when. Only visible to roles with
     the 'audit-log' service grant (e.g. a 'Director' role) or a superuser."""
     if x_has_audit_log != "true":
         raise HTTPException(status_code=403, detail="you don't have access to the audit log")
 
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
 
     entries = (
         db.query(models.AuditLogEntry)
@@ -769,15 +824,13 @@ def _check_project_access(doc, x_allowed_projects: str | None):
         raise HTTPException(status_code=403, detail="you don't have access to this document's project")
 
 
-def _gather_export_data(document_id: uuid.UUID, db: Session, x_allowed_projects: str | None = None):
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+def _gather_export_data(document_id: uuid.UUID, db: Session, scope: Scope, x_allowed_projects: str | None = None):
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
     _check_project_access(doc, x_allowed_projects)
 
     customer = None
     if doc.customer_id:
-        customer_row = db.query(models.Customer).filter_by(id=doc.customer_id).first()
+        customer_row = scoped(db, models.Customer, scope).filter_by(id=doc.customer_id).first()
         if customer_row:
             customer = {
                 "id": customer_row.id,
@@ -873,10 +926,11 @@ def export_quotation_xlsx(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
-    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, scope, x_allowed_projects)
     buffer = generate_quotation_xlsx(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime)
-    filename = f"Quotation-{doc.doc_number}.xlsx"
+    filename = f"{doc_type_label(doc.doc_type)}-{doc.doc_number}.xlsx"
     return Response(
         content=buffer.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -889,10 +943,11 @@ def export_quotation_pdf(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
-    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, x_allowed_projects)
+    doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime = _gather_export_data(document_id, db, scope, x_allowed_projects)
     buffer = generate_quotation_pdf(doc, customer, items_with_product, company, logo_bytes, seal_bytes, logo_mime, seal_mime, director, director_seal_bytes, director_seal_mime)
-    filename = f"Quotation-{doc.doc_number}.pdf"
+    filename = f"{doc_type_label(doc.doc_type)}-{doc.doc_number}.pdf"
     return Response(
         content=buffer.getvalue(),
         media_type="application/pdf",
@@ -905,6 +960,7 @@ def export_document_catalogue(
     document_id: uuid.UUID,
     db: Session = Depends(get_db),
     x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
 ):
     """
     Bundles the catalogue files of every product in this document into one
@@ -919,9 +975,7 @@ def export_document_catalogue(
     (e.g. "3/3.1.pdf", "3/3.2.png") — reusing the same zip that product's
     own "View file" button would produce, just renamed into this shape.
     """
-    doc = db.query(models.Document).filter_by(id=document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="document not found")
+    doc = get_or_404(db, models.Document, document_id, scope, "document not found")
     _check_project_access(doc, x_allowed_projects)
 
     product_items = [item for item in doc.items if item.product_id]

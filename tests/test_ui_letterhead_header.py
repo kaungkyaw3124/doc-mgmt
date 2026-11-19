@@ -38,8 +38,8 @@ def _seal(path):
     img.save(path)
 
 
-def _page1(admin, company_id, shot_name):
-    doc = admin.post("/documents", json={"doc_type": "quotation", "company_id": company_id, "items": []})
+def _page1(admin, company_id, shot_name, group_id):
+    doc = admin.post("/documents", json={"group_id": group_id, "doc_type": "quotation", "company_id": company_id, "items": []})
     assert doc.status_code == 201, doc.text
     r = admin.get(f"/documents/{doc.json()['id']}/export/quotation-pdf")
     assert r.status_code == 200 and r.content[:4] == b"%PDF"
@@ -71,7 +71,7 @@ def _edit(page, company_id):
     page.wait_for_selector("#company-modal.active")
 
 
-def test_company_form_single_image_feeds_logo_and_banner(admin, tmp_path):
+def test_company_form_single_image_feeds_logo_and_banner(admin, tmp_path, group_id):
     name = unique("UI Letterhead Co")
     banner, seal = tmp_path / "banner.png", tmp_path / "seal.png"
     _banner(banner)
@@ -120,7 +120,7 @@ def test_company_form_single_image_feeds_logo_and_banner(admin, tmp_path):
                 company = next(c for c in admin.get("/companies").json() if c["name"] == name)
                 assert company["header_style"] == "logo" and company["logo_object_key"] and company["letterhead_object_key"]
 
-                pdf_page, rects, doc_id = _page1(admin, company["id"], "iter-18-logo-p1.png")
+                pdf_page, rects, doc_id = _page1(admin, company["id"], "iter-18-logo-p1.png", group_id)
                 docs.append(doc_id)
                 assert [size for size, _ in rects] == [(300, 300), (300, 300)], "squared logo + seal"
                 (_, lg), (_, sl) = rects
@@ -141,7 +141,7 @@ def test_company_form_single_image_feeds_logo_and_banner(admin, tmp_path):
                 _save(page)  # no new upload
                 assert admin.get(f"/companies/{company['id']}").json()["header_style"] == "letterhead"
 
-                pdf_page, rects, doc_id = _page1(admin, company["id"], "iter-18-banner-p1.png")
+                pdf_page, rects, doc_id = _page1(admin, company["id"], "iter-18-banner-p1.png", group_id)
                 docs.append(doc_id)
                 assert [size for size, _ in rects] == [(720, 190), (300, 300)], "banner + seal, no squared logo"
                 (_, lh), (_, sl2) = rects
