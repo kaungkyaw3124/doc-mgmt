@@ -47,10 +47,10 @@ while true; do
             attempt=$((attempt+1)); say "iteration $N: attempt $attempt/$MAX_ATTEMPTS"
             if [ $attempt -eq 1 ]; then
                 # shellcheck disable=SC2086
-                "$CLAUDE_BIN" -p "/next" $CLAUDE_FLAGS >> "$LOG_DIR/iter-$N.log" 2>&1
+                "$CLAUDE_BIN" -p "/next" $CLAUDE_FLAGS --output-format stream-json --verbose >> "$LOG_DIR/iter-$N.log" 2>&1
             else
                 # shellcheck disable=SC2086
-                "$CLAUDE_BIN" -p "The previous session for iteration $N was interrupted. Continue the current iteration in loop/PLAN.md exactly where it stopped, following loop/LOOP.md: finish the work, run the checks, write loop/report.md, commit and push dev. Do not start over." --continue $CLAUDE_FLAGS >> "$LOG_DIR/iter-$N.log" 2>&1
+                "$CLAUDE_BIN" -p "The previous session for iteration $N was interrupted. Continue the current iteration in loop/PLAN.md exactly where it stopped, following loop/LOOP.md: finish the work, run the checks, write loop/report.md, commit and push dev. Do not start over." --continue $CLAUDE_FLAGS --output-format stream-json --verbose >> "$LOG_DIR/iter-$N.log" 2>&1
             fi
             echo "exit code $?" >> "$LOG_DIR/iter-$N.log"
             finished && break
