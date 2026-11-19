@@ -1140,7 +1140,7 @@ async function loadDocuments() {
     applyFilterAndSort('documents');
   } catch (err) {
     if (isStaleLoad('documents', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="13">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -1244,12 +1244,13 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
 function renderDocumentsTable(docs) {
   const tbody = document.getElementById('documents-tbody');
   if (!docs.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">No documents match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="13">No documents match.</td></tr>';
     return;
   }
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
   tbody.innerHTML = docs.map(d => `
     <tr>
+      ${selectCell('documents', d)}
       <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button></td>
       <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
       <td>${escapeHtml(docCustomerName(d))}</td>
@@ -1575,18 +1576,19 @@ async function loadProjects() {
     applyFilterAndSort('projects');
   } catch (err) {
     if (isStaleLoad('projects', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderProjectsTable(projects) {
   const tbody = document.getElementById('projects-tbody');
   if (!projects.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No projects match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No projects match.</td></tr>';
     return;
   }
   tbody.innerHTML = projects.map(p => `
     <tr>
+      ${selectCell('projects', p)}
       <td>${escapeHtml(p.name)}</td>
       <td class="mono">${escapeHtml(p.budget_year || '—')}</td>
       <td>${fmtDate(p.created_at)}</td>
@@ -2211,18 +2213,19 @@ async function loadCustomers() {
     if (cachedDocuments.length) applyFilterAndSort('documents');  // the list shows customer names; it may have rendered first
   } catch (err) {
     if (isStaleLoad('customers', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderCustomersTable(customers) {
   const tbody = document.getElementById('customers-tbody');
   if (!customers.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No customers match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No customers match.</td></tr>';
     return;
   }
   tbody.innerHTML = customers.map(c => `
     <tr>
+      ${selectCell('customers', c)}
       <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button></td>
       <td>${c.organization ? escapeHtml(c.organization) : `<span style="color:var(--text-dim);">${escapeHtml(c.name)}</span>`}</td>
       <td>${escapeHtml(c.email || '—')}</td>
@@ -3142,7 +3145,7 @@ async function loadProducts() {
     applyFilterAndSort('products');
   } catch (err) {
     if (isStaleLoad('products', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -3347,11 +3350,12 @@ function renderProductSubItemsReadonly(subItems) {
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
     <tr>
+      ${selectCell('products', p)}
       <td class="mono">${escapeHtml(p.sku)}</td>
       <td>
         <button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button>
@@ -3681,10 +3685,12 @@ function applyFilterAndSort(tableName) {
   const config = tableConfig[tableName];
   const q = document.getElementById(config.filterInputId).value.trim().toLowerCase();
   let list = q ? config.cache().filter(item => config.matchFn(item, q)) : config.cache().slice();
+  const filterKey = [q]; // every filter value; a change clears the row selection
 
   if (config.extraFilters) {
     for (const ef of config.extraFilters) {
       const val = document.getElementById(ef.selectId).value;
+      filterKey.push(val);
       if (val) list = list.filter(item => ef.matchFn(item, val));
     }
   }
@@ -3692,6 +3698,7 @@ function applyFilterAndSort(tableName) {
   if (config.dateFilter) {
     const fromVal = document.getElementById(config.dateFilter.fromId).value;
     const toVal = document.getElementById(config.dateFilter.toId).value;
+    filterKey.push(fromVal, toVal);
     if (fromVal) {
       const fromTime = new Date(fromVal).getTime();
       list = list.filter(item => new Date(item[config.dateFilter.field]).getTime() >= fromTime);
@@ -3712,7 +3719,18 @@ function applyFilterAndSort(tableName) {
       return 0;
     });
   }
+  const sel = selection[tableName];
+  if (sel) {
+    // New filters or a reloaded list (new cache array): drop the selection so a
+    // bulk action never touches rows that are no longer shown. Sorting keeps it.
+    const key = JSON.stringify(filterKey);
+    if (key !== sel.key || config.cache() !== sel.cache) sel.ids.clear();
+    sel.key = key;
+    sel.cache = config.cache();
+    sel.shown = list.map(item => item.id);
+  }
   config.render(list);
+  if (sel) syncSelection(tableName);
 }
 
 // ---------- moving records between groups (superuser, loop iteration 20) ----------
@@ -3732,7 +3750,7 @@ let moveState = null; // {table, ids}
 
 function groupCell(table, row) {
   if (!currentUserIsSuperuser) return `<td>${groupTag(row.group_id)}</td>`;
-  return `<td style="white-space:nowrap;"><input type="checkbox" class="move-select" data-move-table="${table}" value="${row.id}" aria-label="Select for moving" style="width:auto; margin:0 4px 0 0;">${groupTag(row.group_id)}
+  return `<td style="white-space:nowrap;">${groupTag(row.group_id)}
     <button class="link-btn-inline" data-move-table="${table}" data-move-id="${row.id}">Move…</button></td>`;
 }
 
@@ -3750,7 +3768,7 @@ Object.keys(MOVE_LINK_LABELS).forEach(table => {
   bulk.textContent = 'Move selected to group…';
   bulk.style.display = 'none';
   bulk.addEventListener('click', () => {
-    const ids = [...document.querySelectorAll(`.move-select[data-move-table="${table}"]:checked`)].map(cb => cb.value);
+    const ids = [...selection[table].ids];
     if (!ids.length) { showErrorCross('Select rows first'); return; }
     openMoveModal(table, ids);
   });
@@ -3765,6 +3783,58 @@ Object.keys(MOVE_LINK_LABELS).forEach(table => {
   document.getElementById(table + '-tbody').addEventListener('click', e => {
     const btn = e.target.closest('[data-move-id]');
     if (btn) openMoveModal(table, [btn.dataset.moveId]);
+  });
+});
+
+// ---------- select all (loop iteration 24) ----------
+// Every user gets a checkbox column on the four lists. The selection is a Set
+// of ids per list (not read from the DOM) so it survives re-rendering and
+// sorting; applyFilterAndSort clears it when filters change or the list
+// reloads. "Select all" picks exactly the rows currently shown (the lists are
+// not paginated). Bulk buttons (Move selected…, iteration 25's Add to cart)
+// live in the selection bar and read selection[table].ids.
+const selection = {}; // table -> {ids: Set, shown: [id], key, cache, bar, count}
+
+function selectCell(table, row) {
+  const checked = selection[table].ids.has(row.id) ? ' checked' : '';
+  return `<td><input type="checkbox" class="row-select" value="${row.id}" aria-label="Select row"${checked} style="width:auto; margin:0;"></td>`;
+}
+
+function syncSelection(table) {
+  const s = selection[table];
+  const n = s.ids.size; // always a subset of s.shown (cleared on every filter change)
+  const all = document.getElementById(table + '-select-all');
+  all.disabled = !s.shown.length;
+  all.checked = n > 0 && n === s.shown.length;
+  all.indeterminate = n > 0 && n < s.shown.length;
+  s.bar.style.display = n ? 'flex' : 'none';
+  s.count.textContent = `${n} selected`;
+}
+
+Object.keys(MOVE_LINK_LABELS).forEach(table => {
+  const tbody = document.getElementById(table + '-tbody');
+  const all = document.getElementById(table + '-select-all');
+  const bar = document.createElement('div');
+  bar.id = table + '-selection-bar';
+  bar.setAttribute('aria-live', 'polite');
+  bar.style.cssText = 'display:none; position:sticky; top:0; z-index:2; gap:10px; align-items:center; padding:8px 10px; margin-bottom:8px; background:var(--paper-dim); border:1px solid var(--hairline); border-radius:6px;';
+  bar.innerHTML = `<strong id="${table}-selection-count">0 selected</strong><button type="button" class="btn-secondary">Clear</button>`;
+  bar.appendChild(document.getElementById(table + '-move-selected-btn'));
+  tbody.closest('table').before(bar);
+  const s = selection[table] = { ids: new Set(), shown: [], key: null, cache: null, bar, count: bar.querySelector('strong') };
+  const clear = () => { s.ids.clear(); applyFilterAndSort(table); };
+  bar.querySelector('button').addEventListener('click', clear);
+  document.getElementById(table + '-reset-filters-btn').addEventListener('click', clear);
+  // one delegated handler per table, no per-row listeners
+  tbody.addEventListener('change', e => {
+    if (!e.target.classList.contains('row-select')) return;
+    if (e.target.checked) s.ids.add(e.target.value); else s.ids.delete(e.target.value);
+    syncSelection(table);
+  });
+  all.addEventListener('change', () => {
+    if (all.checked) s.shown.forEach(id => s.ids.add(id)); else s.ids.clear();
+    tbody.querySelectorAll('.row-select').forEach(cb => { cb.checked = all.checked; });
+    syncSelection(table);
   });
 });
 

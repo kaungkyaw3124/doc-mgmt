@@ -61,7 +61,7 @@ def test_superuser_moves_a_document_with_its_customer_and_project(depts, admin):
             expect(page.locator("#whoami-username")).not_to_have_text("—", timeout=15000)
             _list_text(page, "customers", "customers-tbody", f"Bulk B {token}")
             for c in (a, b):
-                page.check(f'.move-select[value="{c["id"]}"]')
+                page.check(f'.row-select[value="{c["id"]}"]')
             page.click("#customers-move-selected-btn")
             page.select_option("#move-group-target", ops["group_id"])
             expect(page.locator("#move-group-preview")).to_have_text("Will move: 2 customers", timeout=10000)
