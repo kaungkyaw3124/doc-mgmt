@@ -2,52 +2,46 @@
 
 | Field | Value |
 |---|---|
-| Iteration | **24** |
-| Goal | **Select all on every list.** Products, Documents, Customers, Projects each get a checkbox column for every user and a "Select all" header checkbox that selects exactly the rows currently shown (after search, category, date and group filters), plus a selection bar with the count |
+| Iteration | **25** |
+| Goal | **Add selected products to the cart in one click.** On the Products list, filter (for example by date), Select all, then **Add selected to cart (N)** |
 | Attempt limit | 5 per failing check |
 | Status | READY FOR CLAUDE CODE |
 
 ## What the user wants
-Screenshot of the Products list: a checkbox column exists (only for superusers, inside the Group cell) and "Move selected to group…" works. The user wants a **Select all**: if there are 100 products, a date filter leaves 10, and they click Select all, **exactly those 10** are selected. Same on Documents, Customers, Projects. Iteration 25 builds "Add selected to cart" on top of this.
+"filter with date and select all and add to cart" — e.g. 100 products, date filter leaves 10, Select all, Add to cart puts those 10 in the cart. Builds on iteration 24 (shared selection + selection bar).
 
 ## Decisions already made
-- **Own checkbox column** (first column, narrow) on all four lists, visible to **every** user (not only superusers). Today's checkbox lives inside `groupCell()` (`.move-select`, superuser only) — move it into the new column and keep one shared selection mechanism; the superuser's "Move selected to group…" keeps working with it. The Group column keeps its tag and "Move…" link for superusers.
-- **Header checkbox** in the new column:
-  - click → selects every row currently rendered (the filtered list, **all pages** if the list is paginated; if the list is not paginated that is simply every visible row);
-  - click again → clears them;
-  - **indeterminate** state when only some visible rows are ticked; checked when all visible rows are ticked.
-- **Selection is by id, held in a JS `Set` per list** (not by reading the DOM), so it survives re-rendering and pagination.
-- **Changing any filter, search text, sort-reset or the Reset button clears the selection** (safety: never act on hidden rows). Sorting alone keeps it. Reloading a list after a save/move/delete clears it.
-- **Selection bar** above each table, shown only when ≥ 1 selected: `N selected` + **Clear** + the bulk buttons that exist for that list (Move selected to group… for superusers; iteration 25 adds Add to cart on Products). Sticky below the filter row if the page scrolls. Count must always equal the Set size.
-- **Group isolation** untouched: the lists already contain only rows the user may see; select all can only select those. The Move endpoint still validates server-side.
-- **No bulk delete** from selection. Out of scope.
-- Keyboard/a11y: header checkbox has `aria-label="Select all shown"`, row checkboxes `aria-label="Select row"`; Space toggles; selection bar `aria-live="polite"`.
-- Performance: one delegated change handler per table; no per-row listeners; 500 rows must toggle in well under 100 ms.
+- Button **"Add to cart (N)"** in the Products selection bar (all users, not only superusers). Cart is products-only; Documents/Customers/Projects get no cart button.
+- Each selected product is added with **quantity 1**. A product **already in the cart is skipped** (its quantity is NOT increased) — different from the single "+ Add to cart" link, which still increments. Reuse `cartItems` / `updateCartBadge()`; do not duplicate cart logic (extract a helper if useful).
+- Product data comes from `cachedProducts`; selected ids missing from the cache (e.g. other pages not loaded) must be fetched or the cache must already hold the whole filtered list — verify which is true and handle it so **all N selected** are added, never fewer silently.
+- **Limit: 200 products per bulk add.** Above that, add nothing and show a clear message ("Select up to 200 at a time; N selected"). The selection bar shows the count so the user can narrow the filter.
+- **Result message** (success tick / banner as used elsewhere): "10 added to cart" or "8 added, 2 already in cart". After adding, the selection is cleared and the cart badge updates (badge counts total quantity as today).
+- Group isolation: only products the user can see exist in the list, so only those can be added; creating a document from the cart behaves as today.
+- No sound; reuse the existing success tick.
 
 ## Tasks
-1. Inspect the four list renderers (`loadProducts`, `loadDocuments`, `loadCustomers`, `loadProjects`, `applyFilterAndSort`, `tableConfig`, `groupCell`, the move code ~line 3720 of `web/js/app.js`, and `web/index.html` table headers); list findings in the report.
-2. One shared selection helper (per-table `Set`, header checkbox sync, selection bar, clear-on-filter-change) used by all four lists; update `index.html` headers/colspans (empty-row `colspan`s must match the new column count).
-3. Keep "Move selected to group…" working through the shared selection.
-4. Tests + evidence.
+1. Inspect `addToCart`, `cartItems`, `cachedProducts`, how the Products list is loaded/paged and how the cart creates a document (`web/js/app.js` ~2293–2480).
+2. Add the bulk action to the iteration-24 selection bar; implement skip-duplicates and the 200 cap; messages.
+3. Tests + evidence.
 
 ## Tests
-- Playwright `tests/test_ui_select_all.py` on the throwaway `loop-test` stack ONLY: create 100 products via API in different dates (set `created_at` through the test DB/API helper or create 10 with a distinct date) → date filter shows 10 → Select all → bar says "10 selected" → exactly those 10 ids selected → change filter → selection cleared and bar hidden → select all with no filter → "100 selected" → click header again → 0. Same smoke on Documents, Customers, Projects (a few rows each).
-- Indeterminate: tick one row → header indeterminate; tick all → header checked.
-- Non-superuser (group user) sees the checkbox column and Select all; superuser still sees Move selected and it moves exactly the selected ids; a group user never sees rows of other groups.
-- Selection survives sorting; cleared after reload/save/move.
-- Empty list: Select all disabled, no errors in the console.
-- All existing tests (including `test_ui_group_move.py`) pass; `./scripts/verify.sh` passes.
-- Evidence: `loop/evidence/iter-24-select-all-products.png` (10 of 100 selected), `iter-24-select-all-indeterminate.png`.
+- Playwright `tests/test_ui_bulk_cart.py` on the throwaway `loop-test` stack ONLY: 100 products, date filter → 10 → Select all → Add to cart (10) → cart modal lists exactly those 10, quantity 1, badge = 10 → repeat with 5 already in the cart → "5 added, 5 already in cart", their quantities unchanged.
+- 201 selected → nothing added, message shown.
+- Select all with no filter (100) → all 100 added.
+- Empty selection: the button is hidden.
+- Bulk-added cart → "create document from cart" still works with the right lines (use the existing cart→document flow).
+- Group user only ever carts products from their own group.
+- All existing tests pass; `./scripts/verify.sh` passes.
+- Evidence: `loop/evidence/iter-25-bulk-cart.png` (selection bar + cart with 10 items).
 
 ## Acceptance checks
 | # | Check | How to verify |
 |---|---|---|
-| A1 | Select all selects exactly the filtered rows (10 of 100) on Products | Playwright + screenshot |
-| A2 | Same on Documents, Customers, Projects | Playwright |
-| A3 | Filter/search/reset change clears selection; sort keeps it | Playwright |
-| A4 | Header checkbox states (unchecked / indeterminate / checked); a11y labels | Playwright |
-| A5 | Every user sees the column; superuser Move selected still works; group isolation intact | Playwright + existing suites |
-| A6 | No regressions; data safety (tests only on `loop-test` stack) | `./scripts/verify.sh`, report states which stack |
+| A1 | Filter → Select all → Add to cart adds exactly the filtered products, qty 1 | Playwright + screenshot |
+| A2 | Already-in-cart products skipped, quantities unchanged, message correct | Playwright |
+| A3 | 200 cap message; nothing added above it | Playwright |
+| A4 | Cart → document flow works with bulk-added items; group isolation intact | Playwright + suites |
+| A5 | No regressions; data safety | `./scripts/verify.sh`, report states which stack |
 
 ## Out of scope — record under "Found but not fixed"
-Bulk delete, select across different filters, saved selections, keyboard shift-click range select (note as an idea).
+Per-item quantity choice before adding, adding documents/customers to a cart, saved carts.
