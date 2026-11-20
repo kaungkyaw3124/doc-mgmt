@@ -51,6 +51,14 @@ http {
     # the app — bump it so real uploads (spec sheets, brochures, etc.) work.
     client_max_body_size 25m;
 
+    # A superuser's /verify answer lists every group id in X-Group-Ids;
+    # past the 4k default (~100 groups) every API call failed with
+    # "upstream sent too big header". http level = /_verify + every API
+    # location. 32k fits ~800 group ids.
+    proxy_buffer_size 32k;
+    proxy_buffers 8 32k;
+    proxy_busy_buffers_size 64k;
+
     # Task 8 — slow-client protection. Conservative, generous timeouts
     # (this app's own slowest legitimate operation, the catalogue
     # export, already gets its own explicit 300s proxy_read_timeout

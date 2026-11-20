@@ -312,6 +312,7 @@ async function doLogout(message = '', broadcast = true) {
     try { localStorage.setItem(LOGOUT_KEY, Date.now() + '|' + message); } catch (e) {}
   }
   try {
+    sessionStorage.removeItem(CART_KEY);
     localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
     if (message) sessionStorage.setItem(LOGOUT_MESSAGE_KEY, message);
   } catch (e) {}
@@ -431,6 +432,7 @@ async function enterApp() {
     const me = await apiFetch('/admin/me');
     document.getElementById('whoami-username').textContent = me.username + (me.is_superuser ? ' (superuser)' : '');
     currentUserIsSuperuser = me.is_superuser;
+    restoreCart(me.username);
     const isAnyGroupAdmin = me.groups && me.groups.some(g => g.is_group_admin);
     const canManageUsers = me.is_superuser || isAnyGroupAdmin;
     if (canManageUsers) {
@@ -2294,10 +2296,31 @@ let editingProductId = null;
 let cachedProducts = [];
 
 // ---------- cart ----------
-// Lives only in memory for this browser tab (resets on page refresh) — a
+// Per browser tab, kept in sessionStorage so a reload keeps it — a
 // lightweight way to pick several products while browsing, then drop them
-// all into a new document's line items at once.
+// all into a new document's line items at once. Stored with its owner's
+// username: another user logging in on this tab never sees it.
+const CART_KEY = 'ledger_cart';
 let cartItems = [];
+let cartOwner = '';
+function saveCart() {
+  try { sessionStorage.setItem(CART_KEY, JSON.stringify({ user: cartOwner, items: cartItems })); } catch (e) {}
+}
+function restoreCart(username) {
+  cartOwner = username;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CART_KEY) || 'null');
+    cartItems = saved && saved.user === username && Array.isArray(saved.items) ? saved.items : [];
+  } catch (e) { cartItems = []; }
+  updateCartBadge();
+}
+function pruneCart() { // after products load: drop lines whose product is gone
+  const ids = new Set(cachedProducts.map(p => p.id));
+  const kept = cartItems.filter(p => ids.has(p.id));
+  if (kept.length === cartItems.length) return;
+  cartItems = kept;
+  updateCartBadge();
+}
 
 // ---------- product sub-items (bundle components) ----------
 // Create mode: additions are held locally (pendingSubItems) until the
@@ -2427,6 +2450,7 @@ function emptyCart() {
 }
 
 function updateCartBadge() {
+  saveCart(); // every add/remove/qty/empty path ends here
   const badge = document.getElementById('cart-count-badge');
   const totalQty = cartItems.reduce((sum, p) => sum + (p.quantity || 1), 0);
   badge.textContent = totalQty ? `(${totalQty})` : '';
@@ -3179,6 +3203,7 @@ async function loadProducts() {
     const products = await apiFetch('/products');
     if (isStaleLoad('products', mySeq)) return;
     cachedProducts = products;
+    pruneCart();
     refreshLineItemProductOptions();
     refreshProductCategoryFilter();
     applyFilterAndSort('products');

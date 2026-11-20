@@ -108,7 +108,8 @@ Stop and write the report when **one** of these is true:
 - Tests that create or delete data (especially the DEV-ONLY "Delete ALL" tests) must NOT run against the
   user's running stack/database. Run them on a throwaway stack with its own project name and volumes
   (`docker compose -p loop-test -f infra/docker-compose.yml ...` on other ports, or SQLite/TestClient),
-  and tear that throwaway stack down with `-v` afterwards.
+  and tear that throwaway stack down afterwards with `./scripts/loop-test-down.sh` (it also deletes the
+  bind-mounted `infra/data-loop-test/`, which `down -v` leaves behind; it refuses any project but `loop-test`).
 - Before the final "leave the app running" step, rebuild the user's normal stack WITHOUT removing volumes
   (`up -d --build`, then `restart nginx`). If the Products/Documents lists are empty afterwards, say so in the report.
 - Report in a "Data safety" line which stack the tests used.

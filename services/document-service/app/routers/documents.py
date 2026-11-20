@@ -105,8 +105,10 @@ def _process_items(items_payload, db: Session, scope: Scope):
 
             if description is None:
                 description = product["name"]
-            if unit_price is None:
+            if unit_price is None and product.get("unit_price") is not None:
                 unit_price = Decimal(str(product["unit_price"]))
+            if unit_price is None:  # bulk-imported products carry no price
+                raise HTTPException(status_code=422, detail=f"Line {index + 1}: enter a unit price")
 
         if description is None or unit_price is None:
             raise HTTPException(
