@@ -145,7 +145,7 @@ def test_exports_files_audit_and_product_extras_are_separated(world, owner, othe
     name = made["product"]["name"]
     assert _ok(theirs.get("/products/duplicate-check", params={"name": name}))["exact"] == []
     assert len(_ok(mine.get("/products/duplicate-check", params={"name": name}))["exact"]) == 1
-    flat = [p["id"] for groups in _ok(theirs.get("/products/duplicates")).values() for g in groups for p in g]
+    flat = [p["id"] for kind, groups in _ok(theirs.get("/products/duplicates")).items() if kind != "hidden_count" for g in groups for p in g]
     assert pid not in flat
     assert _ok(theirs.get(f"/documents/by-customer/{made['customer']['id']}")) == []
     assert _ok(theirs.get(f"/documents/by-product/{pid}")) == []

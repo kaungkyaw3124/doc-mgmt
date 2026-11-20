@@ -428,6 +428,7 @@ http {
             auth_request_set $has_category_access $upstream_http_x_has_category_access;
             auth_request_set $allowed_projects $upstream_http_x_allowed_projects;
             auth_request_set $access_level $upstream_http_x_access_level;
+            auth_request_set $current_username $upstream_http_x_username;
             rewrite ^/api/products(.*)$ /products$1 break;
             proxy_pass http://catalogue-service:8000;
             proxy_set_header Host $host;
@@ -445,6 +446,9 @@ http {
             # products.py's _require_edit_access would trust it. See
             # docs/SECURITY_HARDENING_LOG.md's User Control entry.
             proxy_set_header X-Access-Level $access_level;
+            # Who did it (move audit log, "Not a duplicate" created_by): always
+            # from /verify — before this a client-sent X-Username passed through.
+            proxy_set_header X-Username $current_username;
         }
 
         location /api/categories {

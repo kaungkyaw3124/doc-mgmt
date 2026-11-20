@@ -80,3 +80,24 @@ class IdempotencyKey(Base):
     key = Column(String(255), primary_key=True)  # "<endpoint>:<client key>"
     resource_id = Column(UUID(as_uuid=True))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+
+
+class ProductDuplicateDismissal(Base):
+    """
+    "Not a duplicate": the user declared two same-name products different
+    (loop iteration 27). The fingerprints are each product's normalized
+    name+description at dismissal time — the dismissal only counts while
+    both still match, so editing either product brings the warning back.
+    product_a_id < product_b_id (as strings), so a pair is stored once.
+    """
+    __tablename__ = "product_duplicate_dismissals"
+    __table_args__ = (UniqueConstraint("product_a_id", "product_b_id", name="uq_dismissal_pair"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), index=True)  # same meaning as products.group_id; per-group decisions
+    product_a_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    product_b_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    fingerprint_a = Column(String(64), nullable=False)
+    fingerprint_b = Column(String(64), nullable=False)
+    created_by = Column(String(150))
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

@@ -99,3 +99,8 @@ class MoveToGroup(BaseModel):
 
 class BulkMoveToGroup(MoveToGroup):
     ids: list[uuid.UUID] = Field(min_length=1, max_length=1000)
+
+
+class DismissDuplicates(BaseModel):
+    """Body of POST /products/duplicates/dismiss: same-name products of one group declared different."""
+    product_ids: list[uuid.UUID] = Field(min_length=2, max_length=100)

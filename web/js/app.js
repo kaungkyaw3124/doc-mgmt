@@ -2843,8 +2843,9 @@ document.getElementById('product-duplicates-close').addEventListener('click', ()
   document.getElementById('product-duplicates-modal').classList.remove('active');
 });
 
-function renderDuplicateGroups(title, color, groups) {
+function renderDuplicateGroups(title, color, groups, dismissable = false) {
   const tables = groups.map(group => `
+    ${dismissable ? `<div style="text-align:right; margin-bottom:4px;"><button type="button" class="link-btn-inline" data-dup-dismiss-ids="${group.map(p => p.id).join(',')}" title="These are different products — stop warning me">Not a duplicate</button></div>` : ''}
     <table style="margin-bottom:12px;">
       <thead><tr><th>Item Number</th><th>Name</th><th>Description</th><th>Category</th><th>Delete</th></tr></thead>
       <tbody>${group.map(p => `
@@ -2861,13 +2862,27 @@ function renderDuplicateGroups(title, color, groups) {
     + (tables || '<p style="color:var(--text-dim); font-size:13px;">None found.</p>');
 }
 
+// "Not a duplicate" pairs, collapsed at the bottom; Restore lets a pair warn again.
+function renderHiddenPairs(pairs) {
+  if (!pairs.length) return '';
+  const rows = pairs.map(d => `
+    <tr>
+      <td>${d.products.map(p => `<span class="mono">${escapeHtml(p.sku)}</span> ${escapeHtml(p.description || '—')}`).join('<br>')}</td>
+      <td>${escapeHtml(d.products[0].name)}</td>
+      <td><button type="button" class="link-btn-inline" data-dup-restore-id="${d.id}">Restore</button></td>
+    </tr>`).join('');
+  return `<details style="margin-top:16px;"><summary>Hidden pairs (${pairs.length})</summary>
+    <table style="margin-top:8px;"><thead><tr><th>Products</th><th>Name</th><th></th></tr></thead><tbody>${rows}</tbody></table></details>`;
+}
+
 async function loadProductDuplicates() {
   const content = document.getElementById('product-duplicates-content');
   content.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Loading…</p>';
   try {
-    const result = await apiFetch('/products/duplicates');
+    const [result, hidden] = await Promise.all([apiFetch('/products/duplicates'), apiFetch('/products/duplicates/dismissed')]);
     content.innerHTML = renderDuplicateGroups('Exact duplicates', 'var(--danger)', result.exact_groups)
-      + renderDuplicateGroups('Same name', 'inherit', result.same_name_groups);
+      + renderDuplicateGroups('Same name', 'inherit', result.same_name_groups, true)
+      + renderHiddenPairs(hidden);
     content.querySelectorAll('[data-dup-trash-id]').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm(`Move "${btn.dataset.dupTrashSku}" to the recycle bin? You can restore it from there later.`)) return;
@@ -2876,6 +2891,30 @@ async function loadProductDuplicates() {
           await apiFetch('/products/' + btn.dataset.dupTrashId + '/trash', { method: 'PATCH' });
           loadProductDuplicates();
           loadProducts();
+        } catch (err) {
+          showBanner('product-duplicates-banner', err.message);
+        }
+      });
+    });
+    content.querySelectorAll('[data-dup-dismiss-ids]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('product-duplicates-banner', '');
+        try {
+          await apiFetch('/products/duplicates/dismiss', { method: 'POST', body: JSON.stringify({ product_ids: btn.dataset.dupDismissIds.split(',') }) });
+          showSuccessTick('Marked as not a duplicate');
+          loadProductDuplicates();
+        } catch (err) {
+          showBanner('product-duplicates-banner', err.message);
+        }
+      });
+    });
+    content.querySelectorAll('[data-dup-restore-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('product-duplicates-banner', '');
+        try {
+          await apiFetch('/products/duplicates/dismissed/' + btn.dataset.dupRestoreId, { method: 'DELETE' });
+          showSuccessTick('Restored');
+          loadProductDuplicates();
         } catch (err) {
           showBanner('product-duplicates-banner', err.message);
         }

@@ -1,95 +1,84 @@
-# report.md — Iteration 26
+# report.md — Iteration 27
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Bug: a group user with project access sees NO projects, and the Manage-user "Project access" list is broken. Reproduce, find the root cause, fix, add regression tests.
+- **Goal**: "Not a duplicate" for products. On the "Products — possible duplicates" page the user can mark a "Same name" group as different products; it stops showing (until a product in it changes), without renaming anything.
 - **Ponytail skill loaded**: yes
-- **Branch / commit**: `dev` @ see the commit `loop iter 26: ...`
-- **Root cause (one sentence)**: ets's project grants pointed at projects **outside ets's own group**. The superuser's grant list offered every project in the system, as checkboxes running inline on one line, and the server accepted any project. document-service correctly returns *group scope ∩ grants*, and that was empty.
-- **Evidence**:
-  1. On real Postgres through nginx, the backend already did the right thing for the case in the plan. The new regression test was run on the **old** code: the two data tests passed (user in A granted 2 of A's 3 projects → exactly those 2; a user with no grants → all of A's). The 3 grant tests failed: the superuser could grant group B's project and an unknown id, and `available-projects` returned `{"all": true}`. So the id format, the headers through nginx, and `/verify` per request are all fine. Only the *which projects can be granted* part was wrong.
-  2. I went through the other suspects. A **disabled** group or role gives **403** at the gateway: I disabled group A on loop-test and `GET /api/projects` returned `403`. The UI then shows "You don't have access to this…", not "No projects match.". So for a member of an active group with access, an empty list (200 `[]`) can only mean *no granted project is in the user's groups*. A unit test shows this (`granted ⊄ group → []`).
-  3. Screenshot 1 fits this. The list showed every project as inline `☐ name ☐ name …` chips (`.checkbox-list` is `flex-wrap`), so it is easy to read a tick as belonging to the neighbouring name. Nothing on the server stopped a tick on AI-2/BE/RE (Operation projects).
-  - **I could not inspect the VM's data** (no access to 192.168.100.38). The local stack has no grants for its `ets`. To confirm on the VM after the update: open Manage user → ets. Any grant outside City Mart now appears in red as "… not in this user's groups; untick to remove".
-- **One-paragraph summary**: `POST /admin/users/{id}/project-access` now refuses (403) any project that is not a live project of one of the target user's active groups. This applies to superusers too; group admins keep their pool check on top. `GET /admin/users/{id}/available-projects` now returns only that pool for everyone (it used to return `{"all": true}` for a superuser). auth-service gets the answer by asking document-service `GET /projects` with the target's group scope. It reuses document-service's own group filter and fails closed (503, no grant) if document-service cannot answer. The Manage-user list now has one checkbox per row, only the pool, and a group tag next to each name. Old grants outside the pool are listed in red so they can be unticked; otherwise they would keep hiding the user's projects with nothing visible in the UI. The empty state reads "No projects in this user's groups yet.". The list also refreshes when a group is added or removed. While writing the unit test I found and fixed a latent bug: `Project.id.in_(<strings>)` crashed on non-native UUID columns, and a malformed id gave a 500 on Postgres. Allowed ids are now parsed to UUIDs, and malformed ones are dropped (fail closed).
-- **Same symptom on Documents/Customers?** Customers are not project-scoped (nginx blanks `X-Allowed-Projects` for `/api/customers`), so ets sees all City Mart customers. Documents use the same *scope ∩ (no project or granted project)* rule. With stray grants, ets would see City Mart documents that have **no** project, and none of the documents of City Mart projects.
+- **Branch / commit**: `dev` @ (this commit)
+- **One-paragraph summary**: Each group in the Same-name section has a new **Not a duplicate** button (tooltip "These are different products — stop warning me"). Clicking it saves one dismissal per different-description pair (new table `product_duplicate_dismissals`, migration `0003_duplicate_dismissals`). Each row stores a sha256 fingerprint of each product's `norm(name)|norm(description)`. A pair stays hidden only while both fingerprints still match. If either product's name or description is edited, the group shows again. `GET /products/duplicates` leaves out a same-name group when every one of its different-description pairs is dismissed, and returns a new `hidden_count` (the number of same-name groups hidden). A collapsed **Hidden pairs (N)** section at the bottom of the page lists the hidden pairs, each with a **Restore** button. Exact duplicates cannot be dismissed: a request containing only an exact pair gets 422, and in a mixed request the exact pairs are skipped. Exact groups are listed as before. Dismissals are per group, need edit access, and give 404 outside the caller's scope.
+
+### Task 1 findings
+- `core/duplicates.py::groups()` groups by `(group_id, norm(name))`. Same-name groups need 2+ distinct descriptions. Its only caller is `GET /products/duplicates`.
+- The UI page (`loadProductDuplicates` in `web/js/app.js`) renders the groups as tables with "Move to trash". The Products page's "Possible duplicates" link shows **no count**, so nothing there needed the new numbers.
+- **Security gap found and fixed**: nginx's `/api/products` location never set `X-Username`, so a header sent by the client passed straight through to the move-audit log (`_move_products`). It is now always taken from `/verify`, the same as on other locations. The fix was needed for `created_by` anyway.
+
+### Choices
+- **3+ products, then a new one added**: the **whole group** reappears (the simpler option). One undismissed pair is enough to show it. Test: `test_group_of_three_then_a_fourth_shows_the_whole_group`.
+- Dismissing requires every product to have the same normalized name (otherwise 422). The button only exists on same-name groups, and the rule keeps the stored data meaningful.
+- Dismissing again refreshes the stored fingerprints (it is idempotent and does not add a second row), so a group can be dismissed again after an edit.
+- Stale dismissals (a product edited since) are kept in the table but are ignored and not listed. Hard-deleting a product removes its dismissals through `ON DELETE CASCADE`.
 
 ## 2. Baseline (before any change)
-`loop-test` stack, `./scripts/verify.sh --keep`:
 ```
-======================= 87 passed, 20 skipped in 40.58s ========================
+COMPOSE_PROJECT_NAME=loop-test ... ./scripts/verify.sh --keep
+======================= 92 passed, 21 skipped in 47.72s ========================
 verify.sh: PASSED (stack left running: --keep)
 ```
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | Root cause identified and explained with evidence | PASS (by elimination; VM data not inspected) | §1: the regression test on the old code (2 data tests pass, 3 grant tests fail), disabled group → 403 not `[]`, unit test `granted ⊄ group → []` |
-| A2 | Group user with grants sees exactly the granted projects of own group | PASS | `tests/test_project_grants_group_scope.py::test_user_with_grants_sees_exactly_them_and_no_grants_sees_whole_group`; Playwright `test_ui_project_access.py` (tick one → user's Projects shows exactly 1 row); `iter-26-group-user-projects.png` |
-| A3 | Manage-user list: stacked rows, only the user's groups' projects, group tags | PASS | Playwright asserts 2 rows (the other group's project absent), group tag text in every row, equal x and increasing y; `loop/evidence/iter-26-manage-user-projects.png` |
-| A4 | Server rejects granting a project outside the user's groups | PASS | `test_grant_outside_users_groups_is_rejected` (403, nothing stored), `test_unknown_project_grant_is_rejected` (403), `test_grantable_projects_are_only_the_users_groups` |
-| A5 | No regressions; data safety | PASS | verify.sh on loop-test: `92 passed, 21 skipped`, PASSED. document-service unit: `366 passed`. auth-service unit: `98 passed`. UI: `39 passed, 8 skipped` + the 2 compose-dependent ones `5 passed` (see §5). **Data safety: every test ran on the `loop-test` stack (ports 18080) or in-process SQLite / a throwaway Postgres container; the user's stack was only rebuilt, never wiped.** |
-
-The three data cases from Task 5, end to end on loop-test:
-- with grants → only the granted projects of the own group (`…sees_exactly_them…`)
-- no grants → every project of the own group (same test, `plain` user)
-- grants all outside own groups → **empty list**. Grants made that way are now refused, so the test produces one the only way still possible: grant in-group, then move the project to group B. The stray grant still shows in `project-access`, is not in `available-projects`, and removing it gives the user the whole group back (`test_grants_left_outside_users_groups_show_nothing`).
+| A1 | Dismissed same-name group no longer listed; survives reload | PASS | unit `test_dismiss_hides_edit_brings_back_restore_brings_back` (`([], 1)` after dismiss); Playwright `test_ui_not_duplicate.py` (button gone, tick visible, still gone after `page.reload()`); `iter-27-duplicates-before.png` |
+| A2 | Editing name/description brings the warning back | PASS | same unit test: PATCH description → `([["HD-1","HD-2"]], 0)` and `/dismissed` is `[]` |
+| A3 | Restore from "Hidden pairs" works | PASS | unit: DELETE → 204, listed again, second DELETE → 404; Playwright: Hidden pairs → Restore → button is back; `iter-27-duplicates-hidden.png` |
+| A4 | Exact duplicates unaffected and not dismissable | PASS | `test_exact_duplicates_are_not_dismissable_and_stay_listed`: exact pair → 422; mixed group → 2 pairs dismissed, exact group still `[["C-1","C-2"]]` |
+| A5 | Per-group isolation and edit-access rules | PASS | `test_group_scope` (other group → 404 on dismiss and restore; group B's same names still listed; superuser can act on any group); `test_bad_requests` (view access → 403, two groups → 422, unknown id → 404) |
+| A6 | Single migration head, no regressions, data safety | PASS | heads `['0003_duplicate_dismissals']`; Postgres check: create_all minus the table → stamp 0002 → upgrade head ×2 → table, both indexes and `uq_dismissal_pair` present, both FKs `ondelete: CASCADE`. verify.sh `92 passed, 22 skipped` PASSED; catalogue unit `106 passed`; UI `43 passed, 7 skipped`. **Data safety: all tests ran on the `loop-test` stack (port 18080), in-process SQLite, or a throwaway `m27_cat` database (dropped afterwards). The user's stack was only backed up and rebuilt.** |
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/auth-service/app/core/document_client.py` | added | `project_ids_in_groups(group_ids)`: GET document-service `/projects` with that group scope; fails closed with 503 |
-| `services/auth-service/app/routers/admin.py` | modified | grant: 403 unless the project is in the target's groups (all granters). `available-projects`: returns only that pool (group admin: ∩ their administered pools) |
-| `services/auth-service/app/core/config.py`, `app/main.py` | modified | `document_service_url`, `internal_shared_secret` settings; the default secret is refused in production like the other services |
-| `infra/docker-compose.yml` | modified | auth-service gets `INTERNAL_SHARED_SECRET` from the same compose variable as nginx/backup-service |
-| `services/document-service/app/routers/projects.py` | modified | allowed project ids parsed to UUIDs (malformed dropped); compare UUIDs |
-| `web/js/app.js` | modified | Manage-user list from the server's pool for everyone, group tag per row, stray grants listed in red, new empty text, refresh after group add/remove |
-| `web/index.html` | modified | project-access list stacked (`flex-direction: column`) |
-| `tests/test_project_grants_group_scope.py` | added | gateway regression tests (5) |
-| `tests/test_ui_project_access.py` | added | Playwright: stacked list, only own-group projects with tags, tick → user sees exactly it |
-| `services/document-service/tests/test_project_grants_scope.py` | added | unit: granted ∩ group, granted ⊄ group, no grants/ALL, NONE, superuser, malformed id, single GET |
-| `services/auth-service/tests/test_document_client.py` | added | unit: no groups → no call; unreachable → 503; headers sent |
-| `services/auth-service/tests/test_secrets_check.py` | modified | valid production config now sets the internal secret; new test: default internal secret refused in production |
+| `services/catalogue-service/app/models.py` | modified | `ProductDuplicateDismissal` model |
+| `services/catalogue-service/alembic/versions/0003_duplicate_dismissals.py` | added | guarded, idempotent migration (table, unique pair, 2 indexes, cascade FKs) |
+| `services/catalogue-service/app/core/duplicates.py` | modified | `fingerprint`, `pair`, `effective_dismissals`; `groups()` filters dismissed groups and returns `hidden_count` |
+| `services/catalogue-service/app/routers/products.py` | modified | `/duplicates` uses dismissals; `POST /duplicates/dismiss`, `GET /duplicates/dismissed`, `DELETE /duplicates/dismissed/{id}` |
+| `services/catalogue-service/app/schemas.py` | modified | `DismissDuplicates` body (2–100 ids) |
+| `infra/nginx/nginx.conf.template` | modified | `/api/products` now forwards `X-Username` from `/verify` (it used to pass the client's copy through) |
+| `web/js/app.js` | modified | Not a duplicate button, success tick, Hidden pairs section with Restore |
+| `services/catalogue-service/tests/test_duplicate_dismissals.py` | added | unit + scope tests |
+| `services/catalogue-service/tests/test_concurrency.py` | modified | expected head moved from 0002 to 0003 (new migration) |
+| `tests/test_catalogue_smoke.py`, `tests/test_group_isolation.py` | modified | account for the new `hidden_count` key (it is an int, not a list of groups) |
+| `tests/test_ui_not_duplicate.py` | added | Playwright flow + evidence screenshots |
+| `loop/evidence/iter-27-duplicates-{before,hidden}.png` | added | evidence |
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | new unit test (SQLite) | `AttributeError: 'str' object has no attribute 'hex'` | `Project.id.in_(set of str)` on a UUID column | parse allowed ids with `group_scope._parse_ids` |
-| 2 | auth `test_valid_production_configuration_starts_cleanly` | `RuntimeError … INTERNAL_SHARED_SECRET` | new production check; the test fixture had no internal secret | the fixture sets and restores a real-looking secret |
-| 3 | `test_ui_project_access.py` | `#whoami-username` is "admin (superuser)" | test used exact text | `to_contain_text` |
-| 4 | `test_ui_select_all` / `test_ui_bulk_cart` | `unknown shorthand flag: 'f'` | harness: the Playwright container had the docker CLI but not the compose plugin | mounted `/usr/libexec/docker/cli-plugins` → `5 passed` (no code change) |
+| 1 | catalogue unit `test_single_alembic_head` | `['0003_duplicate_dismissals'] != ['0002_concurrency']` | the test pins the head; a new migration moves it | expect 0003 |
+| 2 | verify.sh `test_duplicate_product_is_blocked_and_reported`, `test_exports_files_audit_and_product_extras_are_separated[×2]` | `Extra items: 'hidden_count'` / `'int' object is not iterable` | both tests iterate over every response key; the plan adds `hidden_count` | key set updated; isolation test skips `hidden_count` |
 
 ## 6. Final verification output
 ```
 COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=infra/docker-compose.loop-test.yml GATEWAY=http://localhost:18080 ALLOW_DESTRUCTIVE_TESTS=1 ./scripts/verify.sh --keep
-======================= 92 passed, 21 skipped in 44.07s ========================
+======================= 92 passed, 22 skipped in 50.88s ========================
 verify.sh: PASSED (stack left running: --keep)
+(the extra skip is test_ui_not_duplicate.py: no Playwright on the host)
 
-regression test on the OLD code (services stashed, rebuilt):
-FAILED tests/test_project_grants_group_scope.py::test_grantable_projects_are_only_the_users_groups
-FAILED tests/test_project_grants_group_scope.py::test_grant_outside_users_groups_is_rejected
-FAILED tests/test_project_grants_group_scope.py::test_unknown_project_grant_is_rejected
-3 failed, 2 passed in 2.41s
-… after the fix: 5 passed in 2.52s
-
-document-service (doc-test-lo, SQLite): 366 passed in 232.35s
-auth-service (throwaway postgres:16 container): 98 passed in 54.34s
-tests/test_ui_*.py (playwright v1.65.1, --network host, loop-test): 2 failed, 39 passed, 8 skipped
-  -> the 2 re-run with the compose plugin mounted: 5 passed in 35.59s
+catalogue-service unit (loop-test image + pytest/httpx): 106 passed in 2.88s
+tests/test_ui_*.py (playwright/python:v1.65.1-noble, playwright==1.65.1, --network host, docker CLI + socket mounted, loop-test):
+43 passed, 7 skipped in 168.09s
 ```
-(The 21st verify.sh skip is the new `test_ui_project_access.py`: the gateway venv has no Playwright. It passed in the Playwright container.)
 
 ## 7. Found but not fixed (out of scope)
-- `services/document-service/app/routers/documents.py:284` has its own copy of `_parse_allowed_projects` that still returns strings. It works on Postgres for valid ids, but a malformed id in `X-Allowed-Projects` would give a 500 instead of failing closed. The same two-line fix as `projects.py` applies. Nginx always sets this header from `/verify`, so a client cannot trigger it.
-- Moving a project to another group (`/projects/{id}/move`) leaves existing user grants on it in place. Those users lose that project, and if it was their only grant they see nothing. The Manage-user list now shows such grants in red so they can be removed. Clearing them automatically on move would need document-service → auth-service calls.
-- Redesigning project access (per-group instead of per-user grants), as the plan says.
-- The Manage-user evidence screenshot is clipped at the bottom of the modal (the modal scrolls). Both rows are visible.
+- Dismissing from the warning shown while typing a new product, or from the bulk-import "same name" warning. The product is not saved yet, so there is no pair to dismiss; this needs a different design.
+- "Similar names" dismissals.
+- Stale dismissal rows (a product edited since) stay in the table forever. They are harmless and ignored, but a cleanup could delete them once the fingerprints no longer match.
+- Running the UI suite overwrites the committed `loop/evidence/iter-8-*.png` screenshots when `UI_SCREENSHOT_DIR` is set. I reverted them by hand.
 
 ## 8. Blockers / decisions needed
-None. One thing to know for deploy: auth-service now also refuses to start in `ENVIRONMENT=production` with the default `INTERNAL_SHARED_SECRET`. It reads the same compose variable nginx uses, so a server that already sets it (required for nginx/document-service in production) needs no change.
+None.
 
 ## 9. Suggestions for the next iteration
-- On the VM after deploy: open Manage user → ets, untick any red "not in this user's groups" rows, tick the City Mart projects, and log in as ets.
-- A `scripts/ui-tests.sh` wrapping the Playwright container command (with the compose plugin mount) would avoid attempt 4 next time.
+- If the user wants it, a count on the Products page's "Possible duplicates" link (using the filtered numbers, `same_name_groups` + `exact_groups`).
 
-App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)
+App running at http://localhost:8080 (login: admin / CHANGE_ME, local only) — see the final step below.

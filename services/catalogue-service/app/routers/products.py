@@ -7,7 +7,9 @@ import subprocess
 import tempfile
 import uuid
 import zipfile
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from itertools import combinations
 
 import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header
@@ -281,7 +283,77 @@ def list_duplicates(
     """Groups of possible duplicates across the active catalogue, for the
     "Possible duplicates" review page."""
     products = dup.active_products(db, scope, visible_ids=get_visible_product_ids(x_allowed_projects))
-    return {kind: [[dup.brief(p) for p in g] for g in gs] for kind, gs in dup.groups(products).items()}
+    result = dup.groups(products, dup.effective_dismissals(db, scope, products).keys())
+    return {"exact_groups": [[dup.brief(p) for p in g] for g in result["exact_groups"]],
+            "same_name_groups": [[dup.brief(p) for p in g] for g in result["same_name_groups"]],
+            "hidden_count": result["hidden_count"]}
+
+
+@router.post("/duplicates/dismiss")
+def dismiss_duplicates(
+    payload: schemas.DismissDuplicates,
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    x_username: str | None = Header(default=None, alias="X-Username"),
+    scope: Scope = Depends(get_scope),
+):
+    """"Not a duplicate": every different-description pair of these
+    same-name products stops showing on the duplicates page until one of
+    them is edited. Exact duplicates are never dismissed. Idempotent: a
+    repeat refreshes the stored fingerprints."""
+    _require_edit_access(x_access_level)
+    ids = set(payload.product_ids)
+    found = [p for p in dup.active_products(db, scope, visible_ids=get_visible_product_ids(x_allowed_projects)) if p.id in ids]
+    if len(found) != len(ids):
+        raise HTTPException(status_code=404, detail="product not found")
+    if len({p.group_id for p in found}) > 1:
+        raise HTTPException(status_code=422, detail="all products must belong to the same group")
+    if len({dup.norm(p.name) for p in found}) > 1:
+        raise HTTPException(status_code=422, detail="only products with the same name can be marked as not duplicates")
+    pairs = [dup.pair(a, b) for a, b in combinations(found, 2) if dup.norm(a.description) != dup.norm(b.description)]
+    if not pairs:
+        raise HTTPException(status_code=422, detail="exact duplicates (same name and description) cannot be marked as not duplicates")
+    existing = {(d.product_a_id, d.product_b_id): d for d in db.query(models.ProductDuplicateDismissal).filter(
+        models.ProductDuplicateDismissal.product_a_id.in_(ids), models.ProductDuplicateDismissal.product_b_id.in_(ids))}
+    for a, b in pairs:
+        row = existing.get((a.id, b.id)) or models.ProductDuplicateDismissal(id=uuid.uuid4(), product_a_id=a.id, product_b_id=b.id)
+        row.group_id, row.fingerprint_a, row.fingerprint_b = a.group_id, dup.fingerprint(a), dup.fingerprint(b)
+        row.created_by, row.created_at = x_username or None, datetime.utcnow()
+        db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:  # two simultaneous clicks on the same group: the other one already saved it
+        db.rollback()
+        raise HTTPException(status_code=409, detail="already being marked — refresh the page")
+    return {"dismissed_pairs": len(pairs)}
+
+
+@router.get("/duplicates/dismissed")
+def list_dismissed_duplicates(
+    db: Session = Depends(get_db),
+    x_allowed_projects: str | None = Header(default=None, alias="X-Allowed-Projects"),
+    scope: Scope = Depends(get_scope),
+):
+    """The pairs currently hidden by "Not a duplicate" (stale ones — a product edited since — are left out)."""
+    products = dup.active_products(db, scope, visible_ids=get_visible_product_ids(x_allowed_projects))
+    by_id = {p.id: p for p in products}
+    rows = sorted(dup.effective_dismissals(db, scope, products).values(), key=lambda d: (dup.norm(by_id[d.product_a_id].name), str(d.id)))
+    return [{"id": str(d.id), "created_by": d.created_by, "created_at": d.created_at,
+             "products": [dup.brief(by_id[d.product_a_id]), dup.brief(by_id[d.product_b_id])]} for d in rows]
+
+
+@router.delete("/duplicates/dismissed/{dismissal_id}", status_code=204)
+def restore_dismissed_duplicate(
+    dismissal_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
+):
+    """Undo "Not a duplicate" for one pair: it can show on the duplicates page again."""
+    _require_edit_access(x_access_level)
+    db.delete(get_or_404(db, models.ProductDuplicateDismissal, dismissal_id, scope, "dismissal not found"))
+    db.commit()
 
 
 @router.get("/bulk-import-template")
