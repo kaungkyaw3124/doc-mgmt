@@ -14,6 +14,8 @@ Status: **QUEUED** (plan written in `loop/queue/`), **LIVE** (in `loop/PLAN.md`)
 | 12 | Select all on Products/Documents/Customers/Projects (selects the filtered rows, e.g. 10 of 100 by date) | LIVE (iteration 24) | `loop/PLAN.md` |
 | 13 | Add selected (filtered) products to the cart in one click | QUEUED | `loop/queue/iter-25-bulk-add-to-cart.md` |
 | 14 | Bug: group user ets (granted 2 City Mart projects) sees "No projects match"; Manage-user project list shows other groups' projects and is laid out inline | LIVE (iteration 26) | `loop/PLAN.md` |
+| 15 | "Not a duplicate" for same-name products (remembered, no renaming, restore from Hidden pairs) | QUEUED | `loop/queue/iter-27-not-a-duplicate.md` |
+| 16 | Small fixes: nginx header size with ~100 groups, cart kept on reload, 500 on no-price line item, `loop-test-down.sh` | QUEUED | `loop/queue/iter-28-small-fixes.md` |
 | 5 | Pin the Bulk import summary line + Import button in the modal | IDEA (iteration 15 pinned only heading + Close) | — |
 | 6 | Remove the DEV-ONLY "Delete ALL" buttons before real production use | IDEA (steps in `loop/history/report-iter-15.md` §4) | — |
 | 7 | Off-site copy of backups | IDEA (user has not chosen a destination) | — |
