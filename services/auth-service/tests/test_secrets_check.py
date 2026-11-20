@@ -40,6 +40,7 @@ def restore_settings():
         "jwt_secret": settings.jwt_secret,
         "seed_admin_password": settings.seed_admin_password,
         "database_url": settings.database_url,
+        "internal_shared_secret": settings.internal_shared_secret,
     }
     yield
     for key, value in original.items():
@@ -87,7 +88,18 @@ def test_valid_production_configuration_starts_cleanly(restore_settings):
     settings.jwt_secret = "a-real-unique-jwt-secret-abc123"
     settings.seed_admin_password = "a-real-unique-admin-password-1"
     settings.database_url = "postgresql://docmgmt:S3cur3-Unique-Pw@postgres:5432/auth"
+    settings.internal_shared_secret = "a-real-unique-internal-secret-xyz789"
     main.on_startup()  # must not raise
+
+
+def test_default_internal_secret_fails_startup_in_production(restore_settings):
+    settings.environment = "production"
+    settings.jwt_secret = "a-real-unique-jwt-secret-abc123"
+    settings.seed_admin_password = "a-real-unique-admin-password-1"
+    settings.database_url = "postgresql://docmgmt:S3cur3-Unique-Pw@postgres:5432/auth"
+    settings.internal_shared_secret = "local_dev_internal_secret_change_me"
+    with pytest.raises(RuntimeError, match="INTERNAL_SHARED_SECRET"):
+        enforce_production_secrets(settings.environment, main._secret_problems())
 
 
 def test_insecure_defaults_only_warn_in_development(restore_settings, caplog):

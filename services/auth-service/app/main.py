@@ -30,6 +30,8 @@ def _secret_problems() -> list[str]:
         problems.append("SEED_ADMIN_PASSWORD")
     if is_insecure(db_password_from_url(settings.database_url), {"docmgmt", "postgres"}):
         problems.append("DATABASE_URL password")
+    if is_insecure(settings.internal_shared_secret, {"local_dev_internal_secret_change_me"}):
+        problems.append("INTERNAL_SHARED_SECRET")
     return problems
 
 

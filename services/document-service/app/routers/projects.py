@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.concurrency import check_version, claim_idempotency_key, remember
-from app.core.group_scope import Scope, get_scope, scoped, get_or_404, group_for_create
+from app.core.group_scope import Scope, _parse_ids, get_scope, scoped, get_or_404, group_for_create
 from app import models, schemas
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -14,15 +14,13 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 def _parse_allowed_projects(x_allowed_projects: str | None):
     """
-    Returns None (no restriction) or a set of allowed project_id strings.
-    Mirrors the same helper in routers/documents.py — kept local here to
-    avoid a cross-router import for one small function.
+    Returns None (no restriction) or a set of allowed project ids (UUIDs —
+    plain strings break `Project.id.in_()` on a non-native UUID column, and
+    a malformed id is dropped instead of a 500, failing closed).
     """
     if not x_allowed_projects or x_allowed_projects == "ALL":
         return None
-    if x_allowed_projects == "NONE":
-        return set()
-    return set(x_allowed_projects.split(","))
+    return set(_parse_ids(x_allowed_projects))  # "NONE" parses to the empty set
 
 
 def _require_edit_access(x_access_level: str | None):
@@ -91,7 +89,7 @@ def get_project(
     project = get_or_404(db, models.Project, project_id, scope, "project not found")
 
     allowed = _parse_allowed_projects(x_allowed_projects)
-    if allowed is not None and str(project.id) not in allowed:
+    if allowed is not None and project.id not in allowed:
         raise HTTPException(status_code=403, detail="you don't have access to this project")
 
     return project
@@ -210,7 +208,7 @@ def get_project_documents(
     project = get_or_404(db, models.Project, project_id, scope, "project not found")
 
     allowed = _parse_allowed_projects(x_allowed_projects)
-    if allowed is not None and str(project.id) not in allowed:
+    if allowed is not None and project.id not in allowed:
         raise HTTPException(status_code=403, detail="you don't have access to this project")
 
     return (

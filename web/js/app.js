@@ -4199,6 +4199,7 @@ async function loadEditUserGroups() {
           await apiFetch('/admin/groups/' + btn.dataset.removeGroupId + '/members/' + encodeURIComponent(user.username), { method: 'DELETE' });
           loadEditUserGroups();
           loadEditUserRoles(); // removing a group also drops any roles held via it — refresh both
+          loadEditUserProjectAccess(); // the grantable projects follow the user's groups
         } catch (err) {
           showBanner('edit-user-banner', err.message);
         }
@@ -4233,6 +4234,7 @@ document.getElementById('edit-user-add-group-btn').addEventListener('click', asy
   try {
     await apiFetch('/admin/groups/' + groupId + '/members', { method: 'POST', body: JSON.stringify({ username: user.username }) });
     loadEditUserGroups();
+    loadEditUserProjectAccess();
   } catch (err) {
     showBanner('edit-user-banner', err.message);
   }
@@ -4242,19 +4244,16 @@ async function loadEditUserProjectAccess() {
   const container = document.getElementById('edit-user-project-checkboxes');
   container.innerHTML = '<span style="color:var(--text-dim); font-size:13px;">Loading…</span>';
   try {
-    let availableProjects;
-    if (currentUserIsSuperuser) {
-      availableProjects = cachedProjects;
-    } else {
-      const available = await apiFetch('/admin/users/' + editingUserId + '/available-projects');
-      availableProjects = cachedProjects.filter(p => available.project_ids.includes(p.id));
-    }
-
+    // Server decides the pool: projects of the user's own groups (iteration 26).
+    const available = await apiFetch('/admin/users/' + editingUserId + '/available-projects');
+    const availableProjects = cachedProjects.filter(p => available.project_ids.includes(p.id));
     const currentGrants = await apiFetch('/admin/users/' + editingUserId + '/project-access');
+    // Old grants outside the pool still narrow what the user sees — list them so they can be removed.
+    const strayGrants = currentGrants.filter(id => !available.project_ids.includes(id));
 
-    if (!availableProjects.length) {
+    if (!availableProjects.length && !strayGrants.length) {
       container.innerHTML = currentUserIsSuperuser
-        ? '<span style="color:var(--text-dim); font-size:13px;">No projects created yet.</span>'
+        ? '<span style="color:var(--text-dim); font-size:13px;">No projects in this user\'s groups yet.</span>'
         : '<span style="color:var(--text-dim); font-size:13px;">No shared group has project access yet — ask a superuser to grant some to your group first.</span>';
       return;
     }
@@ -4262,9 +4261,16 @@ async function loadEditUserProjectAccess() {
     container.innerHTML = availableProjects.map(p => `
       <label>
         <input type="checkbox" class="edit-user-project-cb" data-project-id="${p.id}" ${currentGrants.includes(p.id) ? 'checked' : ''}>
-        ${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}
+        ${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}${groupTag(p.group_id)}
       </label>
-    `).join('');
+    `).join('') + strayGrants.map(id => {
+      const p = cachedProjects.find(x => x.id === id);
+      return `
+      <label style="color:var(--danger);">
+        <input type="checkbox" class="edit-user-project-cb" data-project-id="${id}" checked>
+        ${p ? escapeHtml(p.name) + groupTag(p.group_id) : 'Deleted or hidden project'} — not in this user's groups; untick to remove
+      </label>`;
+    }).join('');
 
     container.querySelectorAll('.edit-user-project-cb').forEach(cb => {
       cb.addEventListener('change', async () => {

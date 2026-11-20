@@ -102,6 +102,10 @@ services:
       args:
         APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     env_file: ../services/auth-service/.env
+    environment:
+      # Same value nginx gets: auth-service asks document-service which
+      # projects a group owns before granting project access.
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:-local_dev_internal_secret_change_me}
     depends_on:
       - postgres
     expose:
