@@ -1,74 +1,83 @@
-# report.md — Iteration 28
+# report.md — Iteration 29
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Four small fixes found in earlier reports. Each is small; do all four, test each.
-- **Ponytail skill loaded**: yes (active from session start)
-- **Branch / commit**: `dev` @ (this commit)
-- **One-paragraph summary**: (1) nginx now sets `proxy_buffer_size 32k` / `proxy_buffers 8 32k` / `proxy_busy_buffers_size 64k` at the `http` level, which covers `/_verify` and every API location. A superuser with 150 groups gets 200 everywhere; before the fix every call returned 500. The group list is still sent, because `group_for_create` and Move still need it. (2) The cart is kept in `sessionStorage` (`ledger_cart`, stored as `{user, items}`, every access in try/catch). It is restored after `/admin/me` only when the username matches; otherwise it starts empty. It is saved on every change (all paths go through `updateCartBadge`), cleared on logout, and lines whose product is gone are dropped once products load. (3) `_process_items`: when the request has no price and the catalogue product has none either, the API returns **422 "Line N: enter a unit price"** instead of 500. A price in the request is used, as before. (4) New `scripts/loop-test-down.sh`: it runs `down -v` on the `loop-test` project only, then deletes only `infra/data-loop-test/` from an alpine container that mounts that one folder. It refuses any other `COMPOSE_PROJECT_NAME` and does nothing on a second run. LOOP.md and the compose override header now point to it.
+- **Goal**: (A) One global group switcher for the admin; (B) dev tools (Delete ALL) only for the admin.
+- **Ponytail skill loaded**: yes
+- **Branch / commit**: `dev` @ (this commit, `loop iter 29: …`)
+- **One-paragraph summary**: **A.** The sidebar now has a superuser-only **Viewing** select: All groups / each group / Unassigned. It is one extra `extraFilters` entry (`selectId: 'group-switcher'`) on Products, Documents, Customers and Projects, so search, category, date, sorting, Select all, Add to cart and Move all work on the filtered rows. Changing it clears the selection, because the filter key changes (iteration 24 rule). The four per-list `<table>-group-filter` dropdowns are gone, and Reset filters no longer touches the group. Option labels count the rows of the list that is open (e.g. `Ops … (1)`); there are no counts on other pages. The choice is saved in `localStorage` `ledger_group_view` as `{user, id}`, with every access in try/catch. It falls back to All groups if the group no longer exists or belongs to another user, and it is cleared on logout. Each list header shows "Showing: <group>" while a filter is on. With a group chosen, the superuser's New product/document/customer/project forms pre-select that group (still changeable). **B.** All five `DELETE /products|/documents|/customers|/projects|/companies` endpoints now return **403** to anyone who is not a superuser. The production block, the view-only rule and `X-Has-Document-Delete` are unchanged. The four group-scoped endpoints accept `?group_id=<uuid>|none`; a malformed id returns 422 and deletes nothing. `GET /products/dev-config` returns `delete_all_enabled` only for a superuser outside production. Button labels follow the switcher: "Delete ALL (dev)", "Delete ALL in <Group> (dev)" or "Delete ALL unassigned (dev)"; companies keep "Delete ALL companies (dev)" and ignore the switcher. Every button now asks first, e.g. "Delete ALL products in City Mart? This cannot be undone."; Cancel does nothing.
 
 ## 2. Baseline (before any change)
 ```
-COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=infra/docker-compose.loop-test.yml GATEWAY=http://localhost:18080 ALLOW_DESTRUCTIVE_TESTS=1 ./scripts/verify.sh --keep
-======================= 92 passed, 22 skipped in 44.35s ========================
+======================= 98 passed, 23 skipped in 46.26s ========================
 verify.sh: PASSED (stack left running: --keep)
 ```
-The new tests, run against the baseline build (before the fixes were deployed), reproduced both bugs:
-```
-AssertionError: /documents: 500 <html><head><title>500 Internal Server Error</title>   (test_many_groups_superuser)
-assert 500 == 422                                                                    (test_line_item_no_price ×2)
-```
+(The loop-test stack.) Note: the images for this run were built while I had already started editing the server, so the baseline may include part of the change. It passed either way.
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | Superuser with ≥150 groups → 200 through nginx | PASS | `tests/test_many_groups_superuser.py` creates 150 groups, then GETs /documents /customers /projects /products /companies /categories /search; all 200; groups deleted in `finally`. Was 500 before the fix. |
-| A2 | Cart survives reload; another user gets an empty cart | PASS | Playwright `tests/test_ui_cart_persist.py`: add 3 → `(3)`; reload → `(3)` and the modal lists the same 3; delete one product via the API, reload → `(2)`; log out, log in as editor → badge empty, cart `{}`. No page errors. `loop/evidence/iter-28-cart-after-reload.png` |
-| A3 | No-price line → 422 naming the line; request price used; never 500 | PASS | `tests/test_line_item_no_price.py`: create with line 3 priceless → 422 `"Line 3: enter a unit price"`; request price 7.50 → 201, price 7.5, name taken from the product; PATCH without a price → 422 `"Line 1: …"`; a priced product still fills 12.5 |
-| A4 | `scripts/loop-test-down.sh` | PASS | Real run twice: run 1 removed the stack and `infra/data-loop-test/`; run 2 printed the same done line and had nothing to delete. `infra/data` = `maintenance meili minio nginx-certs postgres` before and after. `COMPOSE_PROJECT_NAME=infra` → "refusing …", exit 1. Unit tests (fake docker, tmp repo): `test_loop_test_down_wipes_only_its_folder_and_is_rerunnable`, `test_loop_test_down_refuses_another_project` |
-| A5 | No regressions; data safety | PASS | verify.sh 98 passed / 23 skipped (baseline 92/22; +6 new tests, +1 skip = the new UI test, since there is no Playwright on the host); UI suite 44 passed / 7 skipped. **Data safety**: every test ran on the `loop-test` stack (:18080), which was torn down afterwards with the new script. The user's `infra` stack and `infra/data/` were not touched by the tests. |
+| A1 | Switcher filters all four lists at once; All / group / Unassigned; remembered per user; admin only | PASS | `tests/test_ui_group_switcher.py`: choosing Ops makes all four lists show only Ops rows (the City row is absent, every row carries the Ops tag). Unassigned → no group-tag other than "Unassigned". All → both rows. After a reload the value is still Ops. After logout `localStorage.ledger_group_view` is null. The ops user sees no switcher; the admin logs back in on All groups. Evidence: `iter-29-switcher-sidebar.png`, `iter-29-switcher-products-citymart.png` (shows the Ops group) |
+| A2 | Per-list dropdowns removed; search/date/select/cart/move still work | PASS | `[id$='-group-filter']` count is 0 for both users. Switching groups hides the selection bar. The updated `test_ui_group_move.py` and `test_ui_select_all.py` (now driving `#group-switcher`) and `test_ui_bulk_cart.py` pass |
+| A3 | Create forms pre-select the chosen group; header label | PASS | Switcher on City → `#product-form-group` has City's id and can be changed to Ops. `#<table>-group-showing` reads "Showing: <name>" on all four lists and is hidden on All groups |
+| A4 | Delete ALL visible only to a superuser; non-superuser 403 | PASS | API `tests/test_delete_all_superuser.py`: an ops editor with documents-delete gets 403 on all five through nginx, the counts are unchanged, and dev-config is false for them. The UI test shows the group user none of the five buttons. Unit tests: `AS_OPS`/`AS_BOTH`/`AS_NOBODY` get 403 in both services |
+| A5 | Delete ALL respects `group_id`; confirm names the group; production blocked | PASS | API: `?group_id=<ops>` → ops lists empty, city counts unchanged; `not-a-uuid` → 422. Unit tests: `=none` deletes only unassigned rows and no parameter deletes all. The production 403 tests still pass (`test_refused_in_production` ×4, catalogue equivalent). UI: dialog text `Delete ALL products in Ops …? This cannot be undone.`; Cancel leaves 3 rows; OK → "Deleted 3 …"; City's products stay. `iter-29-delete-all-confirm.png` shows the group-named button; a native `confirm()` is not captured in screenshots, so the test asserts the dialog text instead |
+| A6 | No regressions; data safety | PASS | verify.sh `100 passed, 24 skipped`; catalogue unit `107 passed`; document unit `353 passed, 13 skipped` (+ re-run of the changed files: 40 passed); UI `45 passed, 8 skipped`. **Data safety: every test ran on the `loop-test` stack (port 18080) or in-process SQLite; the stack was removed afterwards with `scripts/loop-test-down.sh`. The user's stack was only backed up and rebuilt.** |
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `infra/nginx/nginx.conf.template` | modified | proxy buffers 32k at http level (fix 1) |
-| `web/js/app.js` | modified | cart in sessionStorage: `saveCart`/`restoreCart`/`pruneCart`, restore on /admin/me, prune after products load, clear on logout (fix 2) |
-| `services/document-service/app/routers/documents.py` | modified | priceless product → 422 "Line N: enter a unit price" (fix 3) |
-| `scripts/loop-test-down.sh` | added | fix 4 |
-| `loop/LOOP.md`, `infra/docker-compose.loop-test.yml` | modified | point the teardown instructions at the script |
-| `tests/test_many_groups_superuser.py`, `tests/test_line_item_no_price.py`, `tests/test_ui_cart_persist.py` | added | A1–A3 |
-| `tests/test_backup_scripts.py` | modified | two tests for the teardown script |
-| `loop/evidence/iter-28-cart-after-reload.png` | added | A2 screenshot |
+| `web/index.html` | modified | `#group-switcher-wrap` in the sidebar |
+| `web/js/app.js` | modified | switcher (filter, counts, remember, header label, create default), per-list dropdowns removed, delete-all labels + confirm + `group_id` |
+| `services/document-service/app/core/dev_delete_all.py` | modified | `refuse_in_production_or_view_only(x_access_level, scope)` now requires a superuser; new `only_group()` for `?group_id=` |
+| `services/document-service/app/routers/{documents,customers,projects,companies}.py` | modified | pass the scope; `group_id` parameter (not on companies) |
+| `services/catalogue-service/app/routers/products.py` | modified | superuser-only delete-all + `group_id`; dev-config checks superuser |
+| `infra/nginx/nginx.conf.template` | modified | `/api/companies` now forwards `X-Is-Superuser` from `/verify` (it was blanked, so the companies 403 rule could never pass for the admin). Group ids stay blank there |
+| `services/*/tests/test_group_scope.py`, `test_delete_all*.py` | modified | new rules: 403, group_id, =none, 422, dev-config; the old tests call as superuser |
+| `tests/test_delete_all_superuser.py` | added | API through nginx |
+| `tests/test_ui_group_switcher.py` | added | A1–A3 |
+| `tests/test_ui_delete_all.py` | modified | confirm/cancel, labels, group wipe, group user sees no buttons; now `destructive`-gated (it always wiped everything) |
+| `tests/test_ui_group_move.py`, `tests/test_ui_select_all.py` | modified | `#…-group-filter` → `#group-switcher` |
+
+Inspected (Task 1): `refreshMoveControls` and the per-list filter creator (`app.js` ~3820–3950), `tableConfig` / `applyFilterAndSort` (~3700), the sidebar (`index.html` ~595), `DELETE_ALL` / `initDeleteAll` (~5180), the five DELETE endpoints and `/products/dev-config` (catalogue only; document-service has none).
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | test_ui_cart_persist | `#open-cart-btn` not visible | the test's fault: after a reload the app opens on Documents, where the cart button is hidden | the test clicks the Products nav before opening the cart |
+| 1 | catalogue `test_dev_config_enabled_outside_production` | expected True | old test called as a group user | asserts True for a superuser and False for a group user |
+| 2 | document `test_delete_all_is_superuser_only_and_group_aware` | `cannot start a transaction within a transaction` | my test helper left SQLite sessions open | `with Session()` in the helper |
+| 3 | `test_ui_select_all`, `test_ui_bulk_cart` | `FileNotFoundError: 'docker'`, then `unknown shorthand flag: 'f'` | the Playwright container had no docker CLI or compose plugin (test environment, not the app) | mounted `/usr/bin/docker` and `/usr/libexec/docker/cli-plugins`; both pass |
+| 4 | (visual) | "Showing:" tag wrapped inside the heading | placed inside the `h2` | moved under the subtitle, `nowrap` |
 
 ## 6. Final verification output
 ```
-(fresh loop-test stack: data wiped by loop-test-down.sh first)
-COMPOSE_PROJECT_NAME=loop-test COMPOSE_OVERRIDE=infra/docker-compose.loop-test.yml GATEWAY=http://localhost:18080 ALLOW_DESTRUCTIVE_TESTS=1 ./scripts/verify.sh --keep
-tests/test_line_item_no_price.py::test_no_price_anywhere_is_422_naming_the_line PASSED
-tests/test_line_item_no_price.py::test_request_price_is_used_when_product_has_none PASSED
-tests/test_line_item_no_price.py::test_product_price_still_used_when_request_has_none PASSED
-tests/test_many_groups_superuser.py::test_superuser_with_150_groups_gets_200 PASSED
-======================= 98 passed, 23 skipped in 46.78s ========================
+==> [verify] pytest tests/ -v (BASE_URL=http://localhost:18080/api)
+tests/test_delete_all_superuser.py::test_non_superuser_gets_403_and_nothing_changes PASSED
+tests/test_delete_all_superuser.py::test_superuser_wipes_only_the_chosen_group PASSED
+======================= 100 passed, 24 skipped in 48.79s =======================
 verify.sh: PASSED (stack left running: --keep)
 
-tests/test_ui_*.py (mcr.microsoft.com/playwright/python:v1.65.1-noble, --network host, docker socket, loop-test):
-44 passed, 7 skipped in 160.45s
+catalogue-service unit (loop-test image + pytest/httpx): 107 passed in 2.94s
+document-service unit (loop-test image + pytest/httpx/pypdf): 1 failed, 353 passed, 13 skipped → fixed (attempt 2); changed files re-run: 40 passed
+
+tests/test_ui_*.py (mcr.microsoft.com/playwright/python:v1.65.1-noble, --network host, docker socket + CLI, loop-test):
+43 passed, 8 skipped (+2 env failures, see attempt 3) → test_ui_bulk_cart + test_ui_select_all re-run: 5 passed
+after the header-label tweak: test_ui_group_switcher + test_ui_delete_all: 8 passed
 ```
 
 ## 7. Found but not fixed (out of scope)
-- The UI does not stop a priceless cart line before saving. The user now gets the 422 message in the banner, which names the line, but the form could flag the empty price field itself.
-- Cart lines keep the product snapshot from when they were added (name and price). A product edited after being added still shows the old values in the cart until it is removed and added again. Importing into a document uses the snapshot as before.
-- 32k buffers fit roughly 800 group ids. Past that, the real fix is to not send the list for superusers and let document-service look up the target group.
+- Removing the Delete ALL buttons entirely (BACKLOG #6).
+- Idea: a switcher for non-superusers who belong to several groups. They may want one too; today they see all their groups mixed together.
+- Counts in the switcher cover only the open list, not all four at once.
+- With All groups or Unassigned chosen, a superuser who belongs to a group still gets that group pre-selected in the create forms (the existing `defaultGroupId`, unchanged). The switcher itself pre-selects nothing in those cases.
+- Bulk import's group select does not follow the switcher (not asked for).
+- Deleting one group's products also removes sub-item links to that group's products from other groups' bundles. The links can't stay, because the products are gone.
+- The document-service unit tests need `pypdf`, which the runtime image lacks (installed ad hoc for the run, as before).
 
 ## 8. Blockers / decisions needed
 None.
 
 ## 9. Suggestions for the next iteration
-- Show the price error inline in the document form (see §7).
+- Decide on a switcher for multi-group non-superusers (see §7).
 
-App running at http://localhost:8080 (login: admin / CHANGE_ME, local only) — see the final step below.
+App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.concurrency import check_version, claim_idempotency_key, remember
-from app.core.group_scope import ALL, scoped
+from app.core.group_scope import ALL, Scope, get_scope, scoped
 from app.core.storage import upload_file, get_presigned_url
 from app import models, schemas
 
@@ -260,12 +260,13 @@ def restore_company(
 def delete_all_companies(
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
 ):
     """Permanently deletes EVERY company (recycle bin included), its MDs and
     their logo/seal files. Documents are kept with company/MD cleared."""
     from app.core.dev_delete_all import refuse_in_production_or_view_only, delete_files
 
-    refuse_in_production_or_view_only(x_access_level)
+    refuse_in_production_or_view_only(x_access_level, scope)
     keys = [k for row in db.query(models.Company.logo_object_key, models.Company.seal_object_key) for k in row]
     keys += [k for (k,) in db.query(models.CompanyDirector.seal_object_key)]
     # Companies are shared by every group, so documents of ALL groups lose the link.

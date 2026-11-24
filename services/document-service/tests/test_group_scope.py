@@ -249,16 +249,42 @@ def test_numbering_stays_per_company_across_groups(ctx):
     assert a["doc_number"].endswith("/001") and b["doc_number"].endswith("/002")
 
 
-def test_delete_all_only_touches_the_callers_groups(ctx, monkeypatch):
-    client, _ = ctx
+def test_delete_all_is_superuser_only_and_group_aware(ctx, monkeypatch):
+    """Iteration 29: a group editor (even with Delete rights) gets 403; a
+    superuser wipes one group with ?group_id=, unassigned rows with =none,
+    everything without it; a malformed id is a 422 that deletes nothing."""
+    client, Session = ctx
     monkeypatch.setattr("app.core.dev_delete_all.delete_files", lambda keys: list(keys))
-    for path in ("/customers", "/projects", "/documents"):
+    model_of = {"/documents": models.Document, "/customers": models.Customer, "/projects": models.Project}
+    for path, model in model_of.items():
         _create(client, path, AS_OPS)
         _create(client, path, AS_CITY)
-    for path in ("/documents", "/customers", "/projects"):
-        assert client.delete(path, headers={**AS_OPS, **DELETE_OK}).json() == {"deleted": 1}
-        assert len(client.get(path, headers=AS_CITY).json()) == 1
-        assert client.delete(path, headers={**AS_NOBODY, **DELETE_OK}).json() == {"deleted": 0}
+        loose = _create(client, path, AS_OPS)
+        with Session() as db:
+            db.query(model).filter(model.id == uuid.UUID(loose["id"])).update({model.group_id: None})
+            db.commit()
+    def groups(model):
+        with Session() as db:
+            return sorted(str(g) for (g,) in db.query(model.group_id))
+
+    for path, model in model_of.items():
+        for who in (AS_OPS, AS_BOTH, AS_NOBODY):
+            assert client.delete(path, headers={**who, **DELETE_OK}).status_code == 403
+        assert client.delete(f"{path}?group_id=nope", headers={**AS_SUPER, **DELETE_OK}).status_code == 422
+        assert len(groups(model)) == 3
+        assert client.delete(f"{path}?group_id={OPS}", headers={**AS_SUPER, **DELETE_OK}).json() == {"deleted": 1}
+        assert groups(model) == sorted([str(CITY), "None"])
+        assert client.delete(f"{path}?group_id=none", headers={**AS_SUPER, **DELETE_OK}).json() == {"deleted": 1}
+        assert groups(model) == [str(CITY)]
+        assert client.delete(path, headers={**AS_SUPER, **DELETE_OK}).json() == {"deleted": 1}
+        assert groups(model) == []
+
+
+def test_delete_all_companies_is_superuser_only(ctx):
+    client, _ = ctx
+    client.post("/companies", json={"name": "Shared Co", "short_name": "SC"}, headers=AS_OPS)
+    assert client.delete("/companies", headers=AS_OPS).status_code == 403
+    assert client.delete("/companies?group_id=none", headers=AS_SUPER).json() == {"deleted": 1}  # shared: group_id ignored
 
 
 # ---- existing data: unassigned rows + assign-unassigned ---------------------

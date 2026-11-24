@@ -631,21 +631,24 @@ def unassigned_product_counts(db: Session = Depends(get_db), scope: Scope = Depe
 # catalogue between test runs (loop iteration 15). Remove this whole block
 # plus the matching DEV-ONLY blocks in web/index.html and web/js/app.js.
 @router.get("/dev-config")
-def dev_config():
-    """Tells the UI whether to show the "Delete ALL products (dev)" button.
-    Kept here, not in a new router, so the feature removes in one cut."""
+def dev_config(scope: Scope = Depends(get_scope)):
+    """Tells the UI whether to show the "Delete ALL … (dev)" buttons: only to a
+    superuser, never in production. Kept here, not in a new router, so the
+    feature removes in one cut."""
     from app.core.config import settings
-    return {"delete_all_enabled": settings.environment != "production"}
+    return {"delete_all_enabled": settings.environment != "production" and scope.superuser}
 
 
 @router.delete("")
 def delete_all_products(
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     scope: Scope = Depends(get_scope),
 ):
-    """Permanently deletes every product of the caller's groups (recycle bin
-    included; a superuser: all) — no project-visibility filter, on purpose:
+    """Superuser only: permanently deletes every product (recycle bin
+    included; only one group's with ?group_id=<uuid>|none, "none" =
+    unassigned) — no project-visibility filter, on purpose:
     the point is an empty catalogue. Refused in production so it can never
     wipe the live VPS. Categories stay."""
     import logging
@@ -654,9 +657,18 @@ def delete_all_products(
 
     if settings.environment == "production":
         raise HTTPException(status_code=403, detail="delete-all is disabled in production")
+    require_superuser(scope)
     _require_edit_access(x_access_level)
 
-    products = scoped(db, models.Product, scope).with_entities(models.Product.id, models.Product.image_object_key).all()
+    query = scoped(db, models.Product, scope)
+    if group_id == "none":
+        query = query.filter(models.Product.group_id == None)  # noqa: E711
+    elif group_id is not None:
+        try:
+            query = query.filter(models.Product.group_id == uuid.UUID(group_id))
+        except ValueError:  # malformed id: 422, never "delete everything"
+            raise HTTPException(status_code=422, detail="group_id must be a group id or 'none'")
+    products = query.with_entities(models.Product.id, models.Product.image_object_key).all()
     ids = [product_id for product_id, _ in products]
     if ids:
         # Sub-item links first: sub_product_id has no ON DELETE CASCADE, so a

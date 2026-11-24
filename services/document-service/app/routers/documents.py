@@ -713,19 +713,20 @@ def assign_unassigned(
 # DEV-ONLY: delete-all BEGIN — one-click wipe for dev testing (loop iteration 15)
 @router.delete("")
 def delete_all_documents(
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     x_has_document_delete: str | None = Header(default=None, alias="X-Has-Document-Delete"),
     scope: Scope = Depends(get_scope),
 ):
-    """Permanently deletes every document in the caller's groups (recycle bin
-    included; a superuser: all), its line items and audit log, its search
+    """Superuser only: permanently deletes every document (recycle bin
+    included; only one group's with ?group_id=<uuid>|none), its line items and audit log, its search
     entry and its stored file."""
-    from app.core.dev_delete_all import refuse_in_production_or_view_only, delete_files
+    from app.core.dev_delete_all import refuse_in_production_or_view_only, delete_files, only_group
 
-    refuse_in_production_or_view_only(x_access_level)
+    refuse_in_production_or_view_only(x_access_level, scope)
     _require_delete_access(x_has_document_delete)
-    docs = scoped(db, models.Document, scope).with_entities(models.Document.id, models.Document.file_object_key).all()
+    docs = only_group(scoped(db, models.Document, scope), models.Document, group_id).with_entities(models.Document.id, models.Document.file_object_key).all()
     ids = [doc_id for doc_id, _ in docs]
     if ids:
         # explicit, not FK cascade: a bulk delete skips the ORM cascade and SQLite doesn't enforce ON DELETE

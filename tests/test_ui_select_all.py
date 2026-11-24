@@ -177,7 +177,7 @@ def test_select_all_on_documents_customers_projects_and_move_selected(depts, adm
         _list_text(page, "customers", "customers-tbody", token)
         page.fill("#customers-filter", f"Cust {token} ")
         page.dispatch_event("#customers-filter", "input")
-        page.select_option("#customers-group-filter", ops["group_id"])
+        page.select_option("#group-switcher", ops["group_id"])
         expect(page.locator("#customers-tbody tr")).to_have_count(3)
         page.check("#customers-select-all")
         page.uncheck(f'.row-select[value="{made["customers"][2]}"]')

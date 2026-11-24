@@ -313,6 +313,7 @@ async function doLogout(message = '', broadcast = true) {
   }
   try {
     sessionStorage.removeItem(CART_KEY);
+    localStorage.removeItem('ledger_group_view'); // GROUP_VIEW_KEY (declared later in this file)
     localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
     if (message) sessionStorage.setItem(LOGOUT_MESSAGE_KEY, message);
   } catch (e) {}
@@ -363,6 +364,7 @@ async function loadMyGroups(me) {
   importSelect.value = defaultGroupId;
   importWrap.style.display = groupChoiceNeeded() ? '' : 'none';
   refreshMoveControls();
+  restoreGroupView(me);
 }
 
 function groupChoiceNeeded() {
@@ -376,7 +378,10 @@ function showGroupSelect(formId, creating) {
   const select = wrap.querySelector('select');
   wrap.style.display = show ? '' : 'none';
   select.required = show;
-  if (creating) select.value = defaultGroupId;
+  // a superuser viewing one group creates in it by default (still changeable)
+  const viewing = currentUserIsSuperuser && !['', 'none'].includes(groupSwitcher.value) ? groupSwitcher.value : '';
+  if (creating) select.value = viewing || defaultGroupId;
+  if (select.selectedIndex < 0) select.value = defaultGroupId;
   if (formId === 'doc-form') refreshDocGroupPickers();
 }
 
@@ -421,7 +426,7 @@ async function enterApp() {
   // Defence in depth (logout reloads the page anyway): start from "nothing
   // permission-gated is shown, Documents view", then let /admin/me show
   // what this user may see.
-  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap', 'unassigned-card']
+  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap', 'unassigned-card', 'group-switcher-wrap']
     .forEach(id => { document.getElementById(id).style.display = 'none'; });
   currentUserIsSuperuser = false;
   currentUserCanDeleteDocuments = false;
@@ -3795,6 +3800,7 @@ function applyFilterAndSort(tableName) {
   }
   config.render(list);
   if (sel) syncSelection(tableName);
+  if (sel && currentUserIsSuperuser) refreshGroupSwitcher(); // option counts follow the open list
 }
 
 // ---------- moving records between groups (superuser, loop iteration 20) ----------
@@ -3819,12 +3825,11 @@ function groupCell(table, row) {
 }
 
 Object.keys(MOVE_LINK_LABELS).forEach(table => {
-  const filter = document.createElement('select');
-  filter.id = table + '-group-filter';
-  filter.setAttribute('aria-label', 'Filter by group');
-  filter.style.maxWidth = '240px';
-  filter.style.display = 'none';
-  filter.addEventListener('change', () => applyFilterAndSort(table));
+  const showing = document.createElement('span');
+  showing.id = table + '-group-showing';
+  showing.className = 'group-tag';
+  showing.style.cssText = 'display:none; font-size:12px; padding:2px 8px; border-radius:8px; background:var(--rust); color:#fff; margin-top:6px; white-space:nowrap;';
+  document.querySelector(`#view-${table} .view-header > div`).appendChild(showing);
   const bulk = document.createElement('button');
   bulk.type = 'button';
   bulk.className = 'btn-secondary';
@@ -3837,11 +3842,10 @@ Object.keys(MOVE_LINK_LABELS).forEach(table => {
     openMoveModal(table, ids);
   });
   const reset = document.getElementById(table + '-reset-filters-btn');
-  reset.parentNode.insertBefore(filter, reset);
   reset.parentNode.insertBefore(bulk, reset.nextSibling);
-  reset.addEventListener('click', () => { filter.value = ''; applyFilterAndSort(table); });
+  // The global sidebar switcher (iteration 29); Reset filters leaves it alone.
   tableConfig[table].extraFilters = (tableConfig[table].extraFilters || []).concat({
-    selectId: filter.id,
+    selectId: 'group-switcher',
     matchFn: (item, val) => (val === 'none' ? !item.group_id : item.group_id === val),
   });
   document.getElementById(table + '-tbody').addEventListener('click', e => {
@@ -3936,17 +3940,67 @@ function addSelectedToCart() {
 
 function refreshMoveControls() {
   const options = myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  refreshGroupSwitcher();
   Object.keys(MOVE_LINK_LABELS).forEach(table => {
-    const filter = document.getElementById(table + '-group-filter');
-    const current = filter.value;
-    filter.innerHTML = '<option value="">All groups</option>' + options + '<option value="none">Unassigned</option>';
-    filter.value = current;
-    filter.style.display = currentUserIsSuperuser ? '' : 'none';
     document.getElementById(table + '-move-selected-btn').style.display = currentUserIsSuperuser ? '' : 'none';
   });
   document.getElementById('move-group-target').innerHTML = '<option value="">— choose a group —</option>' + options;
   document.getElementById('unassigned-target').innerHTML = '<option value="">— choose a group —</option>' + options;
 }
+
+// ---------- global group switcher (superuser, loop iteration 29) ----------
+// One "Viewing" select in the sidebar filters Products, Documents, Customers
+// and Projects through their extraFilters (value '' = all, 'none' =
+// unassigned). A view filter only — the server scope is unchanged. Kept in
+// localStorage as {user, id}, so another user never inherits it; cleared on logout.
+const GROUP_VIEW_KEY = 'ledger_group_view';
+const groupSwitcher = document.getElementById('group-switcher');
+let groupViewOwner = '';
+
+function groupViewName() {
+  const v = groupSwitcher.value;
+  return !v ? '' : v === 'none' ? 'Unassigned' : (groupNames[v] || 'Other group');
+}
+
+// Options show counts for the list that is open (none on other pages).
+function refreshGroupSwitcher() {
+  const view = (document.querySelector('.nav-item.active') || {}).dataset;
+  const rows = view && MOVE_LINK_LABELS[view.view] ? tableConfig[view.view].cache() : null;
+  const count = id => rows ? ` (${rows.filter(r => (id === 'none' ? !r.group_id : r.group_id === id)).length})` : '';
+  const current = groupSwitcher.value;
+  groupSwitcher.innerHTML = `<option value="">All groups${rows ? ` (${rows.length})` : ''}</option>` +
+    myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}${count(g.id)}</option>`).join('') +
+    `<option value="none">Unassigned${count('none')}</option>`;
+  groupSwitcher.value = [...groupSwitcher.options].some(o => o.value === current) ? current : '';
+}
+
+function applyGroupView() {
+  const name = groupViewName();
+  Object.keys(MOVE_LINK_LABELS).forEach(table => {
+    applyFilterAndSort(table); // the filter key changed, so this also clears the selection
+    const label = document.getElementById(table + '-group-showing');
+    label.textContent = `Showing: ${name}`;
+    label.style.display = name ? 'inline-block' : 'none';
+  });
+  refreshDeleteAllLabels();
+}
+
+function restoreGroupView(me) {
+  groupViewOwner = me.username;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(GROUP_VIEW_KEY) || 'null'); } catch (e) {}
+  groupSwitcher.value = '';
+  if (me.is_superuser && saved && saved.user === me.username) groupSwitcher.value = saved.id;
+  if (groupSwitcher.selectedIndex < 0) groupSwitcher.value = ''; // that group is gone
+  document.getElementById('group-switcher-wrap').style.display = me.is_superuser ? '' : 'none';
+  applyGroupView();
+}
+
+groupSwitcher.addEventListener('change', () => {
+  try { localStorage.setItem(GROUP_VIEW_KEY, JSON.stringify({ user: groupViewOwner, id: groupSwitcher.value })); } catch (e) {}
+  applyGroupView();
+});
+document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', refreshGroupSwitcher));
 
 function describeMoved(moved) {
   const parts = Object.entries(moved).filter(([, n]) => n).map(([e, n]) => `${n} ${n === 1 ? e.slice(0, -1) : e}`);
@@ -5178,8 +5232,9 @@ loadPublicGroups();
 })();
 
 // DEV-ONLY: delete-all BEGIN — temporary one-click wipes (loop iteration 15).
-// No confirm dialog, by request. Both services refuse them in production;
-// dev-config only decides whether the buttons are rendered.
+// Superuser only (iteration 29): dev-config is false for anyone else and both
+// services answer 403 too; refused in production. The four group-scoped wipes
+// follow the sidebar switcher (?group_id=); companies are shared, so they don't.
 const DELETE_ALL = [
   // [button id, API path, banner id, reload, noun]
   ['delete-all-products-btn', '/products', 'products-banner', () => loadProducts(), 'products'],
@@ -5197,12 +5252,23 @@ async function initDeleteAll() {
   DELETE_ALL.forEach(([id]) => { document.getElementById(id).style.display = enabled ? '' : 'none'; });
 }
 
+function refreshDeleteAllLabels() {
+  const v = groupSwitcher.value;
+  DELETE_ALL.forEach(([id, , , , noun]) => {
+    document.getElementById(id).textContent = noun === 'companies' ? 'Delete ALL companies (dev)'
+      : !v ? 'Delete ALL (dev)' : v === 'none' ? 'Delete ALL unassigned (dev)' : `Delete ALL in ${groupViewName()} (dev)`;
+  });
+}
+
 DELETE_ALL.forEach(([id, path, banner, reload, noun]) => {
   document.getElementById(id).addEventListener('click', async (e) => {
     const btn = e.currentTarget;
+    const v = noun === 'companies' ? '' : groupSwitcher.value;
+    const what = !v ? `ALL ${noun}` : v === 'none' ? `ALL unassigned ${noun}` : `ALL ${noun} in ${groupViewName()}`;
+    if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
     btn.disabled = true;
     try {
-      const res = await apiFetch(path, { method: 'DELETE' });
+      const res = await apiFetch(v ? `${path}?group_id=${encodeURIComponent(v)}` : path, { method: 'DELETE' });
       await reload();
       showBanner(banner, `Deleted ${res.deleted} ${noun}`, 'info');
     } catch (err) {

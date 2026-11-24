@@ -386,13 +386,16 @@ http {
             set $service_name "documents";
             auth_request /_verify;
             auth_request_set $access_level $upstream_http_x_access_level;
+            auth_request_set $is_superuser $upstream_http_x_is_superuser;
             rewrite ^/api/companies(.*)$ /companies$1 break;
             proxy_pass http://document-service:8000;
             proxy_set_header Host $host;
             proxy_set_header X-Internal-Secret "${INTERNAL_SHARED_SECRET}";
             # Shared data (not separated by group): blanked per the policy above.
             proxy_set_header X-Group-Ids "";
-            proxy_set_header X-Is-Superuser "";
+            # Superuser flag IS forwarded (iteration 29): DELETE /companies (dev
+            # delete-all) is superuser-only. Companies stay unscoped by group.
+            proxy_set_header X-Is-Superuser $is_superuser;
             proxy_set_header X-Access-Level $access_level;
             proxy_set_header X-Allowed-Projects "";
             proxy_set_header X-Has-Audit-Log "";

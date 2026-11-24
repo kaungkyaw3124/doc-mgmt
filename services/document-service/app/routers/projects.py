@@ -152,17 +152,18 @@ def restore_project(
 # DEV-ONLY: delete-all BEGIN — one-click wipe for dev testing (loop iteration 15)
 @router.delete("")
 def delete_all_projects(
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     scope: Scope = Depends(get_scope),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
 ):
-    """Permanently deletes every project in the caller's groups (recycle bin
-    included; a superuser: all). Documents are kept; their project_id is
+    """Superuser only: permanently deletes every project (recycle bin included),
+    or only one group's with ?group_id=<uuid>|none. Documents are kept; their project_id is
     cleared first so the FK can't block it."""
-    from app.core.dev_delete_all import refuse_in_production_or_view_only
+    from app.core.dev_delete_all import refuse_in_production_or_view_only, only_group
 
-    refuse_in_production_or_view_only(x_access_level)
-    ids = [row.id for row in scoped(db, models.Project, scope).with_entities(models.Project.id).all()]
+    refuse_in_production_or_view_only(x_access_level, scope)
+    ids = [row.id for row in only_group(scoped(db, models.Project, scope), models.Project, group_id).with_entities(models.Project.id).all()]
     if not ids:
         return {"deleted": 0}
     scoped(db, models.Document, scope).filter(models.Document.project_id.in_(ids)).update(
