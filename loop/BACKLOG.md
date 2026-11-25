@@ -23,6 +23,7 @@ Status: **QUEUED** (plan written in `loop/queue/`), **LIVE** (in `loop/PLAN.md`)
 | 21 | Excel header banner bigger (625 × 140 px from column A, per the user's red box) | LIVE (iteration 33) | `loop/PLAN.md` |
 | 22 | Excel (5 screenshots): banner 677×197 + company seal centred in last column + END USER block moved to the last column + Qty/Unit centred | LIVE (iteration 34) | `loop/PLAN.md` |
 | 23 | Excel print: Customer Service footer on every page; Terms + Regards + MD seal together at the end, seal never cut by a page break | QUEUED | `loop/queue/iter-35-xlsx-print-footer-tail.md` |
+| 24 | PDF/Excel: too much empty space around banner/seals — auto-trim blank margins, tighten header→title and Regards→seal gaps | LIVE (iteration 36) | `loop/PLAN.md` |
 | 5 | Pin the Bulk import summary line + Import button in the modal | IDEA (iteration 15 pinned only heading + Close) | — |
 | 6 | Remove the DEV-ONLY "Delete ALL" buttons before real production use | IDEA (steps in `loop/history/report-iter-15.md` §4) | — |
 | 7 | Off-site copy of backups | IDEA (user has not chosen a destination) | — |
