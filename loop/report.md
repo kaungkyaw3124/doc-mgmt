@@ -67,4 +67,4 @@ verify.sh (loop-test stack): ======================= 100 passed, 25 skipped in 4
 - Open `iter-35` output in real Excel (Print Preview) with the user's CCTV quotation: check the footer on each page, and that the Terms/Regards/seal row moves to the last page whole.
 - Excel-side note: the footer uses Excel's standard `&B` and line-break codes, so the user should see three left-aligned lines at the bottom of every page.
 
-App running at http://localhost:8080 (login: admin / CHANGE_ME, local only) — see final deploy step.
+App running at http://localhost:8080 (login: admin / CHANGE_ME, local only). Backup taken first: `backup-2026-11-25-1002.tar.gz`; after `up -d --build` + nginx restart: HTTP 200, all 9 services up, 100 products, 2 documents.
