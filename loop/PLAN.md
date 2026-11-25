@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Iteration | **31** |
-| Goal | **Excel quotation: bigger banner/logo, company seal and director seal** (match the PDF's proportions), and fix three visible Excel glitches from the same screenshot |
+| Goal | **Excel quotation: bigger banner/logo, company seal and director seal** (match the PDF's proportions), and fix four visible Excel glitches from the same screenshots |
 | Attempt limit | 5 per failing check |
 | Status | READY FOR CLAUDE CODE |
 
@@ -19,10 +19,12 @@ Today (see the code): banner fitted inside `box_w × 115 px`; header logo and co
 - Works for both header styles (squared logo and letterhead banner), with and without a company seal, with and without a director seal, with and without labour columns.
 - The iteration 22 print setup (fit to one page wide, A4 portrait, print area A1:last) must still produce **one page wide**; bigger images must not push the print area wider or onto a second page horizontally. The taller header may add height — keep "Remarks / terms / signature stay together" behaviour from iteration 14 as the Excel analogue allows; do not regress `test_xlsx_print_setup.py`.
 
-## Part B — three glitches visible in the same screenshot
-1. **`##########` in the Total cell** (Total: row, column F): the grand total of a big amount (e.g. 10,969,… USD) does not fit the 16-wide column. Fix: widen the Amount/Total columns enough for the largest value in the document (compute from the formatted length, min 16, cap ~28) or use shrink-to-fit; never show `####`.
+## Part B — four glitches visible in the screenshots (the user's second screenshot confirms images and header are still the old small size, `####` appears when zooming out, the apostrophe and the clipped "Contact N" are still there)
+1. **`##########` in the Total cell** (Total: row, column F): the grand total of a big amount (e.g. 11,087,394.00) shows `####` **when the user zooms out** in Excel (at 100% it looks fine). At small zoom Excel renders digits relatively wider than the column, so a column that barely fits at 100% breaks. Fix: size the Price/Amount (and labour) columns with a **safety margin of at least 40%** over the widest formatted value in the document (`#,##0.00` length, bold font for the totals row; min 16, cap ~30) AND turn on **shrink-to-fit** (`Alignment(shrink_to_fit=True)`) on the total/amount cells as a second guard. Test by rendering with LibreOffice at 50% zoom (or by asserting width ≥ 1.4 × formatted length + 2) with totals up to 9,999,999,999.99; never show `####`.
 2. **Amount column header shows only "(USD)"**: the header "Total Price (USD)" is clipped because the header row is too short for two wrapped lines. Fix: set the header row height for wrapped two-line text (≈ 32 pt) and make sure both lines show ("Unit Price (USD)" / "Total Price (USD)").
 3. **A stray apostrophe on phone numbers**: "Phone: '+959958645521" and "Contact '+95…" show a literal `'`. `_safe_str` (line ~26) prefixes a quote to any value starting with `= + - @` to stop formula injection, but that quote is visible in the cell. Fix: keep injection-safe **without a visible quote** — write such values as real strings (`cell.data_type = "s"` / explicit string type, or rich text) so Excel never treats them as formulas; the injection tests must still prove `=cmd|' /c calc'!A1` is not a formula after loading the file with openpyxl (`data_type != "f"`) and that `+959958645521` and `-5` display exactly as typed.
+
+4. **Header labels clipped in column A**: in the supplier block the label "Contact No" is cut off ("Contact N") because column A is 8 wide and the next cell has text; same risk for "Position" / "Address". Fix: make sure every label in column A is fully visible (shorten to "Contact" or merge A:B for the label with the value in C, or widen A) without changing the PDF or breaking the image anchors.
 
 ## Tasks
 1. Inspect `export_quotation.py` (image placement, row reservation, column widths, `_safe_str`, header rows) and `templates/quotation.html` (PDF proportions); list the numbers (px, fractions) in the report; render the current XLSX and the PDF of the same document to PNG for a before picture.
