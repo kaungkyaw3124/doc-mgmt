@@ -1,5 +1,5 @@
 """
-Loop iteration 31: bigger images in the quotation XLSX + four glitches.
+Loop iterations 31-32: bigger images in the quotation XLSX + four glitches.
 
 Sizes are fractions of the table width; on the default 7-column sheet
 (987 px) they are the user's drawn targets: banner box 560 x 115 from column
@@ -75,8 +75,21 @@ def test_default_layout_banner_seal_and_md_seal_sizes():
     x0, x1, _, _ = _rect(ws, seal)
     assert (x0 + x1) / 2 == pytest.approx(777, abs=3), "seal centred on the F|G boundary"
     assert _size(md) == pytest.approx((180, 200), abs=3)
-    x0, x1, _, _ = _rect(ws, md)
-    assert (x0 + x1) / 2 == pytest.approx(773, abs=3), "MD seal centred on E:G (~ the F|G boundary)"
+    _assert_md_seal_in_last_column(ws, md)
+
+
+def _assert_md_seal_in_last_column(ws, md):
+    """Iteration 32: the MD seal sits inside the last column (where the user
+    drew it): left edge 4 px right of the column's left edge, never past the
+    table's right edge; "Regards," above it in that column."""
+    col_px = _col_px(ws)
+    x0, x1, r0, _ = _rect(ws, md)
+    assert x0 == pytest.approx(sum(col_px[:-1]) + 4, abs=3), "seal starts 4 px inside the last column"
+    assert x1 <= sum(col_px), "seal ends inside the table"
+    regards = ws.cell(r0 - 1, len(col_px))
+    assert regards.value == "Regards," and regards.alignment.horizontal == "center"
+    # the column is ~35 px wider than the seal, so the text centre is ~13 px right of the seal's
+    assert sum(col_px[:-1]) + col_px[-1] / 2 == pytest.approx((x0 + x1) / 2, abs=15)
 
 
 @pytest.mark.parametrize("size", [(720, 190), (200, 400), (300, 300)])
@@ -104,6 +117,16 @@ def test_labour_columns_scale_the_images_with_the_table():
     assert (x0 + x1) / 2 == pytest.approx(sum(col_px[:-1]), abs=3), "centred on H|I"
     for img in ws._images:
         assert _rect(ws, img)[1] <= sum(col_px), "inside A:I"
+    _assert_md_seal_in_last_column(ws, md)
+
+
+def test_md_seal_is_pulled_left_when_the_last_column_is_narrow():
+    """A seal wider than the last column must not stick out past the table."""
+    ws = _ws(labour=True, director=MD, director_seal_bytes=_png((180, 200)))
+    col_px = _col_px(ws)
+    (md,) = ws._images
+    assert _size(md)[0] + 4 > col_px[-1], "labour layout: scaled seal (208 px) + 4 > last column (210 px)"
+    assert _rect(ws, md)[1] == pytest.approx(sum(col_px), abs=1), "right edge clamped to the table's edge"
 
 
 # ---- A2: nothing covers text ------------------------------------------------------

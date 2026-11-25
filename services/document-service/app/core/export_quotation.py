@@ -227,7 +227,6 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # Labour adds Labour unit price / total (G, H) before Remark; Item gives up some width.
     col_widths = [8, 45, 8, 8, m, m, m, m, 30] if include_labour else [8, 55, 8, 8, m, m, 30]
     last_col = get_column_letter(len(col_widths))  # G, or I with labour
-    seal_col = get_column_letter(len(col_widths) - 1)  # seal sits over the last two columns
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -512,35 +511,30 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         md_seal = _open_image(director_seal_bytes, director_seal_mime)
         if md_seal:
             # "Regards," sign-off on its own row just above the seal (same as
-            # the PDF), centred across the last three columns (E:G, or G:I with
-            # labour) — about the F|G boundary, where the user wants the seal.
-            # The seal below gets the same centre, so they line up; it is
-            # anchored to the NEXT row's top edge, so it can't cover the text.
-            first = get_column_letter(len(col_widths) - 2)
-            ws.merge_cells(f"{first}{row}:{last_col}{row}")
-            ws[f"{first}{row}"] = "Regards,"
-            ws[f"{first}{row}"].font = Font(name="Arial", bold=True)
-            ws[f"{first}{row}"].alignment = Alignment(horizontal="center")
+            # the PDF), in the last column (G, or I with labour), where the
+            # user drew the seal. The seal is anchored to the NEXT row's top
+            # edge, so it can't cover the text.
+            ws[f"{last_col}{row}"] = "Regards,"
+            ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
+            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
             row += 1
             w, h = fit_inside(md_seal.width, md_seal.height, MD_SEAL_BOX[0] * scale, MD_SEAL_BOX[1] * scale)
-            centre = (sum(col_px[:-3]) + sum(col_px)) / 2
-            _place(ws, md_seal, col_px, centre - w / 2, row - 1, w, h)
+            # 4 px inside the last column, pulled left only if it would pass the table's right edge
+            x = min(sum(col_px[:-1]) + 4, sum(col_px) - w)
+            _place(ws, md_seal, col_px, x, row - 1, w, h)
             row += math.ceil(h / ROW_PX) + 1  # leave room for the image
         else:
-            ws.merge_cells(f"{seal_col}{row}:{last_col}{row}")
-            ws[f"{seal_col}{row}"] = "Regards,"
-            ws[f"{seal_col}{row}"].font = Font(name="Arial", bold=True)
-            ws[f"{seal_col}{row}"].alignment = Alignment(horizontal="center")
+            ws[f"{last_col}{row}"] = "Regards,"
+            ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
+            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
             row += 1
-            ws.merge_cells(f"{seal_col}{row}:{last_col}{row}")
-            ws[f"{seal_col}{row}"] = _safe_str(director.get("name", ""))
-            ws[f"{seal_col}{row}"].font = Font(name="Arial", bold=True)
-            ws[f"{seal_col}{row}"].alignment = Alignment(horizontal="center")
+            ws[f"{last_col}{row}"] = _safe_str(director.get("name", ""))
+            ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
+            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
             row += 1
-            ws.merge_cells(f"{seal_col}{row}:{last_col}{row}")
-            ws[f"{seal_col}{row}"] = _safe_str(director.get("position")) or "Managing Director"
-            ws[f"{seal_col}{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
-            ws[f"{seal_col}{row}"].alignment = Alignment(horizontal="center")
+            ws[f"{last_col}{row}"] = _safe_str(director.get("position")) or "Managing Director"
+            ws[f"{last_col}{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
+            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
             row += 1
         row = max(row, seal_row + 7) + 1
 
