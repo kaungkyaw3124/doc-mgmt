@@ -3,7 +3,7 @@ Loop iterations 31-33: bigger images in the quotation XLSX + four glitches.
 
 Sizes are fractions of the table width; on the default 7-column sheet
 (987 px) they are the user's drawn targets: banner box 625 x 140 from column
-A (iteration 33), company seal / squared logo 170 px centred on the F|G boundary, MD seal box
+A (iteration 34: 677 x 197), squared logo 170 px, company seal 190 px centred in the last column, MD seal box
 180 x 200 under "Regards,". Glitches: #### in big totals, clipped two-line
 column titles, a visible leading quote on "+959..." values, clipped "Contact No".
 """
@@ -69,11 +69,12 @@ def test_default_layout_banner_seal_and_md_seal_sizes():
     assert sum(_col_px(ws)) == 987
     lh, seal, md = ws._images
     w, h = _size(lh)
-    assert w == pytest.approx(625, abs=3) and h == pytest.approx(117, abs=3)  # 1600x300 fitted in 625x140
+    assert w == pytest.approx(677, abs=3) and h == pytest.approx(127, abs=3)  # 1600x300 fitted in 677x197
     assert _rect(ws, lh)[0] == pytest.approx(3, abs=3), "banner starts at column A's left edge"
-    assert _size(seal) == pytest.approx((170, 170), abs=3)
+    assert _size(seal) == pytest.approx((190, 190), abs=3)
     x0, x1, _, _ = _rect(ws, seal)
-    assert (x0 + x1) / 2 == pytest.approx(777, abs=3), "seal centred on the F|G boundary"
+    col_px = _col_px(ws)
+    assert (x0 + x1) / 2 == pytest.approx(sum(col_px[:-1]) + col_px[-1] / 2, abs=3), "seal centred in the last column"
     assert _rect(ws, lh)[1] <= x0 - 25, "at least 25 px between banner and seal"
     assert _size(md) == pytest.approx((180, 200), abs=3)
     _assert_md_seal_in_last_column(ws, md)
@@ -97,7 +98,7 @@ def _assert_md_seal_in_last_column(ws, md):
 def test_images_keep_their_aspect_ratio(size):
     ws = _ws(company=LETTERHEAD_COMPANY, logo_bytes=banner(size), seal_bytes=_png(size),
              director=MD, director_seal_bytes=_png(size))
-    for img, box in zip(ws._images, [(625, 140), (170, 170), (180, 200)]):
+    for img, box in zip(ws._images, [(677, 197), (190, 190), (180, 200)]):
         w, h = _size(img)
         assert w / h == pytest.approx(size[0] / size[1], rel=0.02)
         assert w <= box[0] + 1 and h <= box[1] + 1
@@ -111,12 +112,13 @@ def test_labour_columns_scale_the_images_with_the_table():
     scale = sum(col_px) / 987
     assert scale > 1.1
     lh, seal, md = ws._images
-    assert _size(lh)[0] == pytest.approx(625 * scale, abs=3)
+    assert _size(lh)[0] == pytest.approx(677 * scale, abs=3)
     assert _rect(ws, lh)[1] <= _rect(ws, seal)[0] - 25
-    assert _size(seal) == pytest.approx((170 * scale, 170 * scale), abs=3)
+    assert _size(seal) == pytest.approx((190 * scale, 190 * scale), abs=3)
     assert _size(md) == pytest.approx((180 * scale, 200 * scale), abs=3)
     x0, x1, _, _ = _rect(ws, seal)
-    assert (x0 + x1) / 2 == pytest.approx(sum(col_px[:-1]), abs=3), "centred on H|I"
+    # 190 * scale is wider than column I, so the seal is pulled left to end at the table's edge.
+    assert x1 == pytest.approx(sum(col_px), abs=1) and x0 >= sum(col_px[:-2]), "in I, clamped to the table edge"
     for img in ws._images:
         assert _rect(ws, img)[1] <= sum(col_px), "inside A:I"
     _assert_md_seal_in_last_column(ws, md)
@@ -131,16 +133,18 @@ def test_md_seal_is_pulled_left_when_the_last_column_is_narrow():
     assert _rect(ws, md)[1] == pytest.approx(sum(col_px), abs=1), "right edge clamped to the table's edge"
 
 
-@pytest.mark.parametrize("size, expected", [((1600, 300), (625, 117)), ((1000, 400), (350, 140))])
+@pytest.mark.parametrize("size, expected", [((1600, 300), (677, 127)), ((1000, 400), (492, 197))])
 @pytest.mark.parametrize("seal", [True, False])
-def test_banner_fits_625x140_from_column_a_with_an_empty_row_above_the_title(size, expected, seal):
-    """Iteration 33: the user's red box; same box with or without the seal."""
+def test_banner_fits_677x197_from_column_a_with_an_empty_row_above_the_title(size, expected, seal):
+    """Iteration 34: the user's red box; same box with or without the seal. Rows are
+    reserved for the whole box, so a short banner does not pull the title up."""
     ws = _ws(company=LETTERHEAD_COMPANY, logo_bytes=banner(size), seal_bytes=_png() if seal else None)
     lh = ws._images[0]
     assert _size(lh) == pytest.approx(expected, abs=3)
     x0, _, _, last = _rect(ws, lh)
     assert x0 == pytest.approx(3, abs=3)
     assert last < _title_row(ws) - 1, "at least one empty row between the banner and the title"
+    assert (_title_row(ws) - 1) * 20 >= 197 + 20, "title below the whole 197 px box plus an empty row"
 
 
 # ---- A2: nothing covers text ------------------------------------------------------
@@ -238,3 +242,40 @@ def test_supplier_labels_shrink_to_fit_column_a():
     ws = _ws(director=MD)
     label = next(c for c in ws["A"] if c.value == "Contact No")
     assert label.alignment.shrink_to_fit
+
+
+# ---- Iteration 34: END USER in the last column, Qty/Unit centred ----------------
+
+@pytest.mark.parametrize("labour", [False, True])
+def test_end_user_block_in_the_last_column_aligned_with_supplier(labour):
+    ws = _ws(labour=labour, director=MD)
+    last = get_column_letter(ws.max_column)
+    sup = next(c.row for c in ws["A"] if isinstance(c.value, str) and c.value.startswith("SUPPLIER"))
+    assert ws[f"{last}{sup}"].value == "END USER"
+    labels = [str(ws[f"{last}{sup + i}"].value).split(":")[0] for i in range(1, 5)]
+    assert labels == ["Customer Name", "Quotation ID", "Organization", "Address"]
+    assert ws[f"A{sup + 1}"].value == "Name", "supplier rows line up with the end-user rows"
+    for col in "EF" if not labour else "EFGH":
+        assert all(ws[f"{col}{r}"].value is None for r in range(sup, sup + 5)), f"nothing left in {col}"
+
+
+def test_long_end_user_address_wraps_onto_more_lines():
+    customer = dict(CUSTOMER, address="No. 123, Very Long Street Name, Some Township, Yangon Region, Myanmar 11181")
+    ws = load_workbook(io.BytesIO(generate_quotation_xlsx(
+        _document(), customer, [(_line_item(1), None, [])], company=COMPANY, director=MD).getvalue())).active
+    cell = next(c for c in ws["G"] if isinstance(c.value, str) and c.value.startswith("Address: "))
+    assert cell.value.endswith("Myanmar 11181") and cell.alignment.wrap_text
+    assert ws.row_dimensions[cell.row].height >= 2 * 13
+
+
+@pytest.mark.parametrize("labour", [False, True])
+def test_qty_and_unit_are_centred_on_item_and_sub_item_rows(labour):
+    sub = {"sequence_number": 1, "sku": "S1", "name": "Sub", "unit": "No", "unit_price": 1}
+    ws = _ws([(_line_item(1), None, [sub]), (_line_item(2), None, [])], labour=labour)
+    head = next(c.row for c in ws["A"] if c.value == "No") + (2 if labour else 1)
+    rows = [r for r in range(head, ws.max_row + 1) if ws[f"D{r}"].value][:3]
+    assert len(rows) == 3, "two items and one sub-item"
+    for r in rows:
+        assert ws[f"C{r}"].alignment.horizontal == ws[f"D{r}"].alignment.horizontal == "center"
+        assert ws[f"C{r}"].alignment.vertical == "top"
+    assert ws[f"E{rows[0]}"].alignment.horizontal is None, "price stays right-aligned (number default)"

@@ -127,5 +127,5 @@ def test_xlsx_print_titles_cover_the_header_through_the_column_titles():
                       if ws.cell(r, 1).value == "No" and ws.cell(r, 2).value == "Item")
     assert ws.print_title_rows == f"$1:${titles_row}"
     assert titles_row > 1
-    header_cells = [ws.cell(r, c).value for r in range(1, titles_row) for c in (1, 5)]
+    header_cells = [ws.cell(r, c).value for r in range(1, titles_row) for c in (1, 7)]
     assert f"SUPPLIER: {COMPANY['name']}" in header_cells and "END USER" in header_cells

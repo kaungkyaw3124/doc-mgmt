@@ -141,9 +141,10 @@ def _col_px(width):
 # default 7-column sheet (987 px wide), scaled when the sheet is wider (labour
 # columns, wider money columns). The seal is ~17% of the width, as in the PDF.
 DEFAULT_TABLE_PX = 987
-BANNER_BOX = (625, 140)
+BANNER_BOX = (677, 197)
 BANNER_X = 3  # px from column A's left edge
-HEADER_IMAGE_PX = 170  # squared logo and company seal
+HEADER_IMAGE_PX = 170  # squared logo
+SEAL_PX = 190  # company seal, centred in the last column
 MD_SEAL_BOX = (180, 200)
 ROW_PX = 20  # a 15pt row
 
@@ -251,15 +252,16 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             # fitted inside the box with its own proportions; same box without a seal.
             w, h = fit_inside(logo_img.width, logo_img.height, BANNER_BOX[0] * scale, BANNER_BOX[1] * scale)
             _place(ws, logo_img, col_px, BANNER_X * scale, 0, w, h)
-            header_h = h + ROW_PX  # keep one empty row between the banner and the title
+            # Reserve the whole box (not the fitted image) plus one empty row before the title.
+            header_h = BANNER_BOX[1] * scale + ROW_PX
         else:
             w, h = fit_inside(logo_img.width, logo_img.height, HEADER_IMAGE_PX * scale, HEADER_IMAGE_PX * scale)
             _place(ws, logo_img, col_px, 0, 0, w, h)
             header_h = h
     if seal_img:
-        # Centred on the boundary before the last column (F|G, or H|I with labour).
-        w, h = fit_inside(seal_img.width, seal_img.height, HEADER_IMAGE_PX * scale, HEADER_IMAGE_PX * scale)
-        _place(ws, seal_img, col_px, sum(col_px[:-1]) - w / 2, 0, w, h)
+        # Centred in the last column (G, or I with labour), pulled left only if it would pass the table's edge.
+        w, h = fit_inside(seal_img.width, seal_img.height, SEAL_PX * scale, SEAL_PX * scale)
+        _place(ws, seal_img, col_px, min(sum(col_px[:-1]) + (col_px[-1] - w) / 2, sum(col_px) - w), 0, w, h)
         header_h = max(header_h, h)
     if header_h:
         # Images float over these rows, so the title starts below the tallest
@@ -292,8 +294,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     company_name = company_info.get("name")
     ws[f"A{row}"] = _safe_str(f"SUPPLIER: {company_name}") if company_name else "SUPPLIER"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
-    ws[f"E{row}"] = "END USER"
-    ws[f"E{row}"].font = Font(name="Arial", bold=True)
+    ws[f"{last_col}{row}"] = "END USER"
+    ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
     row += 1
 
     supplier_rows = [("Name", _safe_str(director_info.get("name")) or "—")]
@@ -329,9 +331,15 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             # Column A is narrow and B holds the value, so "Contact No" would be clipped.
             ws[f"A{row}"].alignment = Alignment(shrink_to_fit=True)
             ws[f"B{row}"] = s_val
-        ws[f"E{row}"] = e_label
-        ws[f"E{row}"].font = Font(name="Arial", size=10)
-        ws[f"F{row}"] = e_val
+        # END USER sits in the last column as "Label: value", wrapped; the row grows
+        # to fit (~1.3 chars per width unit at 10pt Arial).
+        end_cell = ws[f"{last_col}{row}"]
+        end_cell.value = f"{e_label}: {e_val}"
+        end_cell.font = Font(name="Arial", size=10)
+        end_cell.alignment = Alignment(wrap_text=True, vertical="top")
+        lines = math.ceil(len(end_cell.value) / (col_widths[-1] * 1.3))
+        if lines > 1:
+            ws.row_dimensions[row].height = 13 * lines + 2
         row += 1
     row += 1
 
@@ -394,7 +402,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             cell.border = BORDER
             money_col = 5 <= col <= (8 if include_labour else 6)
             # shrink-to-fit: a second guard against #### besides the column width
-            cell.alignment = Alignment(vertical="top", wrap_text=(col in (2, len(values))), shrink_to_fit=money_col)
+            cell.alignment = Alignment(horizontal="center" if col in (3, 4) else None, vertical="top", wrap_text=(col in (2, len(values))), shrink_to_fit=money_col)
             if col in (5, 6) or (include_labour and col == 7):
                 cell.number_format = "#,##0.00"
             if include_labour and col == 8:
@@ -427,7 +435,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                     if col != 2:
                         cell.font = Font(name="Arial", size=9)
                     cell.border = BORDER
-                    cell.alignment = Alignment(vertical="top", wrap_text=(col == 2), shrink_to_fit=(col in (5, 6)))
+                    cell.alignment = Alignment(horizontal="center" if col in (3, 4) else None, vertical="top", wrap_text=(col == 2), shrink_to_fit=(col in (5, 6)))
                     if col in (5, 6) and v != "":
                         cell.number_format = "#,##0.00"
                 row += 1

@@ -35,7 +35,7 @@ def _pdf_text(pdf_bytes):
 def _xlsx_heading(ws):
     """(heading, end-user ID label) from the generated sheet."""
     heading = next(c.value for c in ws["A"] if c.value and str(c.value).isupper() and c.font.color is not None and c.font.color.rgb == "00C00000")
-    id_label = next(c.value for c in ws["E"] if isinstance(c.value, str) and c.value.endswith(" ID"))
+    id_label = next(c.value.split(":")[0] for c in ws["G"] if isinstance(c.value, str) and " ID: " in c.value)
     return heading, id_label
 
 
