@@ -19,6 +19,7 @@ Status: **QUEUED** (plan written in `loop/queue/`), **LIVE** (in `loop/PLAN.md`)
 | 17 | Global group switcher for the admin (replaces per-list group dropdowns) + dev Delete ALL buttons only for the admin, group-aware | LIVE (iteration 29) | `loop/PLAN.md` |
 | 18 | Unit on products (M for cables etc.); documents take it; No/Nos by quantity; Unit column in bulk import; bulk Set unit… | LIVE (iteration 30) | `loop/PLAN.md` |
 | 19 | Excel export: logo/banner/seals/heading too small — match the PDF proportions; fix #### total, clipped amount header, visible apostrophe on phone numbers | LIVE (iteration 31) | `loop/PLAN.md` |
+| 20 | Excel MD seal must sit inside the last column (right of where iteration 31 put it) | LIVE (iteration 32) | `loop/PLAN.md` |
 | 5 | Pin the Bulk import summary line + Import button in the modal | IDEA (iteration 15 pinned only heading + Close) | — |
 | 6 | Remove the DEV-ONLY "Delete ALL" buttons before real production use | IDEA (steps in `loop/history/report-iter-15.md` §4) | — |
 | 7 | Off-site copy of backups | IDEA (user has not chosen a destination) | — |
