@@ -1,59 +1,58 @@
-# report.md — Iteration 32
+# report.md — Iteration 33
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Excel: move the MD (director) signature seal to the right, into the last column (G), where the user drew the red box
+- **Goal**: Excel: make the header banner bigger, to the red box the user drew (≈ 625 × 140 px, starting at the sheet's left edge)
 - **Ponytail skill loaded**: yes
-- **Branch / commit**: `dev` (see the commit `loop iter 32: ...`)
-- **One-paragraph summary**: The MD seal (180 × 200 box, aspect kept) now starts **4 px inside the last column** (G, or I with labour). Before, it was centred on the F|G boundary. "Regards," and the no-seal fallback (name/position) are now plain centred cells in the last column instead of merges over E:G / F:G. If the scaled seal is wider than the column, it is pulled left so it never goes past the table's right edge. This happens in the labour layout: the seal is 208 px and column I is 210 px, so the seal moves 2 px left. The banner and company seal are unchanged. LibreOffice render: `loop/evidence/iter-32-xlsx-md-seal.png`.
+- **Branch / commit**: `dev` (see the commit `loop iter 33: ...`)
+- **One-paragraph summary**: The letterhead banner box is now **625 × 140 px** (it was 560 × 115), still scaled by table width. It starts **3 px inside column A**, not at column B. The image keeps its own proportions (fit-inside, no crop, no stretch), so a 1600×300 banner becomes 625 × 117 and a 1000×400 one becomes 350 × 140. The box is the same with or without the company seal. Before, a banner without a seal took the whole width right of column A; it now uses the same box, as the plan asks ("do not grow it further"). The header always reserves at least one empty row between the banner and the title. Header height for the banner is `h + 20 px`, then the existing `ceil((h + 10) / 20)` row reservation applies. With a seal, the 170-px seal is still the tallest item, so seal layouts get the same rows as before (9). The banner ends at x = 628 and the seal starts at x = 692, a 64 px gap. The squared-logo style, company seal and MD seal are unchanged. LibreOffice render: `loop/evidence/iter-33-xlsx-banner.png`.
 
 ## 2. Baseline (before any change)
-Document unit suite (`doc-test-lo` image, current source mounted, in-process):
+XLSX/letterhead tests (`doc-test-lo` image, current source mounted, in-process):
 ```
-399 passed in 226.63s (0:03:46)
+96 passed, 304 deselected, 1764 warnings in 37.22s
 ```
-`verify.sh` was not re-run before the change. Nothing outside document-service changed, and the last run (iteration 31) was 100 passed, 25 skipped.
+The full suite and `verify.sh` were not re-run before the change. Iteration 32 ended with 400 passed and verify 100 passed / 25 skipped.
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | MD seal fully inside the last column (left = G + 4 px), 180 × 200 box, aspect kept | PASS | `test_default_layout_banner_seal_and_md_seal_sizes`: MD seal 180×200, left edge x = 781 = G's left (777) + 4, right edge 961 ≤ 987. `test_images_keep_their_aspect_ratio` ×3 unchanged and passing. Screenshot `iter-32-xlsx-md-seal.png`: the seal starts at the Remark column's left edge, as in `iter-32-user-target-md-seal.png` |
-| A2 | "Regards," centred over the seal; no overlaps; labour layout correct | PASS (with one deviation, see below) | `_assert_md_seal_in_last_column` (default + labour): "Regards," is in the last column, on the row directly above the seal, centred. `test_md_seal_is_pulled_left_when_the_last_column_is_narrow`: labour seal 208 px, right edge = table edge (1141). `test_no_image_covers_text_or_another_image` ×5 variants pass. `test_md_regards` XLSX tests updated (G column, fallback name in G) |
-| A3 | Banner and company seal unchanged; one page wide; no regressions | PASS | Banner/seal assertions unchanged and passing. `test_xlsx_print_setup.py` passes (including the page-1 three-image render). Document unit **400 passed**. `verify.sh` **100 passed, 25 skipped** (loop-test stack) |
-
-**Deviation:** The plan asked for the "Regards," centre to equal the seal centre (±3 px) **and** the seal's left edge to be G + 4 px. Both cannot hold exactly. Column G is 210 px and the seal is 180 px, and Excel can only centre text on whole cells. I could not merge a range whose centre lands at G + 94. So "Regards," is centred on column G, about 13 px right of the seal's centre, and the text (~60 px) still sits well inside the seal's width. The tests allow ±15 px for this and say why. I kept the user's drawn seal position exact rather than the planner's derived "Regards," rule.
-
-**Data safety:** unit tests ran in-process in the `doc-test-lo` container (SQLite, no DB). `verify.sh` ran on the `loop-test` stack (port 18080), which was then removed with `./scripts/loop-test-down.sh`. The user's stack was backed up first (`backup-2026-11-25-0604.tar.gz`) and rebuilt with `up -d --build`, with no volume removal. Afterwards: 100 products, 2 documents.
+| A1 | Banner fits a 625 × 140 box from column A, aspect kept | PASS | `test_banner_fits_625x140_from_column_a_with_an_empty_row_above_the_title` (1600×300 → 625×117, 1000×400 → 350×140, with and without seal, x0 = 3 ± 3); `test_images_keep_their_aspect_ratio` ×3 with box (625, 140); `test_xlsx_banner_in_the_header_rows_left_of_the_seal` ×3 (anchor A1 + 3 px). Render `iter-33-xlsx-banner.png`: the banner starts at the page's left edge, like the user's red box |
+| A2 | Gap to the company seal ≥ 25 px; nothing overlaps text; title row below | PASS | `test_default_layout_...`: banner right ≤ seal left − 25; labour test: same check scaled; `test_no_image_covers_text_or_another_image` ×5; new test: last banner row < title row − 1 |
+| A3 | Seals unchanged, one page wide, no regressions | PASS | seal/MD seal assertions unchanged and passing; `test_xlsx_print_setup.py` passes; full suite 404 passed; verify.sh 100 passed, 25 skipped |
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/document-service/app/core/export_quotation.py` | modified | MD seal x = last column left + 4, clamped to the table's right edge. "Regards," and fallback text in the last column only. Removed the unused `seal_col` |
-| `services/document-service/tests/test_xlsx_image_sizes.py` | modified | new position assertions (default + labour), new clamp test |
-| `services/document-service/tests/test_md_regards.py` | modified | "Regards," and fallback name now in column G, not merged E:G / F:G |
-| `loop/evidence/iter-32-xlsx-md-seal.png` | added | LibreOffice render of page 1 (letterhead, long CCTV-style descriptions) |
+| `services/document-service/app/core/export_quotation.py` | modified | `BANNER_BOX = (625, 140)` and new `BANNER_X = 3`; the banner is placed at column A + 3 px; the box is the same with or without the seal; the header height includes one empty row below the banner |
+| `services/document-service/tests/test_xlsx_image_sizes.py` | modified | new box/position/gap assertions; new parametrised test (2 sizes × with/without seal) |
+| `services/document-service/tests/test_letterhead_header.py` | modified | banner anchor A1 + 3 px, 625 × 140 box, gap to the seal ≥ 25 px |
+| `loop/evidence/iter-33-xlsx-banner.png` | added | LibreOffice render of page 1 (letterhead + seal + MD seal) |
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| — | none | first run of the edited suites: 68 passed. Full suite: 400 passed | — | — |
+| 1 | — | everything passed on the first run | — | — |
 
 ## 6. Final verification output
 ```
 --- document-service unit suite (doc-test-lo)
-400 passed in 224.74s (0:03:44)
+404 passed, 60478 warnings in 247.16s (0:04:07)
 --- verify.sh (loop-test stack, port 18080)
-======================= 100 passed, 25 skipped in 48.30s =======================
+======================= 100 passed, 25 skipped in 49.47s =======================
 verify.sh: PASSED (stack left running: --keep)   # then ./scripts/loop-test-down.sh
 ```
 
+**Data safety:** unit tests ran in-process in the `doc-test-lo` container (SQLite, no DB). `verify.sh` ran on the `loop-test` stack, which was then removed with `./scripts/loop-test-down.sh`. The user's stack was backed up before the rebuild, then rebuilt with `up -d --build` and no volume removal.
+
 ## 7. Found but not fixed (out of scope)
-- In LibreOffice, rich-text Item cells with multi-line descriptions still draw over each other: the row heights stay one line, which is visible in the evidence render. This is the known BACKLOG item.
+- Multi-line Item rows still draw over each other in LibreOffice, as seen in the render. This is the known BACKLOG item.
+- PDF, company seal, MD seal and squared-logo style were not touched, per the plan.
 
 ## 8. Blockers / decisions needed
-None. Planner: please confirm the ~13 px "Regards," vs seal-centre offset is acceptable. If the user wants them exactly aligned, the choice is between the seal centred in G (left edge G + 15 instead of G + 4) or keeping it as it is now.
+None. Behaviour change for the planner to note: a letterhead **without a seal** no longer stretches across B:G. It uses the same 625 × 140 box from column A, as the plan says.
 
 ## 9. Suggestions for the next iteration
-- Check in real Excel on the user's machine. Column pixel widths there can differ by a few px from the computed ones.
+- Check in real Excel with the user's Winterfell banner. Its aspect ratio (≈ 4.8:1) should give ≈ 625 × 130.
 
 App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)

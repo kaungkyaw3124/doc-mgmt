@@ -1,9 +1,9 @@
 """
-Loop iterations 31-32: bigger images in the quotation XLSX + four glitches.
+Loop iterations 31-33: bigger images in the quotation XLSX + four glitches.
 
 Sizes are fractions of the table width; on the default 7-column sheet
-(987 px) they are the user's drawn targets: banner box 560 x 115 from column
-B, company seal / squared logo 170 px centred on the F|G boundary, MD seal box
+(987 px) they are the user's drawn targets: banner box 625 x 140 from column
+A (iteration 33), company seal / squared logo 170 px centred on the F|G boundary, MD seal box
 180 x 200 under "Regards,". Glitches: #### in big totals, clipped two-line
 column titles, a visible leading quote on "+959..." values, clipped "Contact No".
 """
@@ -69,11 +69,12 @@ def test_default_layout_banner_seal_and_md_seal_sizes():
     assert sum(_col_px(ws)) == 987
     lh, seal, md = ws._images
     w, h = _size(lh)
-    assert w == pytest.approx(560, abs=3) and h == pytest.approx(105, abs=3)  # 1600x300 fitted in 560x115
-    assert _rect(ws, lh)[0] == 56, "banner starts at column B's left edge"
+    assert w == pytest.approx(625, abs=3) and h == pytest.approx(117, abs=3)  # 1600x300 fitted in 625x140
+    assert _rect(ws, lh)[0] == pytest.approx(3, abs=3), "banner starts at column A's left edge"
     assert _size(seal) == pytest.approx((170, 170), abs=3)
     x0, x1, _, _ = _rect(ws, seal)
     assert (x0 + x1) / 2 == pytest.approx(777, abs=3), "seal centred on the F|G boundary"
+    assert _rect(ws, lh)[1] <= x0 - 25, "at least 25 px between banner and seal"
     assert _size(md) == pytest.approx((180, 200), abs=3)
     _assert_md_seal_in_last_column(ws, md)
 
@@ -96,7 +97,7 @@ def _assert_md_seal_in_last_column(ws, md):
 def test_images_keep_their_aspect_ratio(size):
     ws = _ws(company=LETTERHEAD_COMPANY, logo_bytes=banner(size), seal_bytes=_png(size),
              director=MD, director_seal_bytes=_png(size))
-    for img, box in zip(ws._images, [(560, 115), (170, 170), (180, 200)]):
+    for img, box in zip(ws._images, [(625, 140), (170, 170), (180, 200)]):
         w, h = _size(img)
         assert w / h == pytest.approx(size[0] / size[1], rel=0.02)
         assert w <= box[0] + 1 and h <= box[1] + 1
@@ -110,7 +111,8 @@ def test_labour_columns_scale_the_images_with_the_table():
     scale = sum(col_px) / 987
     assert scale > 1.1
     lh, seal, md = ws._images
-    assert _size(lh)[0] == pytest.approx(560 * scale, abs=3)
+    assert _size(lh)[0] == pytest.approx(625 * scale, abs=3)
+    assert _rect(ws, lh)[1] <= _rect(ws, seal)[0] - 25
     assert _size(seal) == pytest.approx((170 * scale, 170 * scale), abs=3)
     assert _size(md) == pytest.approx((180 * scale, 200 * scale), abs=3)
     x0, x1, _, _ = _rect(ws, seal)
@@ -127,6 +129,18 @@ def test_md_seal_is_pulled_left_when_the_last_column_is_narrow():
     (md,) = ws._images
     assert _size(md)[0] + 4 > col_px[-1], "labour layout: scaled seal (208 px) + 4 > last column (210 px)"
     assert _rect(ws, md)[1] == pytest.approx(sum(col_px), abs=1), "right edge clamped to the table's edge"
+
+
+@pytest.mark.parametrize("size, expected", [((1600, 300), (625, 117)), ((1000, 400), (350, 140))])
+@pytest.mark.parametrize("seal", [True, False])
+def test_banner_fits_625x140_from_column_a_with_an_empty_row_above_the_title(size, expected, seal):
+    """Iteration 33: the user's red box; same box with or without the seal."""
+    ws = _ws(company=LETTERHEAD_COMPANY, logo_bytes=banner(size), seal_bytes=_png() if seal else None)
+    lh = ws._images[0]
+    assert _size(lh) == pytest.approx(expected, abs=3)
+    x0, _, _, last = _rect(ws, lh)
+    assert x0 == pytest.approx(3, abs=3)
+    assert last < _title_row(ws) - 1, "at least one empty row between the banner and the title"
 
 
 # ---- A2: nothing covers text ------------------------------------------------------

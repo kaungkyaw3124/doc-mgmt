@@ -141,7 +141,8 @@ def _col_px(width):
 # default 7-column sheet (987 px wide), scaled when the sheet is wider (labour
 # columns, wider money columns). The seal is ~17% of the width, as in the PDF.
 DEFAULT_TABLE_PX = 987
-BANNER_BOX = (560, 115)
+BANNER_BOX = (625, 140)
+BANNER_X = 3  # px from column A's left edge
 HEADER_IMAGE_PX = 170  # squared logo and company seal
 MD_SEAL_BOX = (180, 200)
 ROW_PX = 20  # a 15pt row
@@ -246,16 +247,15 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     header_h = 0
     if logo_img:
         if is_letterhead(company, logo_bytes, logo_mime):
-            # Letterhead banner from column B's left edge (where the user drew
-            # it), fitted inside the box with its own proportions; the whole
-            # width right of A when there is no seal.
-            box_w = BANNER_BOX[0] * scale if seal_img else sum(col_px[1:])
-            w, h = fit_inside(logo_img.width, logo_img.height, box_w, BANNER_BOX[1] * scale)
-            _place(ws, logo_img, col_px, col_px[0], 0, w, h)
+            # Letterhead banner from column A's left edge (the user's red box),
+            # fitted inside the box with its own proportions; same box without a seal.
+            w, h = fit_inside(logo_img.width, logo_img.height, BANNER_BOX[0] * scale, BANNER_BOX[1] * scale)
+            _place(ws, logo_img, col_px, BANNER_X * scale, 0, w, h)
+            header_h = h + ROW_PX  # keep one empty row between the banner and the title
         else:
             w, h = fit_inside(logo_img.width, logo_img.height, HEADER_IMAGE_PX * scale, HEADER_IMAGE_PX * scale)
             _place(ws, logo_img, col_px, 0, 0, w, h)
-        header_h = h
+            header_h = h
     if seal_img:
         # Centred on the boundary before the last column (F|G, or H|I with labour).
         w, h = fit_inside(seal_img.width, seal_img.height, HEADER_IMAGE_PX * scale, HEADER_IMAGE_PX * scale)
