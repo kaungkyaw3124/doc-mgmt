@@ -17,6 +17,7 @@ Status: **QUEUED** (plan written in `loop/queue/`), **LIVE** (in `loop/PLAN.md`)
 | 15 | "Not a duplicate" for same-name products (remembered, no renaming, restore from Hidden pairs) | QUEUED | `loop/queue/iter-27-not-a-duplicate.md` |
 | 16 | Small fixes: nginx header size with ~100 groups, cart kept on reload, 500 on no-price line item, `loop-test-down.sh` | QUEUED | `loop/queue/iter-28-small-fixes.md` |
 | 17 | Global group switcher for the admin (replaces per-list group dropdowns) + dev Delete ALL buttons only for the admin, group-aware | LIVE (iteration 29) | `loop/PLAN.md` |
+| 18 | Unit on products (M for cables etc.); documents take it; No/Nos by quantity; Unit column in bulk import; bulk Set unit… | LIVE (iteration 30) | `loop/PLAN.md` |
 | 5 | Pin the Bulk import summary line + Import button in the modal | IDEA (iteration 15 pinned only heading + Close) | — |
 | 6 | Remove the DEV-ONLY "Delete ALL" buttons before real production use | IDEA (steps in `loop/history/report-iter-15.md` §4) | — |
 | 7 | Off-site copy of backups | IDEA (user has not chosen a destination) | — |
