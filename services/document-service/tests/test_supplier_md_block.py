@@ -155,5 +155,6 @@ def test_xlsx_no_company_keeps_the_bare_heading():
 
 def test_xlsx_director_values_are_still_formula_escaped():
     _, rows = _xlsx_supplier(dict(FULL_MD, name="=HYPERLINK(\"x\")", contact_no="+95 9 123"))
-    assert rows["Name"].startswith("'=")
-    assert rows["Contact No"] == "'+95 9 123"
+    # Loop iteration 31: no visible leading quote — stored as text, never a formula.
+    assert rows["Name"] == "=HYPERLINK(\"x\")"
+    assert rows["Contact No"] == "+95 9 123"

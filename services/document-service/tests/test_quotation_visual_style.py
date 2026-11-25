@@ -199,8 +199,8 @@ def test_xlsx_heading_is_red_and_smaller_too():
     assert len(cells) == 1
     font = cells[0].font
     assert font.color is not None and font.color.rgb.endswith("C00000"), "XLSX heading must be red"
-    date_font = next(c for row in wb.active.iter_rows() for c in row if c.value == "Date:").font
-    assert font.sz == (date_font.sz or 11), "XLSX heading must match the Date line size"
+    # Loop iteration 31: 16pt (was 11pt, the Date line's size) to match the bigger letterhead images.
+    assert font.sz == 16, "XLSX heading is 16pt"
     assert font.b
 
 
@@ -345,14 +345,15 @@ def test_logo_and_seal_on_every_page_and_md_seal_size_unchanged(layout):
     assert len(md) == 1, "the MD signature seal keeps its 130px size and appears once"
 
 
-def test_xlsx_logo_and_seal_are_10px_smaller():
+def test_xlsx_logo_and_seal_are_170px():
     wb = load_workbook(generate_quotation_xlsx(
         _document(), CUSTOMER, [(_line_item(1), None, [])], company=COMPANY,
         logo_bytes=_png(), seal_bytes=_png(), director=None))
     imgs = wb.active._images
     assert len(imgs) == 2
     # A reloaded image reports its pixel size; the displayed size is the anchor extent (EMU, 9525 per px).
-    assert all(i.anchor.ext.width == 90 * 9525 and i.anchor.ext.height == 90 * 9525 for i in imgs)
+    # Loop iteration 31: 170px (~17% of the 987px table, like the PDF's 120px of 184.6mm; was 90px).
+    assert all(i.anchor.ext.width == 170 * 9525 and i.anchor.ext.height == 170 * 9525 for i in imgs)
 
 
 # ---------------------------------------------------------------------------

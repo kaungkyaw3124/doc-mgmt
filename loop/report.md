@@ -1,107 +1,71 @@
-# report.md — Iteration 30
+# report.md — Iteration 31
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Unit on products. A product has a Unit (No, M, Set, Roll …), set when it is created or edited and in bulk import. Documents take it from the product. "No" prints as **No** for quantity 1 and **Nos** for 2 or more. A bulk "Set unit…" action fixes existing products (e.g. all cables → M).
-- **Ponytail skill loaded**: yes
-- **Branch / commit**: `dev` @ (this commit, `loop iter 30: …`)
-- **One-paragraph summary**: Products now have a `unit` column (`String(20)`, NOT NULL, default "No"), added by the guarded migration `0004_product_unit`. Existing products get "No". One normalizer, `schemas.normalize_unit`, handles every input path:
-  - blank → No
-  - m / meter / metre(s) → M
-  - no / nos / number → No
-  - pc(s) / piece(s) → Pcs
-  - ft / feet / foot → Ft
-  - kg(s) → Kg
-  - the dropdown's own Set / Roll / Box / Lot in any case → that spelling
-  - anything else is kept as typed
-  - more than 20 characters → 422
+- **Goal**: Excel quotation: bigger banner/logo, company seal and director seal (match the PDF's proportions), and fix four visible Excel glitches from the same screenshots.
+- **Ponytail skill loaded**: yes (it was active from session start and followed for the whole iteration)
+- **Branch / commit**: `dev` @ the commit carrying this report (`loop iter 31: …`)
+- **One-paragraph summary**: `export_quotation.py` now sizes every image as a fraction of the sheet's table width (`sum(col_px)`). On the default 7-column sheet (987 px) the sizes are the user's drawn targets: **banner** fitted inside **560 × 115 px**, starting at column B's left edge. **Company seal and squared logo** are **170 px**, the seal centred on the F|G boundary. **MD seal** is fitted inside **180 × 200 px**, centred under "Regards," on the E:G centre (773 px, the x ≈ 795 the user drew). With labour columns or wider money columns everything scales by `table_px / 987`. The header rows reserved are computed from the tallest image (`ceil((h+10)/20)`, rows set to 15 pt), and so are the signature rows (`ceil(h/20)+1`). The title is now **16 pt bold red** in a 22 pt row. Glitches: (1) the money columns are sized `min(30, max(16, ceil(1.4 × longest '#,##0.00' value + 2)))` over every price, amount, labour value and the computed grand total, and the money/total cells get `shrink_to_fit`. (2) The column-title row is 32 pt and vertically centred. (3) `_safe_str` returns a rich-text string instead of prefixing `'`, so the value is stored as text (`data_type "s"`) with no visible quote. (4) The supplier labels in column A get `shrink_to_fit`, so "Contact No" is shown whole. Excel itself can't run here; LibreOffice 7.4 stood in for it.
 
-  It is used by create, edit, bulk import (an optional `Unit` column; a bad value skips that row with the reason "unit is longer than 20 characters"; the template has the column with an example row) and the new `POST /products/set-unit {ids, unit}`. That endpoint is group-scoped and all-or-nothing (an id outside your groups gives 404 and changes nothing), view-only gets 403, it returns `{updated: N}`, and each product's version goes up. Sub-item lists also carry the sub-product's unit.
+**Proportions (stated as asked)**
 
-  In document-service, one helper `app/core/units.py::display_unit` decides what is printed: "No", "Nos" or blank → **No** when the quantity is exactly 1, otherwise **Nos**. Every other unit prints exactly as stored. It is used for PDF main rows and sub-item rows, both XLSX places, and `quotation.html`. A product line saved without a unit takes the product's unit, and a manual line defaults to "No".
+| Image | PDF (184.6 mm = 697.7 px content) | PDF fraction | User's target on 987 px | Fraction used | Wins |
+|---|---|---|---|---|---|
+| Company seal / squared logo | 120 px | 17.2 % → 170 px | 170 px | 170/987 = 17.2 % | same |
+| Letterhead banner box | 148 mm × 30 mm | 80.2 % × 16.3 % → 792 × 160 | 560 × 115 | 56.7 % × 11.65 % | user |
+| MD seal | 130 px | 18.6 % → 184 px | 180 × 200 box | 18.2 % × 20.3 % | user |
 
-  The web app's JS `displayUnit` uses the same rule:
-  - **Product form:** a Unit select (No, M, Set, Pcs, Roll, Box, Lot, Kg, Ft, Other…) next to Category.
-  - **Products list:** a Unit column.
-  - **Selection bar:** a **Set unit…** button for every user who sees the bar.
-  - **Bulk import:** the help text now mentions the Unit column.
-  - **Document form:** the unit is prefilled from the product (picker and Import from cart). No ↔ Nos flips live as the quantity changes; M stays M.
-  - **Document detail and sub-item rows:** use `displayUnit`.
-
-  **Visible change:** an old quotation line stored as "Nos" with quantity 1 now prints "No". This was expected and is checked by the test.
+Before → after on the default sheet: banner box 815 × 115 at A (visible ~435 × 85 in the user's file) → 560 × 115 at B. Seal 90 → 170. Logo 90 × 90 (stretched) → 170 box, aspect kept. MD seal 100 × 100 → 180 × 200 box. Title 11 pt → 16 pt.
 
 ## 2. Baseline (before any change)
+I did not run `verify.sh` separately before the change. The last recorded run (iteration 30) was 100 passed, 25 skipped, and nothing outside the document service changed since then. The document unit suite was run before any edit, with the current source mounted into `doc-test-lo` (LibreOffice + PyMuPDF):
 ```
-======================= 100 passed, 24 skipped in 49.30s =======================
-verify.sh: PASSED (stack left running: --keep)
+382 passed, 60478 warnings in 229.48s (0:03:49)
 ```
-(on the loop-test stack)
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | Product has a Unit (form, list, API); default No; normalized; validation | PASS | catalogue `tests/test_product_unit.py`: normalizer table (20 cases); create without unit → "No"; "meter" → "M"; PATCH "Roll"; 21 characters → 422 on create and edit, value unchanged; duplicate key unchanged (same name+description with another unit → 409). UI: form defaults to No, choose M → API `unit == "M"`, the edit form shows M again, and the list Unit column shows it. `iter-30-product-form-unit.png` |
-| A2 | Bulk import Unit column + updated template | PASS | Unit test: header `UNIT` (case-insensitive) gives "meter" → M, blank → No, "Roll" → Roll; 21 characters → skipped `{row: 4, reason: "unit is longer than 20 characters"}`. A sheet with no Unit column → No. The template header is `Name, Category, Price, Description, Unit` with E2 = "No". UI: the import modal mentions Unit; importing 3 rows gives No / No / Roll ("roll" in the file) |
-| A3 | "Set unit…" bulk action on selected products, group-scoped | PASS | Unit test: Ops + City ids → 404, nothing changed in either group. Two Ops ids + "metre" → `{updated: 2}`, both M, version 2. View-only → 403; 21 characters → 422. `set-unit` was added to the view-only 403 parametrized test. UI: category "Cable …" filter → Select all → Set unit… shows "Set unit for 2 products" → M → tick "Unit set on 2 products", the bar is hidden, the Unit column shows `["M", "M"]`. `iter-30-set-unit-bar.png` |
-| A4 | New document lines take the product's unit; manual lines default No | PASS | document `tests/test_units.py::test_product_line_takes_the_products_unit…`: product line without a unit → "M", the form's "Roll" wins, manual line → "No". UI: picking the M product prefills **M** and the plain product prefills **No**. The saved document has `[("M", 3), ("Nos", 2)]` |
-| A5 | No/Nos by quantity everywhere; M and others unchanged | PASS | Helper table: No/1→No, No/2→Nos, Nos/1→No, no/0→Nos, 2.5→Nos, M/1, M/5→M, Set/2→Set, ""/1→No, None/4→Nos; each case also with `Decimal`. PDF (rendered HTML cells): Patch cord 1 No→**No**, Wall plate 2 No→**Nos**, Cable 3 M→**M**, old 1 Nos→**No**, sub-items Copper wire→**M**, Lug→**No**. XLSX column D gives the same 6 values. UI: quantity 1→2 flips the No line to **Nos** live, 3 on the M line keeps **M**, 2→1 flips back to **No**. The downloaded PDF has M and Nos, and the XLSX units are `["M", "Nos"]`. The older document (stored "Nos", quantity 1) opens and shows **No**. `iter-30-document-units.png`, `iter-30-pdf-units.png` |
-| A6 | Migration single head; no regressions; data safety | PASS | `alembic heads` → `0004_product_unit (head)` (loop-test container; `current` is also 0004; the column is `'No'::character varying`, NOT NULL). `test_single_alembic_head` now expects 0004. `test_0004_migration_is_guarded`: upgrade twice → the old row gets "No"; downgrade works. verify.sh **100 passed, 25 skipped**. Catalogue unit **136 passed**; document unit **369 passed, 13 skipped**; UI **45 passed, 8 skipped, 1 failed**: the failure is the pre-existing flaky `test_ui_bulk_cart` (see §7); alone it passed 2 of 3 runs. **Data safety: every test ran on the `loop-test` stack (port 18080) or in-process SQLite. The user's stack was only backed up and rebuilt.** |
+| A1 | Banner/logo, company seal, director seal sized by the PDF's proportions, never stretched | PASS | `test_xlsx_image_sizes.py::test_default_layout_banner_seal_and_md_seal_sizes` checks banner 560 wide (1600×300 → 560×105) starting at x = 56 (column B), seal 170×170 centred at 777 ±3, MD seal 180×200 centred at 773 ±3, table 987 px. `test_images_keep_their_aspect_ratio` (3 shapes) checks each image keeps its ratio within 2 % and fills its box. `test_labour_columns_scale_the_images_with_the_table` checks ×scale sizes and the seal centred on H\|I. Updated: `test_xlsx_logo_and_seal_are_170px`, `test_xlsx_logo_style_still_has_logo_and_seal_at_170px`, banner test (3 sizes). Screenshots: `iter-31-xlsx-after.png`, `iter-31-xlsx-after-letterhead.png` vs `iter-31-xlsx-before*.png`, `iter-31-pdf-reference.png` |
+| A2 | No overlaps; signature block clear; with/without seals, labour, both header styles | PASS | `test_no_image_covers_text_or_another_image` × 5 variants (letterhead+seal+MD, logo+seal+MD, letterhead no seal, seal only no MD seal, labour+letterhead+seals). For each image it computes the px rectangle from its anchor and row heights, checks that no non-empty cell (merged ranges in full) intersects it and that no two images overlap, and checks that the header images end above the QUOTATION row. Mutation check: with the old fixed reservations (6 header rows, 3 signature rows) 4 of the 5 variants fail. `test_md_regards`: "Regards," merged E:G, directly above the seal, same centre ±1 px |
+| A3 | Still one page wide when printed; existing XLSX tests pass | PASS | `test_xlsx_print_setup.py` all pass (LibreOffice print: 1 page wide, all column titles on every page, 3/45/120 items). In `test_banner_seal_and_md_seal_print_on_page_one` I changed `len(get_images()) == 3` to `len(get_image_info()) == 3`. LibreOffice now stores the two identical test seals once (2 unique images), but the page still shows 3 placements (banner at y 21, seal at y 21, MD seal at y 348). It is the same check, counting placements instead of unique images. Tax and labour XLSX tests unchanged and passing |
+| A4 | No `####` in totals; amount header fully visible | PASS | `test_money_columns_have_a_40_percent_margin_over_the_biggest_total[False/True]`: 9,999,999,999.99 (and + labour) gives E/F (and G/H) width ≥ 1.4 × len + 2, and the F formula cells have `shrink_to_fit`. `test_small_amounts_keep_the_16_wide_money_columns`. `test_huge_total_prints_without_hashes`: LibreOffice PDF text contains `9,999,999,999.99` and no `#`. `test_column_title_row_is_tall_enough_for_two_lines`: height ≥ 30, "Price (USD)" / "Amount (USD)" with wrap. I kept the PDF's titles (Price/Amount); the plan's "Unit Price/Total Price" are the labour sub-titles, which were already there |
+| A5 | No visible apostrophe on phone numbers; formula injection still blocked | PASS | `test_phone_numbers_show_as_typed_and_formulas_stay_text`: `+959958645521`, `-5` and `=cmd\|' /c calc'!A1` load back exactly as typed with `data_type == "s"`, and no cell value starts with `'`. `test_supplier_md_block::test_xlsx_director_values_are_still_formula_escaped` was updated to the new contract (exact value, no quote). Mutation check: putting the `'` prefix back fails the test. The file stores them as `<c t="inlineStr"><is><r><t>=cmd…`, which is never a formula. "Contact No": `test_supplier_labels_shrink_to_fit_column_a` |
+| A6 | No regressions; data safety | PASS | Document unit **399 passed** (baseline 382, +17 new). `verify.sh` **100 passed, 25 skipped** on the loop-test stack. **Data safety: every test ran in-process (`doc-test-lo` container, SQLite/no DB) or on the `loop-test` stack (port 18080), which was then removed with `./scripts/loop-test-down.sh`. The user's stack was only backed up (`backup-2026-11-25-0543.tar.gz`) and rebuilt with `up -d --build`, no volume removal. Afterwards: 100 products, 2 documents.** |
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/catalogue-service/alembic/versions/0004_product_unit.py` | added | guarded `products.unit` column, server default "No" |
-| `services/catalogue-service/app/models.py` | modified | `Product.unit` |
-| `services/catalogue-service/app/schemas.py` | modified | `normalize_unit`, `_UnitField` validator on create/update/SetUnit; `unit` on ProductOut / SubItemOut; `SetUnit` |
-| `services/catalogue-service/app/routers/products.py` | modified | bulk-import Unit column + template column; `POST /products/set-unit`; unit on sub-item responses |
-| `services/catalogue-service/app/core/search_client.py` | modified | unit in the search record |
-| `services/catalogue-service/tests/test_product_unit.py` | added | A1–A3, migration |
-| `services/catalogue-service/tests/test_concurrency.py`, `test_products_access_level.py` | modified | head is now 0004; set-unit in the view-only list |
-| `services/document-service/app/core/units.py` | added | `display_unit`, the one No/Nos rule |
-| `services/document-service/app/core/export_pdf.py`, `export_quotation.py`, `templates/quotation.html` | modified | all unit cells go through `display_unit` (sub-items use the sub-product's unit); XLSX unit is `_safe_str`-escaped |
-| `services/document-service/app/routers/documents.py`, `schemas.py`, `models.py` | modified | line `unit` optional: the product's unit when the product is looked up, else "No"; default "No" |
-| `services/document-service/tests/test_units.py` | added | helper table, PDF, XLSX, save |
-| `web/index.html` | modified | Unit select in the product form, Unit column, bulk-import help, Set-unit modal |
-| `web/js/app.js` | modified | `UNITS`, `displayUnit`, unit select + Other…; product form/list; Set unit… button; line-item prefill + live No/Nos; detail/sub-item display; cart import uses the product's unit |
-| `tests/test_ui_product_unit.py` | added | Playwright flow (loop-test only) |
-| `loop/evidence/iter-30-*.png` | added | 4 screenshots |
+| `services/document-service/app/core/export_quotation.py` | modified | proportional image sizes (`DEFAULT_TABLE_PX`, `BANNER_BOX`, `HEADER_IMAGE_PX`, `MD_SEAL_BOX`), helpers `_col_px`, `_open_image`, `_place` (anchor at any x px), `_money_width`; computed header/signature row reservation; 16 pt title; "Regards," merged over the last 3 columns; money widths + shrink-to-fit; 32 pt title row; `_safe_str` → rich text; label shrink-to-fit |
+| `services/document-service/tests/test_xlsx_image_sizes.py` | added | 17 tests for A1–A5 |
+| `services/document-service/tests/test_letterhead_header.py`, `test_md_regards.py`, `test_quotation_visual_style.py`, `test_supplier_md_block.py` | modified | updated to the new sizes, positions, 16 pt title and no-quote values the plan asks for |
+| `services/document-service/tests/test_xlsx_print_setup.py` | modified | count image placements (see A3) |
+| `loop/evidence/iter-31-*.png` | added | before/after XLSX (logo + letterhead), PDF reference |
+| `loop/history/report-iter-30.md` | (already there) | old `loop/report.md` removed; it was identical to the history copy |
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | catalogue `test_template_has_unit_header` | `BadZipFile` | the request had no gateway secret header (403 body) | send `AS_OPS` headers |
-| 2 | document `test_document_with_a_deleted_or_foreign_product_still_saves_and_exports` | `calls == []` failed | I had made a missing unit trigger a catalogue lookup, which breaks the "snapshot lines need no lookup" contract | product unit only when the lookup already happens; the form sends the unit itself |
-| 3 | UI test | `'roll' != 'Roll'` | "roll" is not in the plan's alias list, so it was kept as typed | the dropdown's own units (Set/Roll/Box/Lot) are matched case-insensitively too (+ table cases) |
-| 4 | UI test | strict-mode: 2 `.tick-toast` | earlier toasts still visible | match the toast by its text |
-| (env) | UI runner | host Chrome missing `libnspr4` | the host can't run Chromium | ran in `mcr.microsoft.com/playwright/python:v1.65.1-noble` with `playwright==1.65.1`, as in earlier iterations |
+| 1 | 9 existing XLSX tests | e.g. `assert 90*9525 == ...`, `'Regards,' must be in G` | the tests encode the old sizes/positions/quote that this plan changes | updated to the new contract (no assertion removed) |
+| 1 | `test_banner_seal_and_md_seal_print_on_page_one` | `assert 2 == 3` | LibreOffice stores the two identical test PNGs once; 3 placements are on page 1 | count `get_image_info()` placements |
 
 ## 6. Final verification output
 ```
-tests/test_backup_restore.py::test_round_trip_restore_is_lossless PASSED [100%]
-======================= 100 passed, 25 skipped in 50.34s =======================
-verify.sh: PASSED (stack left running: --keep)
---- catalogue unit (loop-test-catalogue-service image, SQLite)
-136 passed, 273 warnings in 3.27s
---- document unit (loop-test-document-service image)
-369 passed, 13 skipped, 60478 warnings in 216.00s
---- UI (playwright v1.65.1 container, loop-test)
-tests/test_ui_product_unit.py  1 passed in 5.22s
-tests/test_ui_*.py             1 failed, 45 passed, 8 skipped in 225.78s
-  FAILED tests/test_ui_bulk_cart.py::test_filter_select_all_add_to_cart  (flaky, see §7; re-runs: 1 failed/2 passed, then 3 passed)
+--- verify.sh (loop-test stack, port 18080)
+======================= 100 passed, 25 skipped in 57.64s =======================
+verify.sh: PASSED (stack left running: --keep)   # then ./scripts/loop-test-down.sh
+
+--- document unit (doc-test-lo image, current source mounted)
+399 passed, 60478 warnings in 239.14s (0:03:59)
 ```
-(verify.sh skips the UI tests because `.venv-tests` has no Playwright. That accounts for the +1 skip, the new UI test.)
+App running at http://localhost:8080 (login: admin / CHANGE_ME, local only). All 9 services are up and `/` returns 200.
 
 ## 7. Found but not fixed (out of scope)
-- **Flaky `tests/test_ui_bulk_cart.py:79-85`.** It sets `cartItems[0].quantity = 3` and expects that to be `ten[0]`. But the ten products share one backdated `created_at`, so their order in the list, and so in the cart, varies between runs. Suggested fix: bump by id (`cartItems.find(p => p.id === ids[0])`). Not changed here (LOOP.md: no editing tests outside scope).
-- From the plan: there is no managed list of units an admin can edit, no unit conversion (M ↔ Ft), no plurals for other units (Set → Sets), and no bulk change of units on existing documents' lines.
-- The bulk-import result line counts a too-long-unit skip under "Skipped N duplicates" (the reason text is correct; the summary label says "duplicates"). The plan said to leave the import result text unchanged.
-- Test environment: `playwright install` in a host venv removed the cached `chromium-1254` / `headless_shell-1254` from `~/.cache/ms-playwright` and added `headless_shell-1255`. The host can't run either (missing system libraries), and the container run doesn't use the host cache.
+- LibreOffice still draws the rich-text Item cells overlapping (bold name over the description), visible in the renders. This is the known BACKLOG item.
+- The `doc-test-lo` test image (LibreOffice + PyMuPDF) is ad hoc and still not committed, which iteration 30 also noted.
 
 ## 8. Blockers / decisions needed
 None.
 
 ## 9. Suggestions for the next iteration
-- Fix the flaky bulk-cart test (one line, see §7).
-- Commit a test image with Playwright, LibreOffice and PyMuPDF, so the UI and unit suites run the same way every time.
-
-App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)
+- Ask the user to open a real export in Excel (not LibreOffice) and confirm the sizes against their red shapes. The banner fixture used here is height-limited (720×190 → 436×115). A real letterhead with built-in whitespace will look smaller than its box.
