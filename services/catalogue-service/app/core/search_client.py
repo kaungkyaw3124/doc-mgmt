@@ -23,6 +23,7 @@ def index_product(product) -> None:
             "name": product.name,
             "description": product.description,
             "category": product.category,
+            "unit": product.unit,
             "unit_price": float(product.unit_price) if product.unit_price is not None else None,
             "currency": product.currency,
             "created_at": product.created_at.isoformat() if product.created_at else None,

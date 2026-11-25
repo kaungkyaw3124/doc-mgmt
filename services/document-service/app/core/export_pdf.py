@@ -7,6 +7,7 @@ from PIL import Image
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
+from app.core.units import display_unit
 from app.core.export_quotation import DEFAULT_TERMS, doc_type_label, fit_inside, is_letterhead
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
@@ -99,7 +100,7 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
             "name": item_name,
             "description": description,
             "qty": float(item.quantity or 0),
-            "unit": item.unit or "Nos",
+            "unit": display_unit(item.unit, item.quantity),
             "price": f"{float(item.unit_price or 0):,.2f}",
             "amount": f"{amount:,.2f}",
             "labour_price": f"{float(labour_price):,.2f}" if labour_price else "",  # empty when no labour
@@ -111,6 +112,7 @@ def generate_quotation_pdf(document, customer, items_with_product, company=None,
                     "name": sub["name"],
                     "sku": sub["sku"],
                     "description": sub.get("description") or "",
+                    "unit": display_unit(sub.get("unit"), 1),
                     "price": f"{float(sub['unit_price']):,.2f}" if sub.get("unit_price") is not None else "",
                     "amount": f"{float(sub['unit_price']):,.2f}" if sub.get("unit_price") is not None else "",
                 }

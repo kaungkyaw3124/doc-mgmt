@@ -758,15 +758,16 @@
             <th>Item Number</th>
             <th>Name <button class="sort-btn" data-sort-table="products" data-sort-col="name">⇅</button></th>
             <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
+            <th style="width:56px;">Unit</th>
             <th>Created <button class="sort-btn" data-sort-table="products" data-sort-col="created">⇅</button></th>
             <th>Modified <button class="sort-btn" data-sort-table="products" data-sort-col="modified">⇅</button></th>
             <th>Catalog</th><th>Cart</th><th>Edit</th><th>Delete</th><th>Group</th>
           </tr>
         </thead>
         <tbody id="products-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="12"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="12"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="12"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -1131,6 +1132,19 @@
     </label>
     <p id="move-group-preview" style="color:var(--text-dim); min-height:1.4em;"></p>
     <button class="btn-primary" id="move-group-submit">Move</button>
+  </div>
+</div>
+
+<!-- ============ SET UNIT MODAL (products selection bar, iteration 30) ============ -->
+<div class="modal-overlay" id="set-unit-modal">
+  <div class="modal-box">
+    <button class="link-btn-inline modal-close" id="set-unit-close">Close</button>
+    <h3 id="set-unit-title">Set unit</h3>
+    <div id="set-unit-banner" class="modal-banner-slot"></div>
+    <label for="set-unit-select">Unit</label>
+    <select id="set-unit-select" class="unit-select"></select>
+    <input type="text" id="set-unit-other" class="unit-other" maxlength="20" placeholder="Type the unit, e.g. Drum" aria-label="Other unit" style="display:none; margin-top:6px;">
+    <button class="btn-primary" id="set-unit-submit" style="margin-top:14px;">Apply</button>
   </div>
 </div>
 
@@ -1500,7 +1514,11 @@ Warranty: 2 years from the date of delivery</textarea>
             <option value="">— choose a category —</option>
           </select>
         </div>
-        <div></div>
+        <div>
+          <label for="product-unit">Unit</label>
+          <select id="product-unit" class="unit-select"></select>
+          <input type="text" id="product-unit-other" class="unit-other" maxlength="20" placeholder="Type the unit, e.g. Drum" aria-label="Other unit" style="display:none; margin-top:6px;">
+        </div>
       </div>
       <label for="product-description">Description</label>
       <textarea id="product-description" rows="2" placeholder="Short description of this product"></textarea>
@@ -1738,7 +1756,7 @@ Warranty: 2 years from the date of delivery</textarea>
     <h3>Bulk import products</h3>
     <div id="bulk-import-banner"></div>
     <p style="font-size:13px; color:var(--text-dim);">
-      Spreadsheet needs a header row with a <strong>Name</strong> column — <strong>Category</strong>, <strong>Price</strong>, and <strong>Description</strong> are optional.
+      Spreadsheet needs a header row with a <strong>Name</strong> column — <strong>Category</strong>, <strong>Price</strong>, <strong>Description</strong> and <strong>Unit</strong> are optional (a blank Unit means <strong>No</strong>; e.g. <strong>M</strong> for cable).
       Item Number is always auto-generated from the category, same as adding one product at a time.
     </p>
     <label for="bulk-import-excel">Product spreadsheet (.xlsx) — required</label>

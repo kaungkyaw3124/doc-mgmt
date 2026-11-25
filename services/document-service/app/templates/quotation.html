@@ -289,7 +289,7 @@
         <td class="sub-label">{{ sub.label }}</td>
         <td>{{ sub.sku }} — {{ sub.name }}{% if sub.description %}<br>{{ sub.description }}{% endif %}</td>
         <td class="num">1.0</td>
-        <td>Nos</td>
+        <td>{{ sub.unit }}</td>
         <td class="num">{{ sub.price }}</td>
         <td class="num">{{ sub.amount }}</td>
         {%- if include_labour %}

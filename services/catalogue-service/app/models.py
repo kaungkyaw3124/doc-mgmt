@@ -17,6 +17,7 @@ class Product(Base):
     name = Column(String(255), nullable=False)
     description = Column(String)
     category = Column(String(100), index=True)
+    unit = Column(String(20), nullable=False, default="No", server_default="No")  # "No" prints as No/Nos by quantity on documents
     unit_price = Column(Numeric(12, 2))
     currency = Column(String(3), default="USD")
     remark = Column(String(500))  # shows up as its own column on quotation exports, next to Amount

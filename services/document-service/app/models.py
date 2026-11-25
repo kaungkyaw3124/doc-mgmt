@@ -139,7 +139,7 @@ class LineItem(Base):
     sort_order = Column(Integer, default=0)  # preserves entry order — ids are random UUIDs, not sequential
     description = Column(Text)
     remark = Column(String(500))  # per-line-item override — falls back to the product's own catalog remark if blank
-    unit = Column(String(20), default="Nos")
+    unit = Column(String(20), default="No")
     quantity = Column(Numeric(12, 2))
     unit_price = Column(Numeric(12, 2))
     tax_rate = Column(Numeric(5, 2))

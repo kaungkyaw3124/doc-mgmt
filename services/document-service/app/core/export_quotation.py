@@ -14,6 +14,8 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
 
+from app.core.units import display_unit
+
 THIN = Side(style="thin", color="999999")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 HEADER_FILL = PatternFill("solid", fgColor="EFEFEF")
@@ -326,7 +328,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         line_amount = (item.quantity or 0) * (item.unit_price or 0)
         remark = _safe_str(item.remark or (product.get("remark") if product else None) or "")
 
-        values = [idx, item_cell_text, float(item.quantity or 0), item.unit or "Nos", float(item.unit_price or 0), float(line_amount), remark]
+        values = [idx, item_cell_text, float(item.quantity or 0), _safe_str(display_unit(item.unit, item.quantity)), float(item.unit_price or 0), float(line_amount), remark]
         if include_labour:
             # Labour total is a live formula; a line with no labour shows an empty price and "-".
             labour_price = getattr(item, "labour_unit_price", None)
@@ -357,7 +359,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                     sub_label,
                     sub_cell_text,
                     1.0,
-                    "Nos",
+                    display_unit(sub.get("unit"), 1),
                     sub_price,
                     sub_price,
                     "",
