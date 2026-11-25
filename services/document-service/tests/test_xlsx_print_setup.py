@@ -123,7 +123,9 @@ def test_short_quotation_prints_on_one_page_with_all_columns(case, tmp_path):
 @needs_soffice
 def test_banner_seal_and_md_seal_print_on_page_one(tmp_path):
     pdf = _print(tmp_path, _xlsx(**CASES["3 items, letterhead + seal + MD seal"]))
-    assert len(pdf[0].get_images()) == 3  # banner, company seal, MD seal under "Regards,"
+    # banner, company seal, MD seal under "Regards," (placements: LibreOffice stores
+    # the two identical test seals once, so get_images() would list 2)
+    assert len(pdf[0].get_image_info()) == 3
     for img in pdf[0].get_image_info():
         x0, y0, x1, y1 = img["bbox"]
         assert x0 >= 0 and x1 <= pdf[0].rect.width - RIGHT_MARGIN_PT + 1 and y1 <= pdf[0].rect.height

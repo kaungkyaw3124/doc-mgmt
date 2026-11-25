@@ -144,20 +144,21 @@ def test_xlsx_banner_in_the_header_rows_left_of_the_seal(size):
     ws = _xlsx(LETTERHEAD_COMPANY, banner(size), _png())
     assert len(ws._images) == 2
     lh, seal = ws._images
-    assert (lh.anchor._from.col, lh.anchor._from.row) == (0, 0), "banner anchored at A1"
-    assert (seal.anchor._from.col, seal.anchor._from.row) == (5, 0), "seal still at F1"
-    a_to_e = 56 + 385 + 56 + 56 + 112  # px, Excel's width of columns A:E
+    # Loop iteration 31: the user's drawn box — 560 x 115 px from column B's left edge.
+    assert (lh.anchor._from.col, lh.anchor._from.colOff, lh.anchor._from.row) == (1, 0, 0), "banner starts at B1"
+    assert (seal.anchor._from.col, seal.anchor._from.row) == (5, 0), "seal still starts in F1"
     w, h = _size(lh)
-    assert w <= a_to_e - 10 and h <= 115, "inside A:E, left of the seal, max 115px tall"
-    assert w == pytest.approx(a_to_e - 10, abs=1) or h == pytest.approx(115, abs=1), "fills the box"
+    assert w <= 561 and h <= 116, "inside the 560 x 115 box"
+    assert w == pytest.approx(560, abs=1) or h == pytest.approx(115, abs=1), "fills the box"
     assert w / h == pytest.approx(size[0] / size[1], rel=0.01)
+    assert 56 + w < 56 + 385 + 56 + 56 + 112 + 112 - 85, "banner ends left of the seal (seal centred on F|G)"
     title_row = next(c.row for row in ws.iter_rows() for c in row if c.value == "QUOTATION")
-    assert title_row == 7 and (title_row - 1) * 20 >= h, "title row must start below the banner"
+    assert (title_row - 1) * 20 >= max(h, _size(seal)[1]) + 5, "title row must start below the banner and seal"
 
 
-def test_xlsx_logo_style_still_has_logo_and_seal_at_90px():
+def test_xlsx_logo_style_still_has_logo_and_seal_at_170px():
     ws = _xlsx(COMPANY, _png(), _png())
-    assert [(i.anchor._from.col, *_size(i)) for i in ws._images] == [(0, 90, 90), (5, 90, 90)]
+    assert [(i.anchor._from.col, *_size(i)) for i in ws._images] == [(0, 170, 170), (5, 170, 170)]
 
 
 # ---- schemas / image handling ---------------------------------------------

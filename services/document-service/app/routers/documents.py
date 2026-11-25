@@ -94,6 +94,7 @@ def _process_items(items_payload, db: Session, scope: Scope):
     for index, item_in in enumerate(items_payload):
         description = item_in.description
         unit_price = item_in.unit_price
+        unit = item_in.unit
 
         if item_in.product_id and (description is None or unit_price is None):
             try:
@@ -105,6 +106,8 @@ def _process_items(items_payload, db: Session, scope: Scope):
 
             if description is None:
                 description = product["name"]
+            if not unit:  # the web form sends the product's unit itself; this covers API callers
+                unit = product.get("unit")
             if unit_price is None and product.get("unit_price") is not None:
                 unit_price = Decimal(str(product["unit_price"]))
             if unit_price is None:  # bulk-imported products carry no price
@@ -126,7 +129,7 @@ def _process_items(items_payload, db: Session, scope: Scope):
                 product_id=item_in.product_id,
                 description=description,
                 remark=item_in.remark,
-                unit=item_in.unit,
+                unit=(unit or "").strip()[:20] or "No",
                 quantity=item_in.quantity,
                 unit_price=unit_price,
                 tax_rate=item_in.tax_rate,

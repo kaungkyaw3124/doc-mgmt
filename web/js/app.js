@@ -36,6 +36,35 @@ function escapeHtml(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// Units (loop iteration 30). The server normalizes spellings (meter -> M);
+// displayUnit is the same rule as document-service's app/core/units.py:
+// "No"/"Nos"/blank prints No for quantity 1, Nos otherwise; others as stored.
+const UNITS = ['No', 'M', 'Set', 'Pcs', 'Roll', 'Box', 'Lot', 'Kg', 'Ft'];
+function displayUnit(unit, qty) {
+  const u = String(unit || '').trim();
+  if (/^(nos?)?$/i.test(u)) return Number(qty) === 1 ? 'No' : 'Nos';
+  return u;
+}
+// A .unit-select plus its "Other…" text box (the next .unit-other sibling).
+function setUnitControl(select, unit) {
+  const other = select.parentNode.querySelector('.unit-other');
+  const known = UNITS.includes(unit || 'No');
+  select.value = known ? (unit || 'No') : '__other';
+  other.value = known ? '' : unit;
+  other.style.display = known ? 'none' : '';
+}
+function readUnitControl(select) {
+  return select.value === '__other' ? select.parentNode.querySelector('.unit-other').value.trim() : select.value;
+}
+document.querySelectorAll('.unit-select').forEach(select => {
+  select.innerHTML = UNITS.map(u => `<option value="${u}">${u}</option>`).join('') + '<option value="__other">Other…</option>';
+  select.addEventListener('change', () => {
+    const other = select.parentNode.querySelector('.unit-other');
+    other.style.display = select.value === '__other' ? '' : 'none';
+    if (select.value === '__other') other.focus();
+  });
+});
+
 function skeletonRows(colspan) {
   const widths = [80, 55, 70];
   return widths.map(w =>
@@ -806,7 +835,7 @@ function addLineItem(prefill) {
     </div>
     <input type="hidden" class="li-desc" value="${prefill ? escapeHtml(prefill.description || '') : ''}">
     <div style="max-width:70px;"><label>Qty</label><input type="text" class="li-qty" placeholder="1" value="${prefill ? safeVal(prefill.quantity) : ''}"></div>
-    <div style="max-width:80px;"><label>Unit</label><input type="text" class="li-unit" placeholder="Nos" value="${prefill ? escapeHtml(prefill.unit || 'Nos') : 'Nos'}"></div>
+    <div style="max-width:80px;"><label>Unit</label><input type="text" class="li-unit" placeholder="No" value="${prefill ? escapeHtml(prefill.unit || 'No') : 'No'}"></div>
     <div><label>Unit price</label><input type="text" class="li-price" placeholder="20.00" value="${prefill ? safeVal(prefill.unit_price) : ''}"></div>
     <div class="labour-only" style="max-width:110px;"><label>Labour unit price</label><input type="text" class="li-labour" placeholder="optional" value="${prefill ? safeVal(prefill.labour_unit_price) : ''}"></div>
     <div class="labour-only li-line-totals" style="max-width:150px;"><label>Material / Labour total</label><span class="li-mat-total">0.00</span> / <span class="li-lab-total">-</span></div>
@@ -820,12 +849,15 @@ function addLineItem(prefill) {
     const descInput = div.querySelector('.li-desc');
     const qtyInput = div.querySelector('.li-qty');
     const remarkInput = div.querySelector('.li-remark');
+    const unitInput = div.querySelector('.li-unit');
     const match = typed && cachedProducts.filter(inDocGroup).find(p => `${p.sku} — ${p.name}`.toLowerCase() === typed.toLowerCase());
     if (match) {
       div.dataset.resolvedProductId = match.id;
       descInput.value = match.name;
       if (!qtyInput.value) qtyInput.value = '1';
       if (!remarkInput.value && match.remark) remarkInput.value = match.remark;
+      if (/^(nos?)?$/i.test(unitInput.value.trim())) unitInput.value = match.unit || 'No'; // a typed unit wins
+      updateDocumentTotals();
     } else {
       delete div.dataset.resolvedProductId;
       if (!typed) descInput.value = '';
@@ -859,6 +891,8 @@ function updateDocumentTotals() {
     labour += lab;
     row.querySelector('.li-mat-total').textContent = (qty * price).toFixed(2);
     row.querySelector('.li-lab-total').textContent = lab ? lab.toFixed(2) : '-';
+    const unitInput = row.querySelector('.li-unit'); // No <-> Nos follows the quantity live
+    if (/^(nos?)?$/i.test(unitInput.value.trim())) unitInput.value = displayUnit(unitInput.value, qty);
   });
   if (!withLabour) labour = 0;
   const taxRate = Number(document.getElementById('doc-tax-rate').value) || 0;
@@ -912,7 +946,7 @@ document.getElementById('doc-form').addEventListener('submit', async (e) => {
     let description = row.querySelector('.li-desc').value;
     const remark = row.querySelector('.li-remark').value;
     const quantity = row.querySelector('.li-qty').value;
-    const unit = row.querySelector('.li-unit').value || 'Nos';
+    const unit = row.querySelector('.li-unit').value.trim() || 'No';
     const unit_price = row.querySelector('.li-price').value;
 
     const hasSomeData = product_id || description || remark || unit_price;
@@ -1190,7 +1224,7 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
       <tr>
         <td>${escapeHtml(item.description || '—')}${item.product_id ? ` <span class="mono" style="color:var(--text-dim); font-size:12px;">(#${catalogueNumber})</span>` : ''}</td>
         <td class="mono">${item.quantity != null ? item.quantity : '—'}</td>
-        <td>${escapeHtml(item.unit || '')}</td>
+        <td>${escapeHtml(displayUnit(item.unit, item.quantity))}</td>
         <td class="mono">${fmtMoney(item.unit_price)}</td>
         <td class="mono">${item.tax_rate != null ? item.tax_rate : 0}%</td>
         <td class="mono">${fmtMoney(item.line_total)}</td>
@@ -1206,7 +1240,7 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
           ${escapeHtml(sub.sku)} — ${escapeHtml(sub.name)}${sub.has_file ? '' : ' <span style="color:var(--text-dim); font-size:12px;">(no catalog file)</span>'}
         </td>
         <td class="mono" style="font-size:13px;">1.00</td>
-        <td style="font-size:13px;">Nos</td>
+        <td style="font-size:13px;">${escapeHtml(displayUnit(sub.unit, 1))}</td>
         <td class="mono" style="font-size:13px;">${sub.unit_price != null ? fmtMoney(sub.unit_price) : '—'}</td>
         <td style="font-size:13px;">—</td>
         <td class="mono" style="font-size:13px;">${sub.unit_price != null ? fmtMoney(sub.unit_price) : '—'}</td>
@@ -2287,6 +2321,7 @@ document.getElementById('toggle-product-form').addEventListener('click', () => {
   document.getElementById('product-sku').disabled = false;
   document.getElementById('product-form-submit-btn').textContent = 'Create product';
   document.getElementById('product-current-file-info').style.display = 'none';
+  setUnitControl(document.getElementById('product-unit'), 'No');
   pendingSubItems = [];
   refreshSubItemDatalist();
   renderSubItemsList();
@@ -2526,7 +2561,7 @@ document.getElementById('import-from-cart-btn').addEventListener('click', () => 
       product_id: p.id,
       description: p.name,
       quantity: p.quantity || 1,
-      unit: 'Nos',
+      unit: (cachedProducts.find(c => c.id === p.id) || p).unit || 'No', // the live list first: the cart may predate a unit change
       unit_price: null,
       tax_rate: 0
     });
@@ -2705,6 +2740,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     category: document.getElementById('product-category').value || null,
     description: document.getElementById('product-description').value || null,
     remark: document.getElementById('product-remark').value || null,
+    unit: readUnitControl(document.getElementById('product-unit')) || 'No',
     unit_price: null // price isn't set at the catalog level anymore — entered per-document instead
   };
   // Duplicate check, only when the name/description is new or changed (products
@@ -2967,6 +3003,7 @@ function startEditProduct(product) {
   document.getElementById('product-category').value = product.category || '';
   document.getElementById('product-description').value = product.description || '';
   document.getElementById('product-remark').value = product.remark || '';
+  setUnitControl(document.getElementById('product-unit'), product.unit);
   document.getElementById('product-form-submit-btn').textContent = 'Save changes';
   const fileInfo = document.getElementById('product-current-file-info');
   if (product.image_object_key) {
@@ -3214,7 +3251,7 @@ async function loadProducts() {
     applyFilterAndSort('products');
   } catch (err) {
     if (isStaleLoad('products', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="12">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -3419,7 +3456,7 @@ function renderProductSubItemsReadonly(subItems) {
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
@@ -3431,6 +3468,7 @@ function renderProductsTable(products) {
         ${p.description ? `<div style="font-size:12px; color:var(--text-dim); margin-top:2px; white-space:pre-line;">${escapeHtml(p.description)}</div>` : ''}
       </td>
       <td>${escapeHtml(p.category || '—')}</td>
+      <td>${escapeHtml(p.unit || 'No')}</td>
       <td>${fmtDate(p.created_at)}</td>
       <td>${fmtDate(p.updated_at)}</td>
       <td>${p.sub_item_count > 0
@@ -3937,6 +3975,41 @@ function addSelectedToCart() {
   btn.addEventListener('click', addSelectedToCart);
   selection.products.bar.appendChild(btn);
 })();
+
+// ---------- set the unit of the selected products (loop iteration 30) ----------
+// e.g. filter category "Cable", Select all, Set unit… M. The server applies it
+// to all or none (an id outside the user's groups is a 404).
+(() => {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary';
+  btn.id = 'products-set-unit-btn';
+  btn.textContent = 'Set unit…';
+  btn.addEventListener('click', () => {
+    const n = selection.products.ids.size;
+    document.getElementById('set-unit-title').textContent = `Set unit for ${n} product${n === 1 ? '' : 's'}`;
+    setUnitControl(document.getElementById('set-unit-select'), 'No');
+    showBanner('set-unit-banner', '');
+    document.getElementById('set-unit-modal').classList.add('active');
+  });
+  selection.products.bar.appendChild(btn);
+})();
+document.getElementById('set-unit-close').addEventListener('click', () => {
+  document.getElementById('set-unit-modal').classList.remove('active');
+});
+document.getElementById('set-unit-submit').addEventListener('click', async () => {
+  const unit = readUnitControl(document.getElementById('set-unit-select'));
+  if (!unit) { showBanner('set-unit-banner', 'Type the unit.'); return; }
+  try {
+    const res = await apiFetch('/products/set-unit', { method: 'POST', body: JSON.stringify({ ids: [...selection.products.ids], unit }) });
+    document.getElementById('set-unit-modal').classList.remove('active');
+    showSuccessTick(`Unit set on ${res.updated} product${res.updated === 1 ? '' : 's'}`);
+    selection.products.ids.clear();
+    loadProducts();
+  } catch (err) {
+    showBanner('set-unit-banner', err.message);
+  }
+});
 
 function refreshMoveControls() {
   const options = myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');

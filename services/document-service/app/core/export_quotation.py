@@ -1,3 +1,4 @@
+import math
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
@@ -14,6 +15,8 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
 
+from app.core.units import display_unit
+
 THIN = Side(style="thin", color="999999")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 HEADER_FILL = PatternFill("solid", fgColor="EFEFEF")
@@ -26,12 +29,14 @@ def _safe_str(value):
     Neutralizes spreadsheet formula injection: openpyxl (and Excel/Sheets on
     open) treats any string cell value starting with =, +, -, or @ as a
     live formula. Every string here can originate from another user's input
-    (product description, customer address, remarks, terms...), so prefix
-    those with a straight quote to force plain text instead of letting a
-    crafted value like "=cmd|'/c calc'!A1" execute when the export is opened.
+    (product description, customer address, remarks, terms...), so a crafted
+    value like "=cmd|'/c calc'!A1" must never become a formula. Such values
+    are written as a rich-text string (stored as text, never a formula) —
+    unlike a leading quote, nothing extra shows in the cell ("+9599..." stays
+    exactly as typed).
     """
     if isinstance(value, str) and value.startswith(_FORMULA_TRIGGER_CHARS):
-        return "'" + value
+        return CellRichText(value)
     return value
 
 
@@ -40,18 +45,17 @@ def _name_and_description_rich_text(name, description, size=10):
     Builds a single cell value with the name in bold and the description
     (if any) on the line below in regular weight — openpyxl can't mix
     formatting within a plain string, so this uses its "rich text" cell
-    support instead. Both pieces still go through _safe_str first, since
-    rich text doesn't change how Excel decides whether a cell is a formula
-    (that's based on the cell's first character either way).
+    support instead. A rich-text cell is always stored as text, so a name
+    starting with "=" can't become a formula here (no _safe_str needed).
     """
-    name = _safe_str(name or "")
+    name = name or ""
     bold_font = InlineFont(rFont="Arial", sz=size, b=True)
     if not description:
         return CellRichText(TextBlock(bold_font, name))
     normal_font = InlineFont(rFont="Arial", sz=size)
     return CellRichText(
         TextBlock(bold_font, name),
-        TextBlock(normal_font, "\n" + _safe_str(description)),
+        TextBlock(normal_font, "\n" + description),
     )
 
 DEFAULT_TERMS = (
@@ -110,6 +114,7 @@ def _labour_totals(ws, row, item_rows, tax_rate):
         for col, formula, fmt in cells:
             ws[f"{col}{row}"] = formula
             ws[f"{col}{row}"].number_format = fmt
+            ws[f"{col}{row}"].alignment = Alignment(shrink_to_fit=True)
 
     def total(col):
         return ("=" + "+".join(f"{col}{r}" for r in item_rows)) if item_rows else 0
@@ -123,8 +128,56 @@ def _labour_totals(ws, row, item_rows, tax_rate):
         grand += f"+F{row}"
         row += 1
     line("Grand Total", [("F", grand, "#,##0.00")], merge_amount=True)
-    ws[f"F{row}"].alignment = Alignment(horizontal="center")
+    ws[f"F{row}"].alignment = Alignment(horizontal="center", shrink_to_fit=True)
     return row + 2
+
+
+# Excel shows a column of width w (characters) as trunc((256*w + trunc(128/7)) / 256 * 7) px.
+def _col_px(width):
+    return int((256 * width + 128 // 7) / 256 * 7)
+
+
+# Image sizes are fractions of the table width: the sizes the user drew on the
+# default 7-column sheet (987 px wide), scaled when the sheet is wider (labour
+# columns, wider money columns). The seal is ~17% of the width, as in the PDF.
+DEFAULT_TABLE_PX = 987
+BANNER_BOX = (560, 115)
+HEADER_IMAGE_PX = 170  # squared logo and company seal
+MD_SEAL_BOX = (180, 200)
+ROW_PX = 20  # a 15pt row
+
+
+def _money_width(values):
+    """Price/amount column width: 40% over the widest '#,##0.00' value, so a
+    zoomed-out Excel (digits relatively wider) still shows it instead of ####."""
+    longest = max((len(f"{v:,.2f}") for v in values), default=0)
+    return min(30, max(16, math.ceil(longest * 1.4 + 2)))
+
+
+def _open_image(data, mime):
+    """XLImage, or None for no/SVG/broken image. SVGs are skipped: openpyxl
+    goes through PIL, which can't rasterize SVG."""
+    if not data or mime == "image/svg+xml":
+        return None
+    try:
+        return XLImage(BytesIO(data))
+    except Exception:
+        return None  # bad/unsupported image format shouldn't block the whole export
+
+
+def _place(ws, img, col_px, x, row0, w, h):
+    """Float img w x h px with its left edge x px from the sheet's left edge,
+    at the top of 0-based row row0."""
+    col = 0
+    while col < len(col_px) - 1 and x >= col_px[col]:
+        x -= col_px[col]
+        col += 1
+    img.width, img.height = round(w), round(h)
+    img.anchor = OneCellAnchor(
+        _from=AnchorMarker(col=col, colOff=pixels_to_EMU(round(x)), row=row0, rowOff=0),
+        ext=XDRPositiveSize2D(pixels_to_EMU(round(w)), pixels_to_EMU(round(h))),
+    )
+    ws.add_image(img)
 
 
 def is_letterhead(company, logo_bytes, logo_mime):
@@ -158,8 +211,21 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws.title = label
 
     include_labour = bool(getattr(document, "include_labour", False))
+    # Every money value the sheet shows, incl. the totals, sizes the money columns.
+    money = [0.0]
+    materials = labour_sum = 0.0
+    for item, _product, sub_items in items_with_product:
+        qty, price = float(item.quantity or 0), float(item.unit_price or 0)
+        labour_price = float(getattr(item, "labour_unit_price", None) or 0) if include_labour else 0.0
+        money += [abs(price), abs(qty * price), abs(labour_price), abs(qty * labour_price)]
+        money += [abs(float(sub["unit_price"])) for sub in sub_items or () if sub.get("unit_price") is not None]
+        materials += qty * price
+        labour_sum += qty * labour_price
+    rate = float(items_with_product[0][0].tax_rate or 0) if items_with_product else 0.0
+    money += [abs(materials), abs(materials * (1 + rate / 100) + labour_sum)]
+    m = _money_width(money)
     # Labour adds Labour unit price / total (G, H) before Remark; Item gives up some width.
-    col_widths = [8, 45, 8, 8, 16, 16, 16, 16, 30] if include_labour else [8, 55, 8, 8, 16, 16, 30]
+    col_widths = [8, 45, 8, 8, m, m, m, m, 30] if include_labour else [8, 55, 8, 8, m, m, 30]
     last_col = get_column_letter(len(col_widths))  # G, or I with labour
     seal_col = get_column_letter(len(col_widths) - 1)  # seal sits over the last two columns
     for i, w in enumerate(col_widths, start=1):
@@ -174,53 +240,41 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # it would render overlapping/beside the images instead of clearly
     # above them; reserving dedicated rows for the images before writing
     # the title avoids that.
-    has_header_image = bool((logo_bytes and logo_mime != "image/svg+xml") or (seal_bytes and seal_mime != "image/svg+xml"))
-
-    banner_placed = False
-    if is_letterhead(company, logo_bytes, logo_mime):
-        # Letterhead banner (arrives in the logo slot) across the header rows
-        # from column A up to the seal in F (A:G when there is no seal), fitted
-        # inside the box keeping its proportions. Max 115px tall, so the 6
-        # rows (120px) reserved below for the logo/seal row still cover it.
-        # On a bad image, falls through to the normal logo header.
-        try:
-            banner = XLImage(BytesIO(logo_bytes))
-            col_px = [int((256 * w + 128 // 7) / 256 * 7) for w in col_widths]  # Excel's own px-per-column formula
-            box_w = sum(col_px[:-2]) - 10 if seal_bytes and seal_mime != "image/svg+xml" else sum(col_px)
-            banner.width, banner.height = (round(v) for v in fit_inside(banner.width, banner.height, box_w, 115))
-            ws.add_image(banner, f"A{row}")
-            banner_placed = True
-        except Exception:
-            pass
-    if banner_placed:
-        logo_bytes = None  # the banner took the logo's place
-
-    if logo_bytes and logo_mime != "image/svg+xml":
-        try:
-            img = XLImage(BytesIO(logo_bytes))
-            img.width = 90
-            img.height = 90
-            ws.add_image(img, f"A{row}")
-        except Exception:
-            pass  # bad/unsupported image format shouldn't block the whole export
-
-    if seal_bytes and seal_mime != "image/svg+xml":
-        try:
-            seal_img = XLImage(BytesIO(seal_bytes))
-            seal_img.width = 90
-            seal_img.height = 90
-            ws.add_image(seal_img, f"{seal_col}{row}")
-        except Exception:
-            pass  # bad/unsupported image format shouldn't block the whole export
-
-    if has_header_image:
-        row += 6  # reserve rows for the (now taller) logo/seal row before the title
+    col_px = [_col_px(w) for w in col_widths]
+    scale = sum(col_px) / DEFAULT_TABLE_PX
+    logo_img = _open_image(logo_bytes, logo_mime)
+    seal_img = _open_image(seal_bytes, seal_mime)
+    header_h = 0
+    if logo_img:
+        if is_letterhead(company, logo_bytes, logo_mime):
+            # Letterhead banner from column B's left edge (where the user drew
+            # it), fitted inside the box with its own proportions; the whole
+            # width right of A when there is no seal.
+            box_w = BANNER_BOX[0] * scale if seal_img else sum(col_px[1:])
+            w, h = fit_inside(logo_img.width, logo_img.height, box_w, BANNER_BOX[1] * scale)
+            _place(ws, logo_img, col_px, col_px[0], 0, w, h)
+        else:
+            w, h = fit_inside(logo_img.width, logo_img.height, HEADER_IMAGE_PX * scale, HEADER_IMAGE_PX * scale)
+            _place(ws, logo_img, col_px, 0, 0, w, h)
+        header_h = h
+    if seal_img:
+        # Centred on the boundary before the last column (F|G, or H|I with labour).
+        w, h = fit_inside(seal_img.width, seal_img.height, HEADER_IMAGE_PX * scale, HEADER_IMAGE_PX * scale)
+        _place(ws, seal_img, col_px, sum(col_px[:-1]) - w / 2, 0, w, h)
+        header_h = max(header_h, h)
+    if header_h:
+        # Images float over these rows, so the title starts below the tallest
+        # one with a small gap; explicit 15pt rows so every viewer agrees.
+        reserved = math.ceil((header_h + 10) / ROW_PX)
+        for r in range(row, row + reserved):
+            ws.row_dimensions[r].height = 15
+        row += reserved
 
     ws.merge_cells(f"A{row}:E{row}")
     ws[f"A{row}"] = label.upper()
-    # Same heading treatment as the PDF (quotation.html .title): same size as the Date line
-    # (11pt), bold dark red, down from 18pt black.
-    ws[f"A{row}"].font = Font(name="Arial", size=11, bold=True, color="C00000")
+    # Bold dark red like the PDF's heading, 16pt to match the larger letterhead images.
+    ws[f"A{row}"].font = Font(name="Arial", size=16, bold=True, color="C00000")
+    ws.row_dimensions[row].height = 22  # a 16pt line
     row += 2
 
     ws[f"A{row}"] = "Date:"
@@ -273,6 +327,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         if s_label:
             ws[f"A{row}"] = s_label
             ws[f"A{row}"].font = Font(name="Arial", size=10)
+            # Column A is narrow and B holds the value, so "Contact No" would be clipped.
+            ws[f"A{row}"].alignment = Alignment(shrink_to_fit=True)
             ws[f"B{row}"] = s_val
         ws[f"E{row}"] = e_label
         ws[f"E{row}"].font = Font(name="Arial", size=10)
@@ -303,7 +359,8 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             cell.font = Font(name="Arial", bold=True, size=10)
             cell.fill = HEADER_FILL
             cell.border = BORDER
-            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.row_dimensions[row].height = 32  # room for a title that wraps onto two lines
     # Same intent as the PDF, where the whole header repeats on every page:
     # when the sheet is printed, rows 1 through this column-titles row
     # (title, date, SUPPLIER / END USER, column titles) repeat at the top of
@@ -326,7 +383,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         line_amount = (item.quantity or 0) * (item.unit_price or 0)
         remark = _safe_str(item.remark or (product.get("remark") if product else None) or "")
 
-        values = [idx, item_cell_text, float(item.quantity or 0), item.unit or "Nos", float(item.unit_price or 0), float(line_amount), remark]
+        values = [idx, item_cell_text, float(item.quantity or 0), _safe_str(display_unit(item.unit, item.quantity)), float(item.unit_price or 0), float(line_amount), remark]
         if include_labour:
             # Labour total is a live formula; a line with no labour shows an empty price and "-".
             labour_price = getattr(item, "labour_unit_price", None)
@@ -336,7 +393,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             if col != 2:  # Item column carries its own rich-text formatting (bold name + normal description) — don't override it
                 cell.font = Font(name="Arial", size=10)
             cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=(col in (2, len(values))))
+            money_col = 5 <= col <= (8 if include_labour else 6)
+            # shrink-to-fit: a second guard against #### besides the column width
+            cell.alignment = Alignment(vertical="top", wrap_text=(col in (2, len(values))), shrink_to_fit=money_col)
             if col in (5, 6) or (include_labour and col == 7):
                 cell.number_format = "#,##0.00"
             if include_labour and col == 8:
@@ -357,7 +416,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                     sub_label,
                     sub_cell_text,
                     1.0,
-                    "Nos",
+                    display_unit(sub.get("unit"), 1),
                     sub_price,
                     sub_price,
                     "",
@@ -369,7 +428,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                     if col != 2:
                         cell.font = Font(name="Arial", size=9)
                     cell.border = BORDER
-                    cell.alignment = Alignment(vertical="top", wrap_text=(col == 2))
+                    cell.alignment = Alignment(vertical="top", wrap_text=(col == 2), shrink_to_fit=(col in (5, 6)))
                     if col in (5, 6) and v != "":
                         cell.number_format = "#,##0.00"
                 row += 1
@@ -397,6 +456,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         subtotal_cell.font = Font(name="Arial", bold=True)
         subtotal_cell.number_format = "#,##0.00"
         subtotal_cell.border = BORDER
+        subtotal_cell.alignment = Alignment(shrink_to_fit=True)
         subtotal_row = row
         row += 1
 
@@ -409,6 +469,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         tax_cell.font = Font(name="Arial", bold=True)
         tax_cell.number_format = "#,##0.00"
         tax_cell.border = BORDER
+        tax_cell.alignment = Alignment(shrink_to_fit=True)
         tax_row = row
         row += 1
 
@@ -426,6 +487,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         total_cell.font = Font(name="Arial", bold=True)
         total_cell.number_format = "#,##0.00"
         total_cell.border = BORDER
+        total_cell.alignment = Alignment(shrink_to_fit=True)
         row += 2
 
     ws[f"A{row}"] = "Terms and Conditions"
@@ -447,43 +509,29 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # never left completely blank.
     if director:
         seal_row = row
-        seal_placed = False
-        # "Regards," sign-off on its own row just above the seal (same as the
-        # PDF). Centered in column G, and the seal below is centered in G too
-        # (see the anchor offset), so the text's center is the seal's center.
-        # The seal is anchored to the NEXT row's top edge, so it can't cover
-        # the text. The no-seal fallback below rewrites this as F:G merged,
-        # centered over the name/position lines instead.
-        regards_row = row
-        ws[f"{last_col}{row}"] = "Regards,"
-        ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
-        ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
-        row += 1
-        if director_seal_bytes and director_seal_mime != "image/svg+xml":
-            try:
-                md_seal_img = XLImage(BytesIO(director_seal_bytes))
-                md_seal_img.width = 100
-                md_seal_img.height = 100
-                # Excel shows a column of width w (characters) as
-                # trunc((256*w + trunc(128/7)) / 256 * 7) px: 30 -> 210px. A
-                # plain "G{row}" anchor would put the 100px seal at G's left
-                # edge, 55px left of where the centered "Regards," sits.
-                g_px = int((256 * col_widths[-1] + 128 // 7) / 256 * 7)
-                md_seal_img.anchor = OneCellAnchor(
-                    _from=AnchorMarker(col=len(col_widths) - 1, colOff=pixels_to_EMU((g_px - 100) // 2), row=row - 1, rowOff=0),
-                    ext=XDRPositiveSize2D(pixels_to_EMU(100), pixels_to_EMU(100)),
-                )
-                ws.add_image(md_seal_img)
-                row += 6  # leave room for the image
-                seal_placed = True
-            except Exception:
-                pass  # bad/unsupported image format shouldn't block the whole export
-        if not seal_placed:
-            ws[f"{last_col}{regards_row}"] = None
-            ws.merge_cells(f"{seal_col}{regards_row}:{last_col}{regards_row}")
-            ws[f"{seal_col}{regards_row}"] = "Regards,"
-            ws[f"{seal_col}{regards_row}"].font = Font(name="Arial", bold=True)
-            ws[f"{seal_col}{regards_row}"].alignment = Alignment(horizontal="center")
+        md_seal = _open_image(director_seal_bytes, director_seal_mime)
+        if md_seal:
+            # "Regards," sign-off on its own row just above the seal (same as
+            # the PDF), centred across the last three columns (E:G, or G:I with
+            # labour) — about the F|G boundary, where the user wants the seal.
+            # The seal below gets the same centre, so they line up; it is
+            # anchored to the NEXT row's top edge, so it can't cover the text.
+            first = get_column_letter(len(col_widths) - 2)
+            ws.merge_cells(f"{first}{row}:{last_col}{row}")
+            ws[f"{first}{row}"] = "Regards,"
+            ws[f"{first}{row}"].font = Font(name="Arial", bold=True)
+            ws[f"{first}{row}"].alignment = Alignment(horizontal="center")
+            row += 1
+            w, h = fit_inside(md_seal.width, md_seal.height, MD_SEAL_BOX[0] * scale, MD_SEAL_BOX[1] * scale)
+            centre = (sum(col_px[:-3]) + sum(col_px)) / 2
+            _place(ws, md_seal, col_px, centre - w / 2, row - 1, w, h)
+            row += math.ceil(h / ROW_PX) + 1  # leave room for the image
+        else:
+            ws.merge_cells(f"{seal_col}{row}:{last_col}{row}")
+            ws[f"{seal_col}{row}"] = "Regards,"
+            ws[f"{seal_col}{row}"].font = Font(name="Arial", bold=True)
+            ws[f"{seal_col}{row}"].alignment = Alignment(horizontal="center")
+            row += 1
             ws.merge_cells(f"{seal_col}{row}:{last_col}{row}")
             ws[f"{seal_col}{row}"] = _safe_str(director.get("name", ""))
             ws[f"{seal_col}{row}"].font = Font(name="Arial", bold=True)

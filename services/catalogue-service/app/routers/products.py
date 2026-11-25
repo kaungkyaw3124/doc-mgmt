@@ -363,14 +363,15 @@ def download_product_bulk_import_template():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Products"
-    ws.append(["Name", "Category", "Price", "Description"])
+    ws.append(["Name", "Category", "Price", "Description", "Unit"])
     for cell in ws[1]:
         cell.font = openpyxl.styles.Font(bold=True)
-    ws.append(["Dell Vostro 15", "Computer", 950.00, "15-inch business laptop, Intel i5, 8GB RAM, 512GB SSD"])
+    ws.append(["Dell Vostro 15", "Computer", 950.00, "15-inch business laptop, Intel i5, 8GB RAM, 512GB SSD", "No"])
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["C"].width = 12
     ws.column_dimensions["D"].width = 55
+    ws.column_dimensions["E"].width = 10
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -396,7 +397,7 @@ def bulk_import_products(
     up with catalogue files from a zip.
 
     Excel file: first row is headers (case-insensitive) — needs a "Name"
-    column; "Category", "Price", and "Description" are optional. Item
+    column; "Category", "Price", "Description" and "Unit" (blank = No) are optional. Item
     Number/SKU is always auto-generated from the category, same as
     creating one product at a time.
 
@@ -439,6 +440,7 @@ def bulk_import_products(
     category_idx = col_index("category")
     price_idx = col_index("price", "unit_price", "unit price")
     description_idx = col_index("description")
+    unit_idx = col_index("unit")
 
     if name_idx is None:
         raise HTTPException(status_code=400, detail='the spreadsheet needs a "Name" column')
@@ -491,6 +493,12 @@ def bulk_import_products(
         description = cell(row, description_idx)
         description = str(description).strip() if description else None
 
+        try:
+            unit = schemas.normalize_unit(cell(row, unit_idx))
+        except ValueError:
+            skipped.append({"row": position, "name": name, "reason": "unit is longer than 20 characters", "existing_sku": ""})
+            continue
+
         row_key = dup.key(name, description)
         if row_key in sku_by_key:
             reason = f"duplicate of row {row_by_key[row_key]}" if row_key in row_by_key else "already exists"
@@ -499,7 +507,7 @@ def bulk_import_products(
         if row_key[0] in sku_by_name:
             name_warnings.append({"row": position, "name": name, "reason": f"same name as {sku_by_name[row_key[0]]}"})
 
-        product = models.Product(name=name, category=category, unit_price=price, description=description, group_id=group_id)
+        product = models.Product(name=name, category=category, unit=unit, unit_price=price, description=description, group_id=group_id)
         _add_with_next_sku(db, product, category)
         sku = product.sku
         entry = {"sku": sku, "name": name, "row": position, "has_file": False}
@@ -543,6 +551,30 @@ def bulk_import_products(
         warnings.append(f"{len(files_by_position)} catalogue file(s) didn't match any spreadsheet row (numbers: {leftover})")
 
     return {"created": created, "skipped": skipped, "warnings": warnings + name_warnings}
+
+
+@router.post("/set-unit")
+def set_unit(
+    payload: schemas.SetUnit,
+    db: Session = Depends(get_db),
+    x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
+    scope: Scope = Depends(get_scope),
+):
+    """Products selection bar "Set unit…" (loop iteration 30): one unit for
+    every selected product, e.g. all cables -> M. All or nothing: an id
+    outside the caller's groups is a 404 and nothing changes. Old documents
+    keep their line's unit (a snapshot)."""
+    _require_edit_access(x_access_level)
+    ids = set(payload.ids)
+    rows = scoped(db, models.Product, scope).filter(models.Product.id.in_(ids)).all()
+    if len(rows) != len(ids):
+        raise HTTPException(status_code=404, detail="product not found")
+    for p in rows:
+        p.unit = payload.unit  # through the ORM, so each product's version goes up (concurrency)
+    db.commit()
+    for p in rows:
+        index_product(p)
+    return {"updated": len(rows)}
 
 
 @router.post("/assign-unassigned")
@@ -946,6 +978,7 @@ def list_sub_items(product_id: uuid.UUID, db: Session = Depends(get_db), scope: 
             sku=sub_product.sku,
             name=sub_product.name,
             description=sub_product.description,
+            unit=sub_product.unit,
             unit_price=sub_product.unit_price,
             currency=sub_product.currency,
             has_file=bool(sub_product.image_object_key),
@@ -993,6 +1026,7 @@ def add_sub_item(
         sku=sub_product.sku,
         name=sub_product.name,
         description=sub_product.description,
+        unit=sub_product.unit,
         unit_price=sub_product.unit_price,
         currency=sub_product.currency,
         has_file=bool(sub_product.image_object_key),

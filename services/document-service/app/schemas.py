@@ -152,7 +152,7 @@ class DocumentItemIn(BaseModel):
     product_id: Optional[uuid.UUID] = None
     description: Optional[str] = None
     remark: Optional[str] = None
-    unit: str = "Nos"
+    unit: Optional[str] = None  # omitted: the product's unit, or "No" for a manual line
     quantity: Decimal
     unit_price: Optional[Decimal] = None
     tax_rate: Decimal = Decimal("0")

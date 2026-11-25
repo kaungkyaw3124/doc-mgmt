@@ -48,6 +48,7 @@ _NIL_UUID = "00000000-0000-0000-0000-000000000000"
 # 422 first and never actually exercise the access check we're testing.
 _WRITE_ENDPOINTS = [
     ("post", "/products", {"json": {"name": "Access Level Test Product"}}),
+    ("post", "/products/set-unit", {"json": {"ids": [_NIL_UUID], "unit": "M"}}),
     ("post", "/products/bulk-import", {"files": {"excel_file": ("x.xlsx", b"not a real workbook", "application/octet-stream")}}),
     ("patch", f"/products/{_NIL_UUID}/trash", {}),
     ("patch", f"/products/{_NIL_UUID}/restore", {}),
