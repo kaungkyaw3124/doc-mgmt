@@ -46,11 +46,27 @@ def _rect(ws, img):
     x0 = sum(col_px[:a._from.col]) + EMU_to_pixels(a._from.colOff)
     w, h = EMU_to_pixels(a.ext.width), EMU_to_pixels(a.ext.height)
     first = r = a._from.row + 1
-    y = _row_px(ws, r)
+    y = _row_px(ws, r) - EMU_to_pixels(a._from.rowOff)
     while y < h:
         r += 1
         y += _row_px(ws, r)
     return x0, x0 + w, first, r
+
+
+def _ybox(ws, img):
+    """(top, bottom) px of an image from the sheet's top edge."""
+    a = img.anchor
+    top = sum(_row_px(ws, r) for r in range(1, a._from.row + 1)) + EMU_to_pixels(a._from.rowOff)
+    return top, top + EMU_to_pixels(a.ext.height)
+
+
+def _text_ybox(ws, c):
+    """(top, bottom) px of a cell's text: a top-aligned cell's text ends after its
+    lines (first line up to 12pt = 21 px, then 17 px per 10pt line); else the whole row."""
+    top = sum(_row_px(ws, r) for r in range(1, c.row))
+    if c.alignment.vertical == "top":
+        return top, top + 21 + 17 * str(c.value).count("\n")
+    return top, top + _row_px(ws, c.row)
 
 
 def _size(img):
@@ -88,8 +104,10 @@ def _assert_md_seal_in_last_column(ws, md):
     x0, x1, r0, _ = _rect(ws, md)
     assert x0 == pytest.approx(sum(col_px[:-1]) + 4, abs=3), "seal starts 4 px inside the last column"
     assert x1 <= sum(col_px), "seal ends inside the table"
-    regards = ws.cell(r0 - 1, len(col_px))
-    assert regards.value == "Regards," and regards.alignment.horizontal == "center"
+    # iteration 35: "Regards," ends the top-aligned text of the seal's own row, above the seal
+    regards = ws.cell(r0, len(col_px))
+    assert regards.value.endswith("Regards,") and regards.alignment.horizontal == "center"
+    assert _text_ybox(ws, regards)[1] <= _ybox(ws, md)[0]
     # the column is ~35 px wider than the seal, so the text centre is ~13 px right of the seal's
     assert sum(col_px[:-1]) + col_px[-1] / 2 == pytest.approx((x0 + x1) / 2, abs=15)
 
@@ -163,6 +181,7 @@ def test_no_image_covers_text_or_another_image(variant):
     ws = _ws(**VARIANTS[variant])
     col_px = _col_px(ws)
     rects = [_rect(ws, img) for img in ws._images]
+    yboxes = [_ybox(ws, img) for img in ws._images]
     merged = {r.min_row * 1000 + r.min_col: r for r in ws.merged_cells.ranges}
     for row in ws.iter_rows():
         for c in row:
@@ -171,11 +190,13 @@ def test_no_image_covers_text_or_another_image(variant):
             rng = merged.get(c.row * 1000 + c.column)
             c0, c1 = (rng.min_col, rng.max_col) if rng else (c.column, c.column)
             cx0, cx1 = sum(col_px[:c0 - 1]), sum(col_px[:c1])
-            for x0, x1, r0, r1 in rects:
-                assert not (r0 <= c.row <= r1 and x0 < cx1 and cx0 < x1), f"image covers {c.coordinate} {c.value!r}"
+            ty0, ty1 = _text_ybox(ws, c)
+            for (x0, x1, _, _), (y0, y1) in zip(rects, yboxes):
+                assert not (y0 < ty1 and ty0 < y1 and x0 < cx1 and cx0 < x1), f"image covers {c.coordinate} {c.value!r}"
     for i, a in enumerate(rects):
-        for b in rects[i + 1:]:
-            assert not (a[0] < b[1] and b[0] < a[1] and a[2] <= b[3] and b[2] <= a[3]), "images overlap"
+        for j in range(i + 1, len(rects)):
+            b, ya, yb = rects[j], yboxes[i], yboxes[j]
+            assert not (a[0] < b[1] and b[0] < a[1] and ya[0] < yb[1] and yb[0] < ya[1]), "images overlap"
     header = [r for r in rects if r[2] == 1]
     if header:
         assert max(r[3] for r in header) < _title_row(ws), "header images end above the title row"

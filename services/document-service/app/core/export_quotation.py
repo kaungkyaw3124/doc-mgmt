@@ -8,6 +8,8 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.properties import PageSetupProperties
+from openpyxl.worksheet.header_footer import HeaderFooterItem
+from openpyxl.utils.escape import unescape
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils.units import pixels_to_EMU
@@ -167,19 +169,44 @@ def _open_image(data, mime):
         return None  # bad/unsupported image format shouldn't block the whole export
 
 
-def _place(ws, img, col_px, x, row0, w, h):
+def _place(ws, img, col_px, x, row0, w, h, y=0):
     """Float img w x h px with its left edge x px from the sheet's left edge,
-    at the top of 0-based row row0."""
+    y px below the top of 0-based row row0."""
     col = 0
     while col < len(col_px) - 1 and x >= col_px[col]:
         x -= col_px[col]
         col += 1
     img.width, img.height = round(w), round(h)
     img.anchor = OneCellAnchor(
-        _from=AnchorMarker(col=col, colOff=pixels_to_EMU(round(x)), row=row0, rowOff=0),
+        _from=AnchorMarker(col=col, colOff=pixels_to_EMU(round(x)), row=row0, rowOff=pixels_to_EMU(round(y))),
         ext=XDRPositiveSize2D(pixels_to_EMU(round(w)), pixels_to_EMU(round(h))),
     )
     ws.add_image(img)
+
+
+LINE_PT = 12.75  # one 10pt Arial line, as Excel lays it out
+HEADING_PT = 15.75  # one 12pt bold line
+MAX_ROW_PT = 409  # Excel's tallest row
+
+
+def _line_count(lines, width):
+    """Lines a wrapped cell `width` characters wide needs. ~1 char per width unit
+    over-estimates (Excel fits ~1.1), so the row is never too short."""
+    return sum(max(1, math.ceil(len(line) / width)) for line in lines)
+
+
+class _Footer(HeaderFooterItem):
+    """openpyxl writes footer line breaks as _x000a_, which LibreOffice prints
+    literally; a plain line break works in Excel and LibreOffice."""
+    def __str__(self):
+        return unescape(super().__str__())
+
+
+def _footer_lines(company):
+    """Customer Service footer lines, like the PDF's; empty values left out, none -> []."""
+    company = company or {}
+    lines = [f"{label}: {company.get(key)}"[:100] for label, key in (("Email", "support_email"), ("Phone", "contact_no")) if company.get(key)]
+    return ["Customer Service", *lines] if lines else []
 
 
 def is_letterhead(company, logo_bytes, logo_mime):
@@ -378,7 +405,17 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     # left/right/bottom 0.5. Excel's own header/footer areas sit inside
     # those margins, so keep them smaller (0.2) or they would push the
     # printed body further in than the user asked for.
-    ws.page_margins = PageMargins(top=0.3, left=0.5, right=0.5, bottom=0.5, header=0.2, footer=0.2)
+    # The Customer Service footer prints at the bottom of every page, like the
+    # PDF: 3 lines at 8pt (~0.45in) above the 0.2in footer margin, so the body
+    # stops 0.9in from the bottom edge and never runs into it.
+    footer = _footer_lines(company)
+    ws.page_margins = PageMargins(top=0.3, left=0.5, right=0.5, bottom=0.9 if footer else 0.5, header=0.2, footer=0.2)
+    if footer:
+        ws.oddFooter = _Footer()
+        lines = [line.replace("&", "&&") for line in footer]  # "&" starts a footer code; "&B" toggles bold
+        ws.oddFooter.left.text = "\n".join(["&B" + lines[0] + "&B", *lines[1:]])
+        ws.oddFooter.left.size = 8
+        ws.oddFooter.left.font = "Arial,Regular"
     row += 1
 
     main_item_rows = []  # only these contribute to the Total — sub-item rows are informational, already covered by the parent's price
@@ -497,55 +534,65 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         total_cell.alignment = Alignment(shrink_to_fit=True)
         row += 2
 
-    ws[f"A{row}"] = "Terms and Conditions"
-    ws[f"A{row}"].font = Font(name="Arial", bold=True, size=12)
-    row += 1
-    terms_text = document.terms_and_conditions or DEFAULT_TERMS
-    for line in terms_text.split("\n"):
-        ws.merge_cells(f"A{row}:{last_col}{row}")
-        ws[f"A{row}"] = _safe_str(line)
-        ws[f"A{row}"].font = Font(name="Arial", size=10)
+    # Terms, "Regards," and the MD seal share ONE row: Excel and LibreOffice never
+    # split a row across pages, so this tail always prints together and the seal
+    # can't cross a page break. (Manual page breaks can't do it: Excel ignores
+    # them under Fit To.) Terms (A to the column before last) and the last column
+    # are both top-aligned with the same line heights, so "Regards," lands on the
+    # line after the last Terms line and the seal right below it, as before.
+    # Name/position used to be printed under the seal image too, but the seal
+    # itself already carries the director's name and title, so the seal stands
+    # alone; name/position text is only the fallback for a director with no seal.
+    terms = (document.terms_and_conditions or DEFAULT_TERMS).split("\n")
+    md_seal = _open_image(director_seal_bytes, director_seal_mime) if director else None
+    seal_w, seal_h = fit_inside(md_seal.width, md_seal.height, MD_SEAL_BOX[0] * scale, MD_SEAL_BOX[1] * scale) if md_seal else (0, 0)
+    sign_pt = 2 * LINE_PT + (seal_h * 0.75 + 4 if md_seal else 2 * LINE_PT if director else 0)  # blank line + Regards + seal or name/position
+    text_width = sum(col_widths[:-1])
+    # Terms too long for one row: the first lines print in their own rows above it.
+    head = []
+    while len(terms) > 1 and HEADING_PT + _line_count(terms, text_width) * LINE_PT + sign_pt > MAX_ROW_PT:
+        head.append(terms.pop(0))
+    if head:
+        ws[f"A{row}"] = "Terms and Conditions"
+        ws[f"A{row}"].font = Font(name="Arial", bold=True, size=12)
         row += 1
-    row += 1
+        for line in head:
+            ws.merge_cells(f"A{row}:{last_col}{row}")
+            ws[f"A{row}"] = _safe_str(line)
+            ws[f"A{row}"].font = Font(name="Arial", size=10)
+            row += 1
 
-    # Name/position used to be printed under the seal image too, but the
-    # seal itself already carries the director's name and title — showing
-    # both was redundant, so the seal now stands alone whenever one was
-    # actually placed. Name/position text is kept ONLY as a fallback for
-    # a director with no seal uploaded yet, so the signature area is
-    # never left completely blank.
+    before_last = get_column_letter(len(col_widths) - 1)
+    ws.merge_cells(f"A{row}:{before_last}{row}")
+    heading = [] if head else [TextBlock(InlineFont(rFont="Arial", sz=12, b=True), "Terms and Conditions\n")]
+    ws[f"A{row}"] = CellRichText(*heading, TextBlock(InlineFont(rFont="Arial", sz=10), "\n".join(terms)))  # rich text: never a formula
+    ws[f"A{row}"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws[f"A{row}"].font = Font(name="Arial", size=10)  # empty lines take the cell font: same pitch in both cells
+    heading_pt = 0 if head else HEADING_PT
+    height = heading_pt + _line_count(terms, text_width) * LINE_PT + 4
     if director:
-        seal_row = row
-        md_seal = _open_image(director_seal_bytes, director_seal_mime)
+        bold = InlineFont(rFont="Arial", sz=10, b=True)
+        # empty lines level with the Terms heading and lines, then one blank line
+        spacer = ([TextBlock(InlineFont(rFont="Arial", sz=12, b=True), "\u00a0\n")] if heading else []) + [TextBlock(InlineFont(rFont="Arial", sz=10), "\n" * (len(terms) + 1))]
+        sign = [TextBlock(bold, "Regards,")]
+        if not md_seal:
+            sign += [TextBlock(bold, "\n" + (director.get("name") or "")),
+                     TextBlock(InlineFont(rFont="Arial", sz=9, i=True, color="666666"), "\n" + (director.get("position") or "Managing Director"))]
+        ws[f"{last_col}{row}"] = CellRichText(*spacer, *sign)
+        ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center", vertical="top", wrap_text=True)
+        ws[f"{last_col}{row}"].font = Font(name="Arial", size=10)
+        regards_end = heading_pt + (len(terms) + 2) * LINE_PT
         if md_seal:
-            # "Regards," sign-off on its own row just above the seal (same as
-            # the PDF), in the last column (G, or I with labour), where the
-            # user drew the seal. The seal is anchored to the NEXT row's top
-            # edge, so it can't cover the text.
-            ws[f"{last_col}{row}"] = "Regards,"
-            ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
-            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
-            row += 1
-            w, h = fit_inside(md_seal.width, md_seal.height, MD_SEAL_BOX[0] * scale, MD_SEAL_BOX[1] * scale)
             # 4 px inside the last column, pulled left only if it would pass the table's right edge
-            x = min(sum(col_px[:-1]) + 4, sum(col_px) - w)
-            _place(ws, md_seal, col_px, x, row - 1, w, h)
-            row += math.ceil(h / ROW_PX) + 1  # leave room for the image
+            x = min(sum(col_px[:-1]) + 4, sum(col_px) - seal_w)
+            _place(ws, md_seal, col_px, x, row - 1, seal_w, seal_h, y=(regards_end + 4) * 4 / 3)
+            height = max(height, regards_end + 4 + seal_h * 0.75 + 6)
         else:
-            ws[f"{last_col}{row}"] = "Regards,"
-            ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
-            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
-            row += 1
-            ws[f"{last_col}{row}"] = _safe_str(director.get("name", ""))
-            ws[f"{last_col}{row}"].font = Font(name="Arial", bold=True)
-            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
-            row += 1
-            ws[f"{last_col}{row}"] = _safe_str(director.get("position")) or "Managing Director"
-            ws[f"{last_col}{row}"].font = Font(name="Arial", size=9, italic=True, color="666666")
-            ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center")
-            row += 1
-        row = max(row, seal_row + 7) + 1
+            height = max(height, regards_end + 2 * LINE_PT + 4)
+    ws.row_dimensions[row].height = min(MAX_ROW_PT, height)
+    row += 2
 
+    print_end = row - 2  # the tail row; the Customer Service block below is for the screen, the page footer prints it
     ws[f"A{row}"] = "Customer Service"
     ws[f"A{row}"].font = Font(name="Arial", bold=True)
     row += 1
@@ -569,7 +616,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.orientation = "portrait"
     ws.print_options.horizontalCentered = True
-    ws.print_area = f"A1:{last_col}{row}"
+    ws.print_area = f"A1:{last_col}{print_end}"
 
     buffer = BytesIO()
     wb.save(buffer)
