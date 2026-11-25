@@ -312,6 +312,8 @@ async function doLogout(message = '', broadcast = true) {
     try { localStorage.setItem(LOGOUT_KEY, Date.now() + '|' + message); } catch (e) {}
   }
   try {
+    sessionStorage.removeItem(CART_KEY);
+    localStorage.removeItem('ledger_group_view'); // GROUP_VIEW_KEY (declared later in this file)
     localStorage.removeItem('ledger_token'); // cleanup of any token stored by a pre-cookie-migration session
     if (message) sessionStorage.setItem(LOGOUT_MESSAGE_KEY, message);
   } catch (e) {}
@@ -362,6 +364,7 @@ async function loadMyGroups(me) {
   importSelect.value = defaultGroupId;
   importWrap.style.display = groupChoiceNeeded() ? '' : 'none';
   refreshMoveControls();
+  restoreGroupView(me);
 }
 
 function groupChoiceNeeded() {
@@ -375,7 +378,10 @@ function showGroupSelect(formId, creating) {
   const select = wrap.querySelector('select');
   wrap.style.display = show ? '' : 'none';
   select.required = show;
-  if (creating) select.value = defaultGroupId;
+  // a superuser viewing one group creates in it by default (still changeable)
+  const viewing = currentUserIsSuperuser && !['', 'none'].includes(groupSwitcher.value) ? groupSwitcher.value : '';
+  if (creating) select.value = viewing || defaultGroupId;
+  if (select.selectedIndex < 0) select.value = defaultGroupId;
   if (formId === 'doc-form') refreshDocGroupPickers();
 }
 
@@ -420,7 +426,7 @@ async function enterApp() {
   // Defence in depth (logout reloads the page anyway): start from "nothing
   // permission-gated is shown, Documents view", then let /admin/me show
   // what this user may see.
-  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap', 'unassigned-card']
+  ['admin-nav-item', 'backup-nav-item', 'groups-card', 'group-select-wrap', 'all-users-card', 'new-group-form-wrap', 'category-split-btn-wrap', 'unassigned-card', 'group-switcher-wrap']
     .forEach(id => { document.getElementById(id).style.display = 'none'; });
   currentUserIsSuperuser = false;
   currentUserCanDeleteDocuments = false;
@@ -431,6 +437,7 @@ async function enterApp() {
     const me = await apiFetch('/admin/me');
     document.getElementById('whoami-username').textContent = me.username + (me.is_superuser ? ' (superuser)' : '');
     currentUserIsSuperuser = me.is_superuser;
+    restoreCart(me.username);
     const isAnyGroupAdmin = me.groups && me.groups.some(g => g.is_group_admin);
     const canManageUsers = me.is_superuser || isAnyGroupAdmin;
     if (canManageUsers) {
@@ -1140,7 +1147,7 @@ async function loadDocuments() {
     applyFilterAndSort('documents');
   } catch (err) {
     if (isStaleLoad('documents', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="13">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -1244,12 +1251,13 @@ function renderDocumentDetailContent(doc, subItemsByProductId) {
 function renderDocumentsTable(docs) {
   const tbody = document.getElementById('documents-tbody');
   if (!docs.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">No documents match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="13">No documents match.</td></tr>';
     return;
   }
   const statusOptions = ['draft', 'sent', 'paid', 'void', 'expired'];
   tbody.innerHTML = docs.map(d => `
     <tr>
+      ${selectCell('documents', d)}
       <td class="mono"><button class="link-btn-inline" data-view-doc-id="${d.id}">${escapeHtml(d.doc_number)}</button></td>
       <td><span class="${stampClass(d.doc_type)}">${escapeHtml(d.doc_type)}</span></td>
       <td>${escapeHtml(docCustomerName(d))}</td>
@@ -1575,18 +1583,19 @@ async function loadProjects() {
     applyFilterAndSort('projects');
   } catch (err) {
     if (isStaleLoad('projects', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderProjectsTable(projects) {
   const tbody = document.getElementById('projects-tbody');
   if (!projects.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No projects match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No projects match.</td></tr>';
     return;
   }
   tbody.innerHTML = projects.map(p => `
     <tr>
+      ${selectCell('projects', p)}
       <td>${escapeHtml(p.name)}</td>
       <td class="mono">${escapeHtml(p.budget_year || '—')}</td>
       <td>${fmtDate(p.created_at)}</td>
@@ -2211,18 +2220,19 @@ async function loadCustomers() {
     if (cachedDocuments.length) applyFilterAndSort('documents');  // the list shows customer names; it may have rendered first
   } catch (err) {
     if (isStaleLoad('customers', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderCustomersTable(customers) {
   const tbody = document.getElementById('customers-tbody');
   if (!customers.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No customers match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No customers match.</td></tr>';
     return;
   }
   tbody.innerHTML = customers.map(c => `
     <tr>
+      ${selectCell('customers', c)}
       <td><button class="link-btn-inline" data-view-customer-id="${c.id}">${escapeHtml(c.name)}</button></td>
       <td>${c.organization ? escapeHtml(c.organization) : `<span style="color:var(--text-dim);">${escapeHtml(c.name)}</span>`}</td>
       <td>${escapeHtml(c.email || '—')}</td>
@@ -2291,10 +2301,31 @@ let editingProductId = null;
 let cachedProducts = [];
 
 // ---------- cart ----------
-// Lives only in memory for this browser tab (resets on page refresh) — a
+// Per browser tab, kept in sessionStorage so a reload keeps it — a
 // lightweight way to pick several products while browsing, then drop them
-// all into a new document's line items at once.
+// all into a new document's line items at once. Stored with its owner's
+// username: another user logging in on this tab never sees it.
+const CART_KEY = 'ledger_cart';
 let cartItems = [];
+let cartOwner = '';
+function saveCart() {
+  try { sessionStorage.setItem(CART_KEY, JSON.stringify({ user: cartOwner, items: cartItems })); } catch (e) {}
+}
+function restoreCart(username) {
+  cartOwner = username;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CART_KEY) || 'null');
+    cartItems = saved && saved.user === username && Array.isArray(saved.items) ? saved.items : [];
+  } catch (e) { cartItems = []; }
+  updateCartBadge();
+}
+function pruneCart() { // after products load: drop lines whose product is gone
+  const ids = new Set(cachedProducts.map(p => p.id));
+  const kept = cartItems.filter(p => ids.has(p.id));
+  if (kept.length === cartItems.length) return;
+  cartItems = kept;
+  updateCartBadge();
+}
 
 // ---------- product sub-items (bundle components) ----------
 // Create mode: additions are held locally (pendingSubItems) until the
@@ -2424,6 +2455,7 @@ function emptyCart() {
 }
 
 function updateCartBadge() {
+  saveCart(); // every add/remove/qty/empty path ends here
   const badge = document.getElementById('cart-count-badge');
   const totalQty = cartItems.reduce((sum, p) => sum + (p.quantity || 1), 0);
   badge.textContent = totalQty ? `(${totalQty})` : '';
@@ -2840,8 +2872,9 @@ document.getElementById('product-duplicates-close').addEventListener('click', ()
   document.getElementById('product-duplicates-modal').classList.remove('active');
 });
 
-function renderDuplicateGroups(title, color, groups) {
+function renderDuplicateGroups(title, color, groups, dismissable = false) {
   const tables = groups.map(group => `
+    ${dismissable ? `<div style="text-align:right; margin-bottom:4px;"><button type="button" class="link-btn-inline" data-dup-dismiss-ids="${group.map(p => p.id).join(',')}" title="These are different products — stop warning me">Not a duplicate</button></div>` : ''}
     <table style="margin-bottom:12px;">
       <thead><tr><th>Item Number</th><th>Name</th><th>Description</th><th>Category</th><th>Delete</th></tr></thead>
       <tbody>${group.map(p => `
@@ -2858,13 +2891,27 @@ function renderDuplicateGroups(title, color, groups) {
     + (tables || '<p style="color:var(--text-dim); font-size:13px;">None found.</p>');
 }
 
+// "Not a duplicate" pairs, collapsed at the bottom; Restore lets a pair warn again.
+function renderHiddenPairs(pairs) {
+  if (!pairs.length) return '';
+  const rows = pairs.map(d => `
+    <tr>
+      <td>${d.products.map(p => `<span class="mono">${escapeHtml(p.sku)}</span> ${escapeHtml(p.description || '—')}`).join('<br>')}</td>
+      <td>${escapeHtml(d.products[0].name)}</td>
+      <td><button type="button" class="link-btn-inline" data-dup-restore-id="${d.id}">Restore</button></td>
+    </tr>`).join('');
+  return `<details style="margin-top:16px;"><summary>Hidden pairs (${pairs.length})</summary>
+    <table style="margin-top:8px;"><thead><tr><th>Products</th><th>Name</th><th></th></tr></thead><tbody>${rows}</tbody></table></details>`;
+}
+
 async function loadProductDuplicates() {
   const content = document.getElementById('product-duplicates-content');
   content.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Loading…</p>';
   try {
-    const result = await apiFetch('/products/duplicates');
+    const [result, hidden] = await Promise.all([apiFetch('/products/duplicates'), apiFetch('/products/duplicates/dismissed')]);
     content.innerHTML = renderDuplicateGroups('Exact duplicates', 'var(--danger)', result.exact_groups)
-      + renderDuplicateGroups('Same name', 'inherit', result.same_name_groups);
+      + renderDuplicateGroups('Same name', 'inherit', result.same_name_groups, true)
+      + renderHiddenPairs(hidden);
     content.querySelectorAll('[data-dup-trash-id]').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm(`Move "${btn.dataset.dupTrashSku}" to the recycle bin? You can restore it from there later.`)) return;
@@ -2873,6 +2920,30 @@ async function loadProductDuplicates() {
           await apiFetch('/products/' + btn.dataset.dupTrashId + '/trash', { method: 'PATCH' });
           loadProductDuplicates();
           loadProducts();
+        } catch (err) {
+          showBanner('product-duplicates-banner', err.message);
+        }
+      });
+    });
+    content.querySelectorAll('[data-dup-dismiss-ids]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('product-duplicates-banner', '');
+        try {
+          await apiFetch('/products/duplicates/dismiss', { method: 'POST', body: JSON.stringify({ product_ids: btn.dataset.dupDismissIds.split(',') }) });
+          showSuccessTick('Marked as not a duplicate');
+          loadProductDuplicates();
+        } catch (err) {
+          showBanner('product-duplicates-banner', err.message);
+        }
+      });
+    });
+    content.querySelectorAll('[data-dup-restore-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        showBanner('product-duplicates-banner', '');
+        try {
+          await apiFetch('/products/duplicates/dismissed/' + btn.dataset.dupRestoreId, { method: 'DELETE' });
+          showSuccessTick('Restored');
+          loadProductDuplicates();
         } catch (err) {
           showBanner('product-duplicates-banner', err.message);
         }
@@ -3137,12 +3208,13 @@ async function loadProducts() {
     const products = await apiFetch('/products');
     if (isStaleLoad('products', mySeq)) return;
     cachedProducts = products;
+    pruneCart();
     refreshLineItemProductOptions();
     refreshProductCategoryFilter();
     applyFilterAndSort('products');
   } catch (err) {
     if (isStaleLoad('products', mySeq)) return;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -3347,11 +3419,12 @@ function renderProductSubItemsReadonly(subItems) {
 function renderProductsTable(products) {
   const tbody = document.getElementById('products-tbody');
   if (!products.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No products match.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No products match.</td></tr>';
     return;
   }
   tbody.innerHTML = products.map(p => `
     <tr>
+      ${selectCell('products', p)}
       <td class="mono">${escapeHtml(p.sku)}</td>
       <td>
         <button class="link-btn-inline" data-view-product-id="${p.id}">${escapeHtml(p.name)}</button>
@@ -3681,10 +3754,12 @@ function applyFilterAndSort(tableName) {
   const config = tableConfig[tableName];
   const q = document.getElementById(config.filterInputId).value.trim().toLowerCase();
   let list = q ? config.cache().filter(item => config.matchFn(item, q)) : config.cache().slice();
+  const filterKey = [q]; // every filter value; a change clears the row selection
 
   if (config.extraFilters) {
     for (const ef of config.extraFilters) {
       const val = document.getElementById(ef.selectId).value;
+      filterKey.push(val);
       if (val) list = list.filter(item => ef.matchFn(item, val));
     }
   }
@@ -3692,6 +3767,7 @@ function applyFilterAndSort(tableName) {
   if (config.dateFilter) {
     const fromVal = document.getElementById(config.dateFilter.fromId).value;
     const toVal = document.getElementById(config.dateFilter.toId).value;
+    filterKey.push(fromVal, toVal);
     if (fromVal) {
       const fromTime = new Date(fromVal).getTime();
       list = list.filter(item => new Date(item[config.dateFilter.field]).getTime() >= fromTime);
@@ -3712,7 +3788,19 @@ function applyFilterAndSort(tableName) {
       return 0;
     });
   }
+  const sel = selection[tableName];
+  if (sel) {
+    // New filters or a reloaded list (new cache array): drop the selection so a
+    // bulk action never touches rows that are no longer shown. Sorting keeps it.
+    const key = JSON.stringify(filterKey);
+    if (key !== sel.key || config.cache() !== sel.cache) sel.ids.clear();
+    sel.key = key;
+    sel.cache = config.cache();
+    sel.shown = list.map(item => item.id);
+  }
   config.render(list);
+  if (sel) syncSelection(tableName);
+  if (sel && currentUserIsSuperuser) refreshGroupSwitcher(); // option counts follow the open list
 }
 
 // ---------- moving records between groups (superuser, loop iteration 20) ----------
@@ -3732,17 +3820,16 @@ let moveState = null; // {table, ids}
 
 function groupCell(table, row) {
   if (!currentUserIsSuperuser) return `<td>${groupTag(row.group_id)}</td>`;
-  return `<td style="white-space:nowrap;"><input type="checkbox" class="move-select" data-move-table="${table}" value="${row.id}" aria-label="Select for moving" style="width:auto; margin:0 4px 0 0;">${groupTag(row.group_id)}
+  return `<td style="white-space:nowrap;">${groupTag(row.group_id)}
     <button class="link-btn-inline" data-move-table="${table}" data-move-id="${row.id}">Move…</button></td>`;
 }
 
 Object.keys(MOVE_LINK_LABELS).forEach(table => {
-  const filter = document.createElement('select');
-  filter.id = table + '-group-filter';
-  filter.setAttribute('aria-label', 'Filter by group');
-  filter.style.maxWidth = '240px';
-  filter.style.display = 'none';
-  filter.addEventListener('change', () => applyFilterAndSort(table));
+  const showing = document.createElement('span');
+  showing.id = table + '-group-showing';
+  showing.className = 'group-tag';
+  showing.style.cssText = 'display:none; font-size:12px; padding:2px 8px; border-radius:8px; background:var(--rust); color:#fff; margin-top:6px; white-space:nowrap;';
+  document.querySelector(`#view-${table} .view-header > div`).appendChild(showing);
   const bulk = document.createElement('button');
   bulk.type = 'button';
   bulk.className = 'btn-secondary';
@@ -3750,16 +3837,15 @@ Object.keys(MOVE_LINK_LABELS).forEach(table => {
   bulk.textContent = 'Move selected to group…';
   bulk.style.display = 'none';
   bulk.addEventListener('click', () => {
-    const ids = [...document.querySelectorAll(`.move-select[data-move-table="${table}"]:checked`)].map(cb => cb.value);
+    const ids = [...selection[table].ids];
     if (!ids.length) { showErrorCross('Select rows first'); return; }
     openMoveModal(table, ids);
   });
   const reset = document.getElementById(table + '-reset-filters-btn');
-  reset.parentNode.insertBefore(filter, reset);
   reset.parentNode.insertBefore(bulk, reset.nextSibling);
-  reset.addEventListener('click', () => { filter.value = ''; applyFilterAndSort(table); });
+  // The global sidebar switcher (iteration 29); Reset filters leaves it alone.
   tableConfig[table].extraFilters = (tableConfig[table].extraFilters || []).concat({
-    selectId: filter.id,
+    selectId: 'group-switcher',
     matchFn: (item, val) => (val === 'none' ? !item.group_id : item.group_id === val),
   });
   document.getElementById(table + '-tbody').addEventListener('click', e => {
@@ -3768,19 +3854,153 @@ Object.keys(MOVE_LINK_LABELS).forEach(table => {
   });
 });
 
+// ---------- select all (loop iteration 24) ----------
+// Every user gets a checkbox column on the four lists. The selection is a Set
+// of ids per list (not read from the DOM) so it survives re-rendering and
+// sorting; applyFilterAndSort clears it when filters change or the list
+// reloads. "Select all" picks exactly the rows currently shown (the lists are
+// not paginated). Bulk buttons (Move selected…, iteration 25's Add to cart)
+// live in the selection bar and read selection[table].ids.
+const selection = {}; // table -> {ids: Set, shown: [id], key, cache, bar, count}
+
+function selectCell(table, row) {
+  const checked = selection[table].ids.has(row.id) ? ' checked' : '';
+  return `<td><input type="checkbox" class="row-select" value="${row.id}" aria-label="Select row"${checked} style="width:auto; margin:0;"></td>`;
+}
+
+function syncSelection(table) {
+  const s = selection[table];
+  const n = s.ids.size; // always a subset of s.shown (cleared on every filter change)
+  const all = document.getElementById(table + '-select-all');
+  all.disabled = !s.shown.length;
+  all.checked = n > 0 && n === s.shown.length;
+  all.indeterminate = n > 0 && n < s.shown.length;
+  s.bar.style.display = n ? 'flex' : 'none';
+  s.count.textContent = `${n} selected`;
+  if (s.cartBtn) s.cartBtn.textContent = `Add to cart (${n})`;
+}
+
+Object.keys(MOVE_LINK_LABELS).forEach(table => {
+  const tbody = document.getElementById(table + '-tbody');
+  const all = document.getElementById(table + '-select-all');
+  const bar = document.createElement('div');
+  bar.id = table + '-selection-bar';
+  bar.setAttribute('aria-live', 'polite');
+  bar.style.cssText = 'display:none; position:sticky; top:0; z-index:2; gap:10px; align-items:center; padding:8px 10px; margin-bottom:8px; background:var(--paper-dim); border:1px solid var(--hairline); border-radius:6px;';
+  bar.innerHTML = `<strong id="${table}-selection-count">0 selected</strong><button type="button" class="btn-secondary">Clear</button>`;
+  bar.appendChild(document.getElementById(table + '-move-selected-btn'));
+  tbody.closest('table').before(bar);
+  const s = selection[table] = { ids: new Set(), shown: [], key: null, cache: null, bar, count: bar.querySelector('strong') };
+  const clear = () => { s.ids.clear(); applyFilterAndSort(table); };
+  bar.querySelector('button').addEventListener('click', clear);
+  document.getElementById(table + '-reset-filters-btn').addEventListener('click', clear);
+  // one delegated handler per table, no per-row listeners
+  tbody.addEventListener('change', e => {
+    if (!e.target.classList.contains('row-select')) return;
+    if (e.target.checked) s.ids.add(e.target.value); else s.ids.delete(e.target.value);
+    syncSelection(table);
+  });
+  all.addEventListener('change', () => {
+    if (all.checked) s.shown.forEach(id => s.ids.add(id)); else s.ids.clear();
+    tbody.querySelectorAll('.row-select').forEach(cb => { cb.checked = all.checked; });
+    syncSelection(table);
+  });
+});
+
+// ---------- add selected products to the cart (loop iteration 25) ----------
+// Quantity 1 each; products already in the cart are skipped (unlike the
+// single "+ Add to cart", which increments). The selection is always a subset
+// of the shown rows, which come from cachedProducts (the list is not paged).
+const BULK_CART_MAX = 200;
+function addSelectedToCart() {
+  const s = selection.products;
+  const ids = [...s.ids];
+  if (ids.length > BULK_CART_MAX) {
+    showErrorCross(`Select up to ${BULK_CART_MAX} at a time; ${ids.length} selected`);
+    return;
+  }
+  const inCart = new Set(cartItems.map(p => p.id));
+  const fresh = ids.filter(id => !inCart.has(id)).map(id => cachedProducts.find(p => p.id === id));
+  if (fresh.some(p => !p)) { showErrorCross('The product list changed — select again'); return; } // never add fewer silently
+  fresh.forEach(p => cartItems.push(Object.assign({}, p, { quantity: 1 })));
+  updateCartBadge();
+  const skipped = ids.length - fresh.length;
+  showSuccessTick(skipped ? `${fresh.length} added, ${skipped} already in cart` : `${fresh.length} added to cart`);
+  s.ids.clear();
+  applyFilterAndSort('products');
+}
+(() => {
+  const btn = selection.products.cartBtn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary';
+  btn.id = 'products-cart-selected-btn';
+  btn.addEventListener('click', addSelectedToCart);
+  selection.products.bar.appendChild(btn);
+})();
+
 function refreshMoveControls() {
   const options = myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  refreshGroupSwitcher();
   Object.keys(MOVE_LINK_LABELS).forEach(table => {
-    const filter = document.getElementById(table + '-group-filter');
-    const current = filter.value;
-    filter.innerHTML = '<option value="">All groups</option>' + options + '<option value="none">Unassigned</option>';
-    filter.value = current;
-    filter.style.display = currentUserIsSuperuser ? '' : 'none';
     document.getElementById(table + '-move-selected-btn').style.display = currentUserIsSuperuser ? '' : 'none';
   });
   document.getElementById('move-group-target').innerHTML = '<option value="">— choose a group —</option>' + options;
   document.getElementById('unassigned-target').innerHTML = '<option value="">— choose a group —</option>' + options;
 }
+
+// ---------- global group switcher (superuser, loop iteration 29) ----------
+// One "Viewing" select in the sidebar filters Products, Documents, Customers
+// and Projects through their extraFilters (value '' = all, 'none' =
+// unassigned). A view filter only — the server scope is unchanged. Kept in
+// localStorage as {user, id}, so another user never inherits it; cleared on logout.
+const GROUP_VIEW_KEY = 'ledger_group_view';
+const groupSwitcher = document.getElementById('group-switcher');
+let groupViewOwner = '';
+
+function groupViewName() {
+  const v = groupSwitcher.value;
+  return !v ? '' : v === 'none' ? 'Unassigned' : (groupNames[v] || 'Other group');
+}
+
+// Options show counts for the list that is open (none on other pages).
+function refreshGroupSwitcher() {
+  const view = (document.querySelector('.nav-item.active') || {}).dataset;
+  const rows = view && MOVE_LINK_LABELS[view.view] ? tableConfig[view.view].cache() : null;
+  const count = id => rows ? ` (${rows.filter(r => (id === 'none' ? !r.group_id : r.group_id === id)).length})` : '';
+  const current = groupSwitcher.value;
+  groupSwitcher.innerHTML = `<option value="">All groups${rows ? ` (${rows.length})` : ''}</option>` +
+    myGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}${count(g.id)}</option>`).join('') +
+    `<option value="none">Unassigned${count('none')}</option>`;
+  groupSwitcher.value = [...groupSwitcher.options].some(o => o.value === current) ? current : '';
+}
+
+function applyGroupView() {
+  const name = groupViewName();
+  Object.keys(MOVE_LINK_LABELS).forEach(table => {
+    applyFilterAndSort(table); // the filter key changed, so this also clears the selection
+    const label = document.getElementById(table + '-group-showing');
+    label.textContent = `Showing: ${name}`;
+    label.style.display = name ? 'inline-block' : 'none';
+  });
+  refreshDeleteAllLabels();
+}
+
+function restoreGroupView(me) {
+  groupViewOwner = me.username;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(GROUP_VIEW_KEY) || 'null'); } catch (e) {}
+  groupSwitcher.value = '';
+  if (me.is_superuser && saved && saved.user === me.username) groupSwitcher.value = saved.id;
+  if (groupSwitcher.selectedIndex < 0) groupSwitcher.value = ''; // that group is gone
+  document.getElementById('group-switcher-wrap').style.display = me.is_superuser ? '' : 'none';
+  applyGroupView();
+}
+
+groupSwitcher.addEventListener('change', () => {
+  try { localStorage.setItem(GROUP_VIEW_KEY, JSON.stringify({ user: groupViewOwner, id: groupSwitcher.value })); } catch (e) {}
+  applyGroupView();
+});
+document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', refreshGroupSwitcher));
 
 function describeMoved(moved) {
   const parts = Object.entries(moved).filter(([, n]) => n).map(([e, n]) => `${n} ${n === 1 ? e.slice(0, -1) : e}`);
@@ -4097,6 +4317,7 @@ async function loadEditUserGroups() {
           await apiFetch('/admin/groups/' + btn.dataset.removeGroupId + '/members/' + encodeURIComponent(user.username), { method: 'DELETE' });
           loadEditUserGroups();
           loadEditUserRoles(); // removing a group also drops any roles held via it — refresh both
+          loadEditUserProjectAccess(); // the grantable projects follow the user's groups
         } catch (err) {
           showBanner('edit-user-banner', err.message);
         }
@@ -4131,6 +4352,7 @@ document.getElementById('edit-user-add-group-btn').addEventListener('click', asy
   try {
     await apiFetch('/admin/groups/' + groupId + '/members', { method: 'POST', body: JSON.stringify({ username: user.username }) });
     loadEditUserGroups();
+    loadEditUserProjectAccess();
   } catch (err) {
     showBanner('edit-user-banner', err.message);
   }
@@ -4140,19 +4362,16 @@ async function loadEditUserProjectAccess() {
   const container = document.getElementById('edit-user-project-checkboxes');
   container.innerHTML = '<span style="color:var(--text-dim); font-size:13px;">Loading…</span>';
   try {
-    let availableProjects;
-    if (currentUserIsSuperuser) {
-      availableProjects = cachedProjects;
-    } else {
-      const available = await apiFetch('/admin/users/' + editingUserId + '/available-projects');
-      availableProjects = cachedProjects.filter(p => available.project_ids.includes(p.id));
-    }
-
+    // Server decides the pool: projects of the user's own groups (iteration 26).
+    const available = await apiFetch('/admin/users/' + editingUserId + '/available-projects');
+    const availableProjects = cachedProjects.filter(p => available.project_ids.includes(p.id));
     const currentGrants = await apiFetch('/admin/users/' + editingUserId + '/project-access');
+    // Old grants outside the pool still narrow what the user sees — list them so they can be removed.
+    const strayGrants = currentGrants.filter(id => !available.project_ids.includes(id));
 
-    if (!availableProjects.length) {
+    if (!availableProjects.length && !strayGrants.length) {
       container.innerHTML = currentUserIsSuperuser
-        ? '<span style="color:var(--text-dim); font-size:13px;">No projects created yet.</span>'
+        ? '<span style="color:var(--text-dim); font-size:13px;">No projects in this user\'s groups yet.</span>'
         : '<span style="color:var(--text-dim); font-size:13px;">No shared group has project access yet — ask a superuser to grant some to your group first.</span>';
       return;
     }
@@ -4160,9 +4379,16 @@ async function loadEditUserProjectAccess() {
     container.innerHTML = availableProjects.map(p => `
       <label>
         <input type="checkbox" class="edit-user-project-cb" data-project-id="${p.id}" ${currentGrants.includes(p.id) ? 'checked' : ''}>
-        ${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}
+        ${escapeHtml(p.name)}${p.budget_year ? ' (' + escapeHtml(p.budget_year) + ')' : ''}${groupTag(p.group_id)}
       </label>
-    `).join('');
+    `).join('') + strayGrants.map(id => {
+      const p = cachedProjects.find(x => x.id === id);
+      return `
+      <label style="color:var(--danger);">
+        <input type="checkbox" class="edit-user-project-cb" data-project-id="${id}" checked>
+        ${p ? escapeHtml(p.name) + groupTag(p.group_id) : 'Deleted or hidden project'} — not in this user's groups; untick to remove
+      </label>`;
+    }).join('');
 
     container.querySelectorAll('.edit-user-project-cb').forEach(cb => {
       cb.addEventListener('change', async () => {
@@ -5006,8 +5232,9 @@ loadPublicGroups();
 })();
 
 // DEV-ONLY: delete-all BEGIN — temporary one-click wipes (loop iteration 15).
-// No confirm dialog, by request. Both services refuse them in production;
-// dev-config only decides whether the buttons are rendered.
+// Superuser only (iteration 29): dev-config is false for anyone else and both
+// services answer 403 too; refused in production. The four group-scoped wipes
+// follow the sidebar switcher (?group_id=); companies are shared, so they don't.
 const DELETE_ALL = [
   // [button id, API path, banner id, reload, noun]
   ['delete-all-products-btn', '/products', 'products-banner', () => loadProducts(), 'products'],
@@ -5025,12 +5252,23 @@ async function initDeleteAll() {
   DELETE_ALL.forEach(([id]) => { document.getElementById(id).style.display = enabled ? '' : 'none'; });
 }
 
+function refreshDeleteAllLabels() {
+  const v = groupSwitcher.value;
+  DELETE_ALL.forEach(([id, , , , noun]) => {
+    document.getElementById(id).textContent = noun === 'companies' ? 'Delete ALL companies (dev)'
+      : !v ? 'Delete ALL (dev)' : v === 'none' ? 'Delete ALL unassigned (dev)' : `Delete ALL in ${groupViewName()} (dev)`;
+  });
+}
+
 DELETE_ALL.forEach(([id, path, banner, reload, noun]) => {
   document.getElementById(id).addEventListener('click', async (e) => {
     const btn = e.currentTarget;
+    const v = noun === 'companies' ? '' : groupSwitcher.value;
+    const what = !v ? `ALL ${noun}` : v === 'none' ? `ALL unassigned ${noun}` : `ALL ${noun} in ${groupViewName()}`;
+    if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
     btn.disabled = true;
     try {
-      const res = await apiFetch(path, { method: 'DELETE' });
+      const res = await apiFetch(v ? `${path}?group_id=${encodeURIComponent(v)}` : path, { method: 'DELETE' });
       await reload();
       showBanner(banner, `Deleted ${res.deleted} ${noun}`, 'info');
     } catch (err) {

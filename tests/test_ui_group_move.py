@@ -33,7 +33,7 @@ def test_superuser_moves_a_document_with_its_customer_and_project(depts, admin):
             page = browser.new_context(viewport={"width": 1400, "height": 900}).new_page()
             _login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
             _list_text(page, "documents", "documents-tbody", number)
-            page.select_option("#documents-group-filter", ops["group_id"])
+            page.select_option("#group-switcher", ops["group_id"])
             row = page.locator("#documents-tbody tr", has_text=number)
             expect(row).to_contain_text(ops["group_name"])
             expect(page.locator("#documents-tbody tr")).to_have_count(1)  # filter: only Operations' row
@@ -50,7 +50,7 @@ def test_superuser_moves_a_document_with_its_customer_and_project(depts, admin):
             page.click("#move-group-submit")
             expect(page.locator(".tick-toast.tick-ok")).to_be_visible(timeout=10000)
             expect(page.locator("#move-group-modal.active")).to_have_count(0)
-            page.select_option("#documents-group-filter", city["group_id"])
+            page.select_option("#group-switcher", city["group_id"])
             expect(page.locator("#documents-tbody tr", has_text=number)).to_contain_text(city["group_name"], timeout=10000)
             _shot(page, "iter-20-after-move-superuser.png")
 
@@ -61,7 +61,7 @@ def test_superuser_moves_a_document_with_its_customer_and_project(depts, admin):
             expect(page.locator("#whoami-username")).not_to_have_text("—", timeout=15000)
             _list_text(page, "customers", "customers-tbody", f"Bulk B {token}")
             for c in (a, b):
-                page.check(f'.move-select[value="{c["id"]}"]')
+                page.check(f'.row-select[value="{c["id"]}"]')
             page.click("#customers-move-selected-btn")
             page.select_option("#move-group-target", ops["group_id"])
             expect(page.locator("#move-group-preview")).to_have_text("Will move: 2 customers", timeout=10000)
@@ -91,7 +91,7 @@ def test_superuser_moves_a_document_with_its_customer_and_project(depts, admin):
                 upage.wait_for_timeout(1500)
                 text = upage.locator("#documents-tbody").inner_text()
                 assert (number in text) is sees, (user["username"], text)
-                expect(upage.locator("#documents-group-filter")).to_be_hidden()  # no move controls
+                expect(upage.locator("#group-switcher")).to_be_hidden()  # no move controls
                 assert upage.locator("[data-move-id]").count() == 0
                 upage.click(".nav-item[data-view=customers]")
                 upage.wait_for_timeout(1000)

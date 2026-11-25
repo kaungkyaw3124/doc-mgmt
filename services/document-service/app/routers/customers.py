@@ -118,17 +118,18 @@ def restore_customer(
 # DEV-ONLY: delete-all BEGIN — one-click wipe for dev testing (loop iteration 15)
 @router.delete("")
 def delete_all_customers(
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     x_access_level: str | None = Header(default=None, alias="X-Access-Level"),
     scope: Scope = Depends(get_scope),
 ):
-    """Permanently deletes every customer in the caller's groups (recycle bin
-    included; a superuser: all). Documents are kept; their customer_id is
+    """Superuser only: permanently deletes every customer (recycle bin included),
+    or only one group's with ?group_id=<uuid>|none. Documents are kept; their customer_id is
     cleared first so the FK can't block it."""
-    from app.core.dev_delete_all import refuse_in_production_or_view_only
+    from app.core.dev_delete_all import refuse_in_production_or_view_only, only_group
 
-    refuse_in_production_or_view_only(x_access_level)
-    ids = [row.id for row in scoped(db, models.Customer, scope).with_entities(models.Customer.id).all()]
+    refuse_in_production_or_view_only(x_access_level, scope)
+    ids = [row.id for row in only_group(scoped(db, models.Customer, scope), models.Customer, group_id).with_entities(models.Customer.id).all()]
     if not ids:
         return {"deleted": 0}
     scoped(db, models.Document, scope).filter(models.Document.customer_id.in_(ids)).update(

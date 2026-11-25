@@ -20,6 +20,9 @@ from app import models
 from app.core import storage
 from app.core.config import settings
 from tests.scope_headers import ONE_GROUP
+
+# Iteration 29: delete-all is superuser-only; the rows are created by a one-group user.
+SUPER = {"X-Is-Superuser": "1"}
 from app.core.db import Base, get_db
 from app.main import app
 from app.routers import documents as documents_router
@@ -96,7 +99,7 @@ def test_delete_all_documents_removes_items_audit_index_and_files(ctx):
     docs = _seed(client, Session)
     assert _count(Session, models.LineItem) == 3 and _count(Session, models.AuditLogEntry) >= 1
 
-    r = client.delete("/documents", headers=EDIT)
+    r = client.delete("/documents", headers={**EDIT, **SUPER})
     assert r.status_code == 200 and r.json() == {"deleted": 3}
     assert client.get("/documents").json() == [] and client.get("/documents/trash").json() == []
     assert _count(Session, models.LineItem) == 0 and _count(Session, models.AuditLogEntry) == 0
@@ -109,7 +112,7 @@ def test_delete_all_documents_removes_items_audit_index_and_files(ctx):
 def test_delete_all_documents_needs_delete_permission(ctx):
     client, Session, _, _ = ctx
     _seed(client, Session)
-    assert client.delete("/documents").status_code == 403
+    assert client.delete("/documents", headers=SUPER).status_code == 403
     assert _count(Session, models.Document) == 3
 
 
@@ -120,7 +123,7 @@ def test_delete_all_documents_needs_delete_permission(ctx):
 def test_delete_all_customers_projects_keeps_documents(ctx, path, model, col):
     client, Session, _, _ = ctx
     _seed(client, Session)
-    r = client.delete(path)
+    r = client.delete(path, headers=SUPER)
     assert r.status_code == 200 and r.json() == {"deleted": 1}
     assert client.get(path).json() == [] and client.get(f"{path}/trash").json() == []
     with Session() as db:
@@ -131,7 +134,7 @@ def test_delete_all_customers_projects_keeps_documents(ctx, path, model, col):
 def test_delete_all_companies_clears_refs_directors_and_files(ctx):
     client, Session, _, deleted_keys = ctx
     _seed(client, Session)
-    r = client.delete("/companies")
+    r = client.delete("/companies", headers=SUPER)
     assert r.status_code == 200 and r.json() == {"deleted": 2}
     assert client.get("/companies").json() == [] and client.get("/companies/trash").json() == []
     assert _count(Session, models.CompanyDirector) == 0
@@ -150,7 +153,7 @@ def test_refused_in_production(ctx, monkeypatch, path):
     client, Session, _, _ = ctx
     _seed(client, Session)
     monkeypatch.setattr(settings, "environment", "production")
-    assert client.delete(path, headers=EDIT).status_code == 403
+    assert client.delete(path, headers={**EDIT, **SUPER}).status_code == 403
     assert [_count(Session, m) for m in MODELS] == [3, 1, 1, 2]
 
 
@@ -158,14 +161,14 @@ def test_refused_in_production(ctx, monkeypatch, path):
 def test_refused_for_view_only(ctx, path):
     client, Session, _, _ = ctx
     _seed(client, Session)
-    assert client.delete(path, headers={**EDIT, "X-Access-Level": "view"}).status_code == 403
+    assert client.delete(path, headers={**EDIT, **SUPER, "X-Access-Level": "view"}).status_code == 403
     assert [_count(Session, m) for m in MODELS] == [3, 1, 1, 2]
 
 
 @pytest.mark.parametrize("path", ALL)
 def test_empty_table(ctx, path):
     client, _, _, _ = ctx
-    assert client.delete(path, headers=EDIT).json() == {"deleted": 0}
+    assert client.delete(path, headers={**EDIT, **SUPER}).json() == {"deleted": 0}
 
 
 def test_storage_error_does_not_fail(ctx, monkeypatch):
@@ -176,5 +179,5 @@ def test_storage_error_does_not_fail(ctx, monkeypatch):
         raise RuntimeError("minio down")
 
     monkeypatch.setattr(storage.s3_client, "delete_object", boom)
-    assert client.delete("/documents", headers=EDIT).json() == {"deleted": 3}
-    assert client.delete("/companies").json() == {"deleted": 2}
+    assert client.delete("/documents", headers={**EDIT, **SUPER}).json() == {"deleted": 3}
+    assert client.delete("/companies", headers=SUPER).json() == {"deleted": 2}

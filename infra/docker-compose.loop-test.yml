@@ -7,9 +7,8 @@
 #
 # The base file's data lives in bind mounts (./data/...), which a different
 # project name alone would NOT separate — every data path is re-pointed here.
-# Tear down with: docker compose -p loop-test -f infra/docker-compose.yml \
-#   -f infra/docker-compose.loop-test.yml down -v && rm -rf infra/data-loop-test
-# (the folder is root-owned; remove it from a container if rm is refused).
+# Tear down with: ./scripts/loop-test-down.sh (down -v + deletes
+# infra/data-loop-test/, which is root-owned, from a container).
 services:
   postgres:
     volumes: !override

@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     rate_limit_username_max_attempts: int = 15
     rate_limit_username_window_minutes: int = 15
 
+    # Grant checks ask document-service which projects a group owns (see
+    # app/core/document_client.py). The secret must match nginx's and
+    # document-service's INTERNAL_SHARED_SECRET.
+    document_service_url: str = "http://document-service:8000"
+    internal_shared_secret: str = "local_dev_internal_secret_change_me"
+
     class Config:
         env_file = ".env"
 

@@ -19,6 +19,9 @@ from app import models
 from app.core import storage
 from app.core.config import settings
 from tests.scope_headers import ONE_GROUP
+
+# Iteration 29: delete-all is superuser-only; the rows are created by a one-group user.
+SUPER = {"X-Is-Superuser": "1"}
 from app.core.db import Base, get_db
 from app.main import app
 from app.routers import products as products_router
@@ -76,7 +79,7 @@ def test_deletes_everything_but_categories(ctx):
     ids = _seed(client, Session)
     assert _counts(Session) == (3, 1, 1)
 
-    resp = client.delete("/products")
+    resp = client.delete("/products", headers=SUPER)
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"deleted": 3}
     assert client.get("/products").json() == []
@@ -93,21 +96,21 @@ def test_storage_error_does_not_fail_the_request(ctx, monkeypatch):
     def boom(Bucket, Key):
         raise RuntimeError("minio down")
     monkeypatch.setattr(storage.s3_client, "delete_object", boom)
-    resp = client.delete("/products")
+    resp = client.delete("/products", headers=SUPER)
     assert resp.status_code == 200 and resp.json() == {"deleted": 3}
     assert _counts(Session)[0] == 0
 
 
 def test_empty_catalogue(ctx):
     client, *_ = ctx
-    assert client.delete("/products").json() == {"deleted": 0}
+    assert client.delete("/products", headers=SUPER).json() == {"deleted": 0}
 
 
 def test_refused_in_production(ctx, monkeypatch):
     client, Session, removed, _ = ctx
     _seed(client, Session)
     monkeypatch.setattr(settings, "environment", "production")
-    resp = client.delete("/products")
+    resp = client.delete("/products", headers=SUPER)
     assert resp.status_code == 403
     assert _counts(Session) == (3, 1, 1) and removed == []
     assert client.get("/products/dev-config").json() == {"delete_all_enabled": False}
@@ -116,11 +119,12 @@ def test_refused_in_production(ctx, monkeypatch):
 def test_refused_for_view_only(ctx):
     client, Session, removed, _ = ctx
     _seed(client, Session)
-    resp = client.delete("/products", headers={"X-Access-Level": "view"})
+    resp = client.delete("/products", headers={**SUPER, "X-Access-Level": "view"})
     assert resp.status_code == 403
     assert _counts(Session) == (3, 1, 1) and removed == []
 
 
-def test_dev_config_enabled_outside_production(ctx):
+def test_dev_config_enabled_outside_production_for_a_superuser_only(ctx):
     client, *_ = ctx
-    assert client.get("/products/dev-config").json() == {"delete_all_enabled": True}
+    assert client.get("/products/dev-config", headers=SUPER).json() == {"delete_all_enabled": True}
+    assert client.get("/products/dev-config").json() == {"delete_all_enabled": False}  # a group user

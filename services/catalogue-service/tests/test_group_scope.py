@@ -167,12 +167,32 @@ def test_bulk_import_assigns_the_importers_group(ctx):
     assert r.status_code == 200 and [s["name"] for s in r.json()["skipped"]] == ["Lamp"]
 
 
-def test_delete_all_only_touches_the_callers_groups(ctx):
-    client, _ = ctx
+def test_delete_all_is_superuser_only_and_group_aware(ctx):
+    """Iteration 29: non-superusers get 403; ?group_id=<id>|none limits the wipe."""
+    client, Session = ctx
     _product(client, AS_OPS, "A")
     _product(client, AS_CITY, "B")
-    assert client.delete("/products", headers=AS_OPS).json() == {"deleted": 1}
-    assert len(client.get("/products", headers=AS_CITY).json()) == 1
+    loose = _product(client, AS_OPS, "C")
+    with Session() as db:
+        db.query(models.Product).filter(models.Product.id == uuid.UUID(loose["id"])).update({models.Product.group_id: None})
+        db.commit()
+    names = lambda: sorted(p["name"] for p in client.get("/products", headers=AS_SUPER).json())
+    for who in (AS_OPS, AS_BOTH, AS_NOBODY):
+        assert client.delete("/products", headers=who).status_code == 403
+    assert client.delete("/products?group_id=nope", headers=AS_SUPER).status_code == 422
+    assert names() == ["A", "B", "C"]
+    assert client.delete(f"/products?group_id={OPS}", headers=AS_SUPER).json() == {"deleted": 1}
+    assert names() == ["B", "C"]
+    assert client.delete("/products?group_id=none", headers=AS_SUPER).json() == {"deleted": 1}
+    assert names() == ["B"]
+    assert client.delete("/products", headers=AS_SUPER).json() == {"deleted": 1}
+    assert names() == []
+
+
+def test_dev_config_shows_delete_all_only_to_a_superuser(ctx):
+    client, _ = ctx
+    assert client.get("/products/dev-config", headers=AS_OPS).json() == {"delete_all_enabled": False}
+    assert client.get("/products/dev-config", headers=AS_SUPER).json() == {"delete_all_enabled": True}
 
 
 def test_categories_stay_shared(ctx):

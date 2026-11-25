@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.deps import get_current_user, require_superuser
 from app.core.security import hash_password
-from app.core.authz import can_manage_group, is_member_of, user_has_service_access
+from app.core.authz import can_manage_group, get_user_group_ids, is_member_of, user_has_service_access
+from app.core.document_client import project_ids_in_groups
 from app.core.refresh_tokens import active_sessions, revoke_all_user_tokens, revoke_session
 from app import models
 
@@ -1137,29 +1138,34 @@ def get_available_projects_for_user(
     current_user: models.User = Depends(get_current_user),
 ):
     """
-    Which projects the CALLER is allowed to grant THIS target user.
-    Superuser: every project (frontend already has the full list, but this
-    endpoint stays consistent for callers that want to check). Group admin:
-    the union of pools from groups they administer that the target belongs to.
+    Which projects the CALLER may grant THIS target user: only projects owned
+    by the target's own (active) groups — a grant outside them could never
+    show anything (document-service scopes by group first) and only hides the
+    projects the user should see. A group admin is further limited to the
+    pools of groups they administer that the target belongs to.
     """
     _require_can_manage_users(db, current_user)
     target = db.query(models.User).filter_by(id=user_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="user not found")
+    return {"all": False, "project_ids": sorted(_grantable_project_ids(db, current_user, target))}
 
-    if current_user.is_superuser:
-        return {"all": True, "project_ids": []}
 
-    shared_group_ids = _shared_administered_group_ids(db, current_user, target)
-    if not shared_group_ids:
-        return {"all": False, "project_ids": []}
-
-    grants = (
-        db.query(models.GroupProjectAccess)
-        .filter(models.GroupProjectAccess.group_id.in_(shared_group_ids))
-        .all()
-    )
-    return {"all": False, "project_ids": sorted({str(g.project_id) for g in grants})}
+def _grantable_project_ids(db: Session, current_user: models.User, target: models.User) -> set[str]:
+    if not current_user.is_superuser:
+        shared_group_ids = _shared_administered_group_ids(db, current_user, target)
+        if not shared_group_ids:
+            return set()
+        pool = {
+            str(g.project_id)
+            for g in db.query(models.GroupProjectAccess)
+            .filter(models.GroupProjectAccess.group_id.in_(shared_group_ids))
+            .all()
+        }
+        if not pool:
+            return set()
+    in_groups = project_ids_in_groups(get_user_group_ids(db, target))
+    return in_groups if current_user.is_superuser else in_groups & pool
 
 
 @router.get("/users/{user_id}/project-access")
@@ -1215,6 +1221,11 @@ def grant_user_project_access(
                 status_code=403,
                 detail="your group doesn't have access to this project — ask a superuser to grant it to your group first",
             )
+
+    # Superuser too: a project outside the target's groups would never be
+    # shown to them and would hide their own group's projects instead.
+    if str(payload.project_id) not in project_ids_in_groups(get_user_group_ids(db, target)):
+        raise HTTPException(status_code=403, detail="this project does not belong to any of this user's groups")
 
     existing = (
         db.query(models.UserProjectAccess)

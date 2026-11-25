@@ -29,4 +29,4 @@ def test_duplicate_product_is_blocked_and_reported(admin, product, group_id):
 
     groups = admin.get("/products/duplicates")
     assert groups.status_code == 200, groups.text
-    assert set(groups.json()) == {"exact_groups", "same_name_groups"}
+    assert set(groups.json()) == {"exact_groups", "same_name_groups", "hidden_count"}

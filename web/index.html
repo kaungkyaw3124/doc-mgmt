@@ -597,6 +597,11 @@
       <div class="stamp-mini"></div>
       <h1>Ledger</h1>
     </div>
+    <!-- superuser only (loop iteration 29): one group filter for all four lists -->
+    <div id="group-switcher-wrap" style="display:none; padding:0 24px 16px;">
+      <label for="group-switcher" style="color:rgba(255,255,255,0.65); font-size:11px; text-transform:uppercase; letter-spacing:0.06em;">Viewing</label>
+      <select id="group-switcher" style="width:100%; margin-top:4px;"></select>
+    </div>
     <div class="nav-item active" data-view="documents">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
       Documents
@@ -686,12 +691,12 @@
 
       <table>
         <thead>
-          <tr><th>Number</th><th>Type</th><th>Customer</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th><th>Group</th></tr>
+          <tr><th style="width:28px;"><input type="checkbox" id="documents-select-all" aria-label="Select all shown" style="width:auto; margin:0;"></th><th>Number</th><th>Type</th><th>Customer</th><th>Project</th><th>Status</th><th>Total</th><th>Created</th><th>Update status</th><th>Export</th><th>Edit</th><th>Delete</th><th>Group</th></tr>
         </thead>
         <tbody id="documents-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="13"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="13"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="13"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -749,6 +754,7 @@
       <table>
         <thead>
           <tr>
+            <th style="width:28px;"><input type="checkbox" id="products-select-all" aria-label="Select all shown" style="width:auto; margin:0;"></th>
             <th>Item Number</th>
             <th>Name <button class="sort-btn" data-sort-table="products" data-sort-col="name">⇅</button></th>
             <th>Category <button class="sort-btn" data-sort-table="products" data-sort-col="category">⇅</button></th>
@@ -758,9 +764,9 @@
           </tr>
         </thead>
         <tbody id="products-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="11"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -796,6 +802,7 @@
       <table>
         <thead>
           <tr>
+            <th style="width:28px;"><input type="checkbox" id="customers-select-all" aria-label="Select all shown" style="width:auto; margin:0;"></th>
             <th>Name <button class="sort-btn" data-sort-table="customers" data-sort-col="name">⇅</button></th>
             <th>Organization</th>
             <th>Email</th><th>Phone</th>
@@ -804,9 +811,9 @@
           </tr>
         </thead>
         <tbody id="customers-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="7"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="9"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -845,15 +852,16 @@
       <table>
         <thead>
           <tr>
+            <th style="width:28px;"><input type="checkbox" id="projects-select-all" aria-label="Select all shown" style="width:auto; margin:0;"></th>
             <th>Name <button class="sort-btn" data-sort-table="projects" data-sort-col="name">⇅</button></th>
             <th>Budget year <button class="sort-btn" data-sort-table="projects" data-sort-col="budget_year">⇅</button></th>
             <th>Created</th><th>Documents</th><th>Edit</th><th>Delete</th><th>Group</th>
           </tr>
         </thead>
         <tbody id="projects-tbody">
-          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:80%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:55%"></span></td></tr>
-          <tr class="empty-row skeleton-row"><td colspan="6"><span class="skeleton-bar" style="width:70%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="8"><span class="skeleton-bar" style="width:80%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="8"><span class="skeleton-bar" style="width:55%"></span></td></tr>
+          <tr class="empty-row skeleton-row"><td colspan="8"><span class="skeleton-bar" style="width:70%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -1195,7 +1203,7 @@
       </div>
 
       <label style="margin-top:20px; font-size:12px; text-transform:uppercase; color:var(--text-dim); font-weight:600;">Project access (leave all unchecked = see every project)</label>
-      <div class="checkbox-list" id="edit-user-project-checkboxes"></div>
+      <div class="checkbox-list" id="edit-user-project-checkboxes" style="flex-direction:column; gap:8px;"></div>
     </div>
   </div>
 </div>

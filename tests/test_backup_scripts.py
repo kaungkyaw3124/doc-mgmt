@@ -52,3 +52,44 @@ def test_backup_script_keeps_newest_14():
     kept = sorted(n for n in ls() if n.startswith("backup-"))
     assert kept == sorted(before + [new])[-14:], run.stdout
     assert new in kept
+
+
+def _loop_down_tree(tmp_path):
+    """A copy of the script in a fake repo, with a fake `docker` that logs its
+    calls and does the in-container `rm` on the mounted host folder."""
+    (tmp_path / "scripts").mkdir()
+    script = tmp_path / "scripts" / "loop-test-down.sh"
+    script.write_text(open(os.path.join(SCRIPTS, "loop-test-down.sh")).read())
+    script.chmod(0o755)
+    (tmp_path / "infra" / "data" / "postgres").mkdir(parents=True)
+    (tmp_path / "infra" / "data" / "postgres" / "keep").write_text("real")
+    (tmp_path / "infra" / "data-loop-test" / "minio").mkdir(parents=True)
+    (tmp_path / "infra" / "data-loop-test" / ".hidden").write_text("x")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "docker.log"
+    (bin_dir / "docker").write_text(
+        f'#!/bin/sh\necho "$@" >> "{log}"\n'
+        'if [ "$1" = run ]; then src=$(echo "$4" | cut -d: -f1); rm -rf "$src"/* "$src"/.[!.]*; fi\n')
+    (bin_dir / "docker").chmod(0o755)
+    return script, {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}, log
+
+
+def test_loop_test_down_wipes_only_its_folder_and_is_rerunnable(tmp_path):
+    script, env, log = _loop_down_tree(tmp_path)
+    env.pop("COMPOSE_PROJECT_NAME", None)
+    for _ in range(2):
+        subprocess.run([str(script)], env=env, check=True, capture_output=True)
+        assert not (tmp_path / "infra" / "data-loop-test").exists()
+        assert (tmp_path / "infra" / "data" / "postgres" / "keep").read_text() == "real"
+    calls = log.read_text().splitlines()
+    assert sum(c.startswith("run ") for c in calls) == 1  # second run: nothing left to delete
+    assert all("-p loop-test" in c for c in calls if c.startswith("compose"))
+    assert f"{tmp_path}/infra/data-loop-test:/wipe" in calls[1]
+
+
+def test_loop_test_down_refuses_another_project(tmp_path):
+    script, env, log = _loop_down_tree(tmp_path)
+    r = subprocess.run([str(script)], env={**env, "COMPOSE_PROJECT_NAME": "infra"}, capture_output=True, text=True)
+    assert r.returncode == 1 and "refusing" in r.stderr
+    assert not log.exists() and (tmp_path / "infra" / "data-loop-test" / "minio").exists()

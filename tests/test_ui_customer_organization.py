@@ -42,8 +42,8 @@ def test_customer_form_and_table_show_the_organization(admin):
 
                 rows = page.locator("#customers-tbody tr")
                 plain_row = rows.filter(has_text=plain)
-                expect(plain_row.locator("td").nth(1)).to_have_text(plain)  # name shown (muted) as the organization
-                expect(rows.filter(has_text=named).locator("td").nth(1)).to_have_text(org)
+                expect(plain_row.locator("td").nth(2)).to_have_text(plain)  # name shown (muted) as the organization
+                expect(rows.filter(has_text=named).locator("td").nth(2)).to_have_text(org)
 
                 page.fill("#customers-filter", org)  # the filter matches the organization too
                 expect(rows.filter(has_text=named)).to_have_count(1)
