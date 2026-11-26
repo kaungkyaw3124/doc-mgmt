@@ -88,7 +88,10 @@ def _end_user_xlsx(client, doc_id):
     r = client.get(f"/documents/{doc_id}/export/quotation")
     assert r.status_code == 200
     ws = load_workbook(io.BytesIO(r.content)).active
-    return {ws.cell(r_, 5).value: ws.cell(r_, 6).value for r_ in range(1, 15) if ws.cell(r_, 5).value}
+    # Loop iteration 34: END USER is in the last column (G) as "Label: value".
+    titles = next(r_ for r_ in range(1, 40) if ws.cell(r_, 1).value == "No")  # header ends at the column titles
+    cells = [ws.cell(r_, 7).value for r_ in range(1, titles) if ws.cell(r_, 7).value]
+    return {k: (v or None) for k, _, v in (c.partition(": ") for c in cells)}
 
 
 # ---- API / validation ------------------------------------------------------
@@ -172,7 +175,7 @@ def test_saved_customer_end_user_output_is_unchanged(ctx):
     xlsx = _end_user_xlsx(client, doc_id)
     xlsx.pop("Quotation ID")  # auto-generated doc number
     assert xlsx == {"END USER": None, "Customer Name": "Saved Customer Co.", "Organization": "Saved Customer Co.",
-                    "Address": "No. 9, Saved Street, Mandalay", "Price (USD)": "Amount (USD)"}
+                    "Address": "No. 9, Saved Street, Mandalay"}
 
 
 # ---- migration -------------------------------------------------------------

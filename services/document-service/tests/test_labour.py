@@ -251,7 +251,10 @@ def test_xlsx_headers_formulas_and_totals_rows(tmp_path):
             if type(cell).__name__ != "MergedCell":  # merged-over cells hold no text
                 assert cell.font.b, (r, c)
     assert ws[f"A{sub}"].alignment.horizontal == "center"
-    assert ws.print_area.endswith(f"$A$1:$I${max(c.row for row in ws.iter_rows() for c in row if c.value is not None)}")
+    # iteration 35: the print area ends with the Terms/Regards/seal row (the on-screen
+    # Customer Service block below it prints as the page footer instead)
+    terms_row = next(c.row for row in ws.iter_rows() for c in row if isinstance(c.value, str) and "Terms and Conditions" in c.value)
+    assert ws.print_area.endswith(f"$A$1:$I${terms_row}")
     for img in ws._images:
         assert img.anchor._from.col <= 8  # inside A:I
     seal = [img for img in ws._images if img.anchor._from.row == 0]

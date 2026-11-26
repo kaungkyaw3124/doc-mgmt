@@ -110,6 +110,8 @@ def test_xlsx_page_margins_match_the_pdf():
     ws = load_workbook(generate_quotation_xlsx(_document(), CUSTOMER, [(_line_item(1), None, [])],
                                                company=COMPANY, director=DIRECTOR)).active
     m = ws.page_margins
-    assert (m.top, m.left, m.right, m.bottom) == (0.3, 0.5, 0.5, 0.5)
+    # bottom 0.5in like the PDF, plus room for the Customer Service page footer
+    # (iteration 35; the PDF reserves its footer the same way)
+    assert (m.top, m.left, m.right, m.bottom) == (0.3, 0.5, 0.5, 0.9)
     assert m.header <= 0.2 and m.footer <= 0.2, "Excel's header/footer must sit inside the page margins"
     assert ws.print_title_rows, "print titles from iteration 2 must be kept"

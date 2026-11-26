@@ -59,7 +59,10 @@ def test_sheet_is_fit_to_one_a4_portrait_page_wide(n, tmp_path):
     assert ws.page_setup.paperSize == 9  # A4 (openpyxl's PAPERSIZE_A4 is the string "9")
     assert ws.page_setup.orientation == "portrait"
     assert ws.print_options.horizontalCentered is True
-    assert ws.print_area == f"'{ws.title}'!$A$1:$G${_last_row(ws)}"
+    # iteration 35: ends with the Terms/Regards/seal row; the on-screen Customer
+    # Service block below it prints as the page footer instead
+    terms_row = next(c.row for c in ws["A"] if isinstance(c.value, str) and "Terms and Conditions" in c.value)
+    assert ws.print_area == f"'{ws.title}'!$A$1:$G${terms_row}"
     header_row = next(c.row for c in ws["A"] if c.value == "No")
     assert ws.print_title_rows == f"$1:${header_row}"  # unchanged: rows 1..column titles repeat
     # every anchored image starts inside A:G and inside the print area

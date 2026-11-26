@@ -330,3 +330,15 @@ def test_pdf_tax_breakdown_falls_back_when_document_predates_tax_total():
     full_text = "\n".join(pages)
     assert "Subtotal:" not in full_text
     assert "300.00" in full_text, "3 items at 100 each should still total 300.00"
+
+
+def test_pdf_no_column_is_centred(monkeypatch):
+    """Iteration 39: the item number cell (1, 2 …) and the sub-item label (1.1 …) are centred, like the Excel export."""
+    import app.core.export_pdf as export_pdf
+    seen = {}
+    real_html = export_pdf.HTML
+    monkeypatch.setattr(export_pdf, "HTML", lambda string: seen.setdefault("html", string) and real_html(string=string))
+    _generate(2)
+    html = seen["html"]
+    assert '<td class="no">1</td>' in html and '<td class="no">2</td>' in html
+    assert "table.items td.no, tr.sub-item td.sub-label { text-align: center; }" in html

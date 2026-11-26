@@ -345,7 +345,7 @@ def test_logo_and_seal_on_every_page_and_md_seal_size_unchanged(layout):
     assert len(md) == 1, "the MD signature seal keeps its 130px size and appears once"
 
 
-def test_xlsx_logo_and_seal_are_170px():
+def test_xlsx_logo_is_170px_and_seal_190px():
     wb = load_workbook(generate_quotation_xlsx(
         _document(), CUSTOMER, [(_line_item(1), None, [])], company=COMPANY,
         logo_bytes=_png(), seal_bytes=_png(), director=None))
@@ -353,7 +353,8 @@ def test_xlsx_logo_and_seal_are_170px():
     assert len(imgs) == 2
     # A reloaded image reports its pixel size; the displayed size is the anchor extent (EMU, 9525 per px).
     # Loop iteration 31: 170px (~17% of the 987px table, like the PDF's 120px of 184.6mm; was 90px).
-    assert all(i.anchor.ext.width == 170 * 9525 and i.anchor.ext.height == 170 * 9525 for i in imgs)
+    # Loop iteration 34: the company seal is 190 px.
+    assert [(i.anchor.ext.width, i.anchor.ext.height) for i in imgs] == [(170 * 9525, 170 * 9525), (190 * 9525, 190 * 9525)]
 
 
 # ---------------------------------------------------------------------------

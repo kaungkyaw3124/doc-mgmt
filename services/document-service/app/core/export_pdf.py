@@ -7,6 +7,7 @@ from PIL import Image
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
+from app.core.image_trim import trim_blank_margins
 from app.core.units import display_unit
 from app.core.export_quotation import DEFAULT_TERMS, doc_type_label, fit_inside, is_letterhead
 
@@ -20,6 +21,8 @@ _env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=True)
 
 def generate_quotation_pdf(document, customer, items_with_product, company=None, logo_bytes=None, seal_bytes=None, logo_mime="image/png", seal_mime="image/png", director=None, director_seal_bytes=None, director_seal_mime="image/png") -> BytesIO:
     template = _env.get_template("quotation.html")
+    # Render-time trim: existing uploads lose their blank margins, stored originals stay as uploaded.
+    logo_bytes, seal_bytes, director_seal_bytes = (trim_blank_margins(b) if b else b for b in (logo_bytes, seal_bytes, director_seal_bytes))
 
     logo_data_uri = None
     if logo_bytes:

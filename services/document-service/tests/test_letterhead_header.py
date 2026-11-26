@@ -42,6 +42,7 @@ def banner(size=(720, 190), fmt="PNG"):
     w, h = size
     img = Image.new("RGB", size, "white")
     d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, w - 1, h - 1), outline="navy")  # full-bleed artwork: nothing for the margin trim to cut
     r = min(w, h) // 2 - 4
     d.ellipse((4, h // 2 - r, 4 + 2 * r, h // 2 + r), outline="navy", width=4)
     font = ImageFont.load_default(size=max(10, h // 4))
@@ -144,21 +145,22 @@ def test_xlsx_banner_in_the_header_rows_left_of_the_seal(size):
     ws = _xlsx(LETTERHEAD_COMPANY, banner(size), _png())
     assert len(ws._images) == 2
     lh, seal = ws._images
-    # Loop iteration 33: the user's red box — 625 x 140 px from column A's left edge.
+    # Loop iteration 34: the user's red box — 677 x 197 px from column A's left edge.
     assert (lh.anchor._from.col, lh.anchor._from.colOff, lh.anchor._from.row) == (0, 3 * 9525, 0), "banner starts at A1 (+3 px)"
-    assert (seal.anchor._from.col, seal.anchor._from.row) == (5, 0), "seal still starts in F1"
+    assert (seal.anchor._from.col, seal.anchor._from.row) == (6, 0), "seal starts in G1"
     w, h = _size(lh)
-    assert w <= 626 and h <= 141, "inside the 625 x 140 box"
-    assert w == pytest.approx(625, abs=1) or h == pytest.approx(140, abs=1), "fills the box"
+    assert w <= 678 and h <= 198, "inside the 677 x 197 box"
+    assert w == pytest.approx(677, abs=1) or h == pytest.approx(197, abs=1), "fills the box"
     assert w / h == pytest.approx(size[0] / size[1], rel=0.01)
-    assert 3 + w <= 56 + 385 + 56 + 56 + 112 + 112 - 85 - 25, "banner ends 25 px left of the seal (seal centred on F|G)"
+    assert 3 + w <= 56 + 385 + 56 + 56 + 112 + 112 + 10 - 25, "banner ends 25 px left of the seal (seal centred in G)"
     title_row = next(c.row for row in ws.iter_rows() for c in row if c.value == "QUOTATION")
-    assert (title_row - 1) * 20 >= max(h, _size(seal)[1]) + 5, "title row must start below the banner and seal"
+    # iteration 37: rows follow the tallest fitted image, not the whole box
+    assert 0 <= (title_row - 1) * 20 - max(h, _size(seal)[1]) <= 20, "title right under the tallest image"
 
 
-def test_xlsx_logo_style_still_has_logo_and_seal_at_170px():
+def test_xlsx_logo_style_has_170px_logo_and_190px_seal_in_g():
     ws = _xlsx(COMPANY, _png(), _png())
-    assert [(i.anchor._from.col, *_size(i)) for i in ws._images] == [(0, 170, 170), (5, 170, 170)]
+    assert [(i.anchor._from.col, *_size(i)) for i in ws._images] == [(0, 170, 170), (6, 190, 190)]
 
 
 # ---- schemas / image handling ---------------------------------------------

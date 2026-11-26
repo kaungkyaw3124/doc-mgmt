@@ -95,7 +95,8 @@ def _xlsx(**kw):
 
 
 def _regards_cells(ws):
-    return [c for row in ws.iter_rows() for c in row if c.value == "Regards,"]
+    # iteration 35: "Regards," ends the last column's text in the Terms row (one row never splits across pages)
+    return [c for row in ws.iter_rows() for c in row if isinstance(c.value, str) and "Regards," in c.value]
 
 
 def test_xlsx_regards_is_bold_above_the_seal_and_centered_on_it():
@@ -103,13 +104,20 @@ def test_xlsx_regards_is_bold_above_the_seal_and_centered_on_it():
     cells = _regards_cells(ws)
     assert len(cells) == 1
     cell = cells[0]
-    assert cell.font.b and cell.alignment.horizontal == "center"
+    assert cell.alignment.horizontal == "center"
+    rich = load_workbook(generate_quotation_xlsx(_document(), CUSTOMER, [(_line_item(1), None, [])], company=COMPANY,
+                                                 director=DIRECTOR, director_seal_bytes=_png()), rich_text=True).active
+    regards_block = rich[cell.coordinate].value[-1]
+    # iteration 38: the empty lines above are folded into this run (Excel drops whitespace-only runs)
+    assert regards_block.text.lstrip("\n") == "Regards," and regards_block.font.b
     # Loop iteration 32: "Regards," is in the last column (G), where the user
     # drew the seal; the seal starts 4 px inside G. G (215 px) is wider than
     # the seal (180), so the centres differ by ~13 px — the text stays over the seal.
     assert cell.column_letter == "G"
     (seal,) = ws._images
-    assert cell.row == seal.anchor._from.row, "'Regards,' must be on the row directly above the seal (anchor rows are 0-based)"
+    assert cell.row == seal.anchor._from.row + 1, "seal in the 'Regards,' row (anchor rows are 0-based)"
+    regards_bottom_pt = (cell.value.count("\n") + 1) * 12.75  # one 10pt run, one line per break
+    assert regards_bottom_pt <= EMU_to_pixels(seal.anchor._from.rowOff) * 0.75, "'Regards,' must sit above the seal"
     col_px = [int((256 * ws.column_dimensions[c].width + 128 // 7) / 256 * 7) for c in "ABCDEFG"]
     regards_center = sum(col_px[:6]) + col_px[6] / 2
     seal_center = sum(col_px[:seal.anchor._from.col]) + EMU_to_pixels(seal.anchor._from.colOff) + EMU_to_pixels(seal.anchor.ext.width) / 2
@@ -119,9 +127,9 @@ def test_xlsx_regards_is_bold_above_the_seal_and_centered_on_it():
 def test_xlsx_without_a_seal_regards_is_centered_over_the_name():
     ws = _xlsx(director=DIRECTOR)
     cell = _regards_cells(ws)[0]
-    assert cell.font.b and cell.alignment.horizontal == "center"
+    assert cell.alignment.horizontal == "center"
     assert cell.column_letter == "G", "same column as the seal would be"
-    assert ws.cell(cell.row + 1, 7).value == DIRECTOR["name"]
+    assert cell.value.endswith(f"Regards,\n{DIRECTOR['name']}\nManaging Director")
 
 
 def test_xlsx_without_a_director_has_no_regards():

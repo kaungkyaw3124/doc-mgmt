@@ -1,58 +1,54 @@
-# report.md — Iteration 33
+# report.md — Iteration 39
 
 ## 1. Summary
 - **Status**: DONE
-- **Goal**: Excel: make the header banner bigger, to the red box the user drew (≈ 625 × 140 px, starting at the sheet's left edge)
+- **Goal**: Excel: centre the "No" (item number) column horizontally
 - **Ponytail skill loaded**: yes
-- **Branch / commit**: `dev` (see the commit `loop iter 33: ...`)
-- **One-paragraph summary**: The letterhead banner box is now **625 × 140 px** (it was 560 × 115), still scaled by table width. It starts **3 px inside column A**, not at column B. The image keeps its own proportions (fit-inside, no crop, no stretch), so a 1600×300 banner becomes 625 × 117 and a 1000×400 one becomes 350 × 140. The box is the same with or without the company seal. Before, a banner without a seal took the whole width right of column A; it now uses the same box, as the plan asks ("do not grow it further"). The header always reserves at least one empty row between the banner and the title. Header height for the banner is `h + 20 px`, then the existing `ceil((h + 10) / 20)` row reservation applies. With a seal, the 170-px seal is still the tallest item, so seal layouts get the same rows as before (9). The banner ends at x = 628 and the seal starts at x = 692, a 64 px gap. The squared-logo style, company seal and MD seal are unchanged. LibreOffice render: `loop/evidence/iter-33-xlsx-banner.png`.
+- **Branch / commit**: `dev` @ (this commit)
+- **One-paragraph summary**: In the XLSX export, column A (item numbers 1, 2 … and sub-item labels 1.1, 1.2 …) is now centred horizontally in item and sub-item rows, with labour on and off. The change is `col in (3, 4)` → `col in (1, 3, 4)` at both alignment lines. Vertical alignment stays top. Number format, borders, Qty/Unit centring, right-aligned money columns and the left/wrap Item column are unchanged. **The PDF was not centred**, contrary to what the plan expected: the item number used `td.num` (right) and the sub-label was explicitly `text-align: right`. Following the plan's "change it if not centred", the PDF item number cell is now `td.no` and both cells are centred by one CSS rule.
 
 ## 2. Baseline (before any change)
-XLSX/letterhead tests (`doc-test-lo` image, current source mounted, in-process):
 ```
-96 passed, 304 deselected, 1764 warnings in 37.22s
+verify.sh (loop-test stack): ======================= 100 passed, 25 skipped in 48.55s =======================
+verify.sh: PASSED (stack left running: --keep)
 ```
-The full suite and `verify.sh` were not re-run before the change. Iteration 32 ended with 400 passed and verify 100 passed / 25 skipped.
 
 ## 3. Acceptance checks
 | # | Check | Result | Evidence |
 |---|---|---|---|
-| A1 | Banner fits a 625 × 140 box from column A, aspect kept | PASS | `test_banner_fits_625x140_from_column_a_with_an_empty_row_above_the_title` (1600×300 → 625×117, 1000×400 → 350×140, with and without seal, x0 = 3 ± 3); `test_images_keep_their_aspect_ratio` ×3 with box (625, 140); `test_xlsx_banner_in_the_header_rows_left_of_the_seal` ×3 (anchor A1 + 3 px). Render `iter-33-xlsx-banner.png`: the banner starts at the page's left edge, like the user's red box |
-| A2 | Gap to the company seal ≥ 25 px; nothing overlaps text; title row below | PASS | `test_default_layout_...`: banner right ≤ seal left − 25; labour test: same check scaled; `test_no_image_covers_text_or_another_image` ×5; new test: last banner row < title row − 1 |
-| A3 | Seals unchanged, one page wide, no regressions | PASS | seal/MD seal assertions unchanged and passing; `test_xlsx_print_setup.py` passes; full suite 404 passed; verify.sh 100 passed, 25 skipped |
+| A1 | "No" cells centred in all item and sub-item rows (labour on/off) | PASS | `test_xlsx_image_sizes.py::test_qty_and_unit_are_centred_on_item_and_sub_item_rows[False/True]` now asserts A/C/D `horizontal == "center"`, vertical top, B left + wrap, E/F `horizontal is None` (right by number default) on two item rows and one sub-item row. LibreOffice renders: `loop/evidence/iter-39-xlsx-no-column.png` (plain) and `loop/evidence/iter-39-xlsx-no-column-labour.png` (labour), where 1, 1.1, 1.2, 2 … 12 sit centred under "No". PDF: new `test_quotation_pdf_layout.py::test_pdf_no_column_is_centred` |
+| A2 | No regressions; data safety | PASS | document-service suite 473 passed; `verify.sh` 100 passed, 25 skipped |
 
 ## 4. Changes made
 | File | Change | Why |
 |---|---|---|
-| `services/document-service/app/core/export_quotation.py` | modified | `BANNER_BOX = (625, 140)` and new `BANNER_X = 3`; the banner is placed at column A + 3 px; the box is the same with or without the seal; the header height includes one empty row below the banner |
-| `services/document-service/tests/test_xlsx_image_sizes.py` | modified | new box/position/gap assertions; new parametrised test (2 sizes × with/without seal) |
-| `services/document-service/tests/test_letterhead_header.py` | modified | banner anchor A1 + 3 px, 625 × 140 box, gap to the seal ≥ 25 px |
-| `loop/evidence/iter-33-xlsx-banner.png` | added | LibreOffice render of page 1 (letterhead + seal + MD seal) |
+| `services/document-service/app/core/export_quotation.py` | modified (2 lines) | column 1 centred in item and sub-item rows |
+| `services/document-service/app/templates/quotation.html` | modified (2 lines) | PDF No cell `num` → `no`; `td.no` and `td.sub-label` centred (it was right-aligned) |
+| `services/document-service/tests/test_xlsx_image_sizes.py` | modified | iteration 34 alignment test extended to column A, Item and Price/Amount |
+| `services/document-service/tests/test_quotation_pdf_layout.py` | modified | PDF No-column centring test (checks the rendered HTML) |
+| `loop/evidence/iter-39-xlsx-no-column*.png` | added | LibreOffice renders |
 
 ## 5. Test → fix log
 | Attempt | Failing check/test | Error (1 line) | Root cause | Fix |
 |---|---|---|---|---|
-| 1 | — | everything passed on the first run | — | — |
+| 1 | centred test (my new value assert) | `[1, '0.1', 2] != [1, '1.1', 2]` | the fixture's items have no `product_id`, so the existing code numbers sub-items `0.x` (expected behaviour) | assert the item numbers and a `.1` suffix instead of the exact label |
 
 ## 6. Final verification output
 ```
---- document-service unit suite (doc-test-lo)
-404 passed, 60478 warnings in 247.16s (0:04:07)
---- verify.sh (loop-test stack, port 18080)
-======================= 100 passed, 25 skipped in 49.47s =======================
-verify.sh: PASSED (stack left running: --keep)   # then ./scripts/loop-test-down.sh
+document-service (doc-test-lo, in-process): 473 passed, 60574 warnings in 243.81s (0:04:03)
+verify.sh (loop-test stack): ======================= 100 passed, 25 skipped in 49.86s =======================
+verify.sh: PASSED (stack left running: --keep)   -> then ./scripts/loop-test-down.sh
 ```
 
-**Data safety:** unit tests ran in-process in the `doc-test-lo` container (SQLite, no DB). `verify.sh` ran on the `loop-test` stack, which was then removed with `./scripts/loop-test-down.sh`. The user's stack was backed up before the rebuild, then rebuilt with `up -d --build` and no volume removal.
-
 ## 7. Found but not fixed (out of scope)
-- Multi-line Item rows still draw over each other in LibreOffice, as seen in the render. This is the known BACKLOG item.
-- PDF, company seal, MD seal and squared-logo style were not touched, per the plan.
+- In the LibreOffice render the item rows' bold name and description still overprint each other. This is the same fixture/row-height issue noted in iterations 36–37.
 
 ## 8. Blockers / decisions needed
-None. Behaviour change for the planner to note: a letterhead **without a seal** no longer stretches across B:G. It uses the same 625 × 140 box from column A, as the plan says.
+None.
 
 ## 9. Suggestions for the next iteration
-- Check in real Excel with the user's Winterfell banner. Its aspect ratio (≈ 4.8:1) should give ≈ 625 × 130.
+- Ask the user to confirm the PDF's centred No column is wanted too. It changed from right-aligned so the PDF matches Excel, as the plan's fallback said.
+
+**Data safety:** unit tests and the render ran in-process in the `doc-test-lo` container (no DB, fixture data). `verify.sh` ran on the throwaway `loop-test` stack, which was removed afterwards with `./scripts/loop-test-down.sh`. The user's stack was backed up, then rebuilt with `up -d --build`. No volumes were removed.
 
 App running at http://localhost:8080 (login: admin / CHANGE_ME, local only)
