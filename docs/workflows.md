@@ -367,7 +367,11 @@ flowchart LR
   downscaled only if wider than 2000px). The "Quotation header" select
   (`header_style`: Logo / Letterhead banner) decides which copy quotations
   use, so switching needs no re-upload. Logos uploaded before both copies
-  were kept have no banner copy; the form asks to re-upload once. SVGs are left
+  were kept have no banner copy; the form asks to re-upload once. When a
+  quotation PDF/XLSX is rendered, blank (transparent or near-white) margins
+  around the banner/logo, company seal and MD seal are trimmed automatically
+  (`app/core/image_trim.py`, render time only — the stored originals are not
+  changed), so the artwork fills its box. SVGs are left
   untouched and are always served with a forced `Content-Disposition:
   attachment` on their presigned URL, rather than being renderable inline
   in the app's own origin (an XSS-via-stored-SVG mitigation) — this

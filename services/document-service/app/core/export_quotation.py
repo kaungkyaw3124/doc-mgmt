@@ -17,6 +17,7 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
 
+from app.core.image_trim import trim_blank_margins
 from app.core.units import display_unit
 
 THIN = Side(style="thin", color="999999")
@@ -164,7 +165,7 @@ def _open_image(data, mime):
     if not data or mime == "image/svg+xml":
         return None
     try:
-        return XLImage(BytesIO(data))
+        return XLImage(BytesIO(trim_blank_margins(data)))
     except Exception:
         return None  # bad/unsupported image format shouldn't block the whole export
 

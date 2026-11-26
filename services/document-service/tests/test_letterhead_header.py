@@ -42,6 +42,7 @@ def banner(size=(720, 190), fmt="PNG"):
     w, h = size
     img = Image.new("RGB", size, "white")
     d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, w - 1, h - 1), outline="navy")  # full-bleed artwork: nothing for the margin trim to cut
     r = min(w, h) // 2 - 4
     d.ellipse((4, h // 2 - r, 4 + 2 * r, h // 2 + r), outline="navy", width=4)
     font = ImageFont.load_default(size=max(10, h // 4))

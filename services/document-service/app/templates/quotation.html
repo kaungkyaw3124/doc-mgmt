@@ -174,7 +174,9 @@
      .terms' break-after: avoid above. */
   .md-block { margin-top: 40px; text-align: right; break-before: avoid; page-break-before: avoid; }
   .md-block-inner { display: inline-block; width: 200px; text-align: center; }
-  .md-seal { width: 130px; height: 130px; }
+  /* Fits inside 130 x 130 with its own aspect (blank margins are trimmed
+     first, in export_pdf); was a fixed 130 x 130, which stretched a non-square seal. */
+  .md-seal { max-width: 130px; max-height: 130px; vertical-align: top; }
   /* "Regards," sign-off above the MD's seal (or name/position fallback).
      Inside .md-block-inner, so it shares that box's text-align: center and
      its horizontal center is the seal's / name's center. .md-block-inner is
