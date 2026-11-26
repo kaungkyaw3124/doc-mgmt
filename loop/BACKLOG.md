@@ -27,6 +27,7 @@ Status: **QUEUED** (plan written in `loop/queue/`), **LIVE** (in `loop/PLAN.md`)
 | 25 | Excel: 5 empty rows between header images and the title (reserve rows from fitted image height, not the box) | LIVE (iteration 37) | `loop/PLAN.md` |
 | 26 | Excel opens with a repair message: "String properties from /xl/worksheets/sheet1.xml" (suspect: print footer from iteration 35) — waiting for the user's Excel error log | QUEUED — root cause found: whitespace-only rich-text runs in the signature cell (iteration 38) | `loop/queue/iter-38-xlsx-excel-repair-and-tail.md` |
 | 27 | Excel: "Regards," at the top and big gap above the signature (same cause as #26) | QUEUED (iteration 38) | `loop/queue/iter-38-xlsx-excel-repair-and-tail.md` |
+| 28 | Excel: centre the "No" (item number) column | LIVE (iteration 39) | `loop/PLAN.md` |
 | 5 | Pin the Bulk import summary line + Import button in the modal | IDEA (iteration 15 pinned only heading + Close) | — |
 | 6 | Remove the DEV-ONLY "Delete ALL" buttons before real production use | IDEA (steps in `loop/history/report-iter-15.md` §4) | — |
 | 7 | Off-site copy of backups | IDEA (user has not chosen a destination) | — |
