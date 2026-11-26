@@ -129,7 +129,7 @@
      (avoid is only a hint). */
   tbody.tail { break-inside: avoid; page-break-inside: avoid; }
   table.items { break-after: avoid; page-break-after: avoid; }
-  tr.sub-item td.sub-label { text-align: right; }
+  table.items td.no, tr.sub-item td.sub-label { text-align: center; }
   /* Loop iteration 23, "Include labour": 9 columns in a fixed layout (widths in
      the <colgroup>; Item takes what is left), slightly smaller text so the four
      money columns fit the 184.6mm content width. */
@@ -274,7 +274,7 @@
     <tbody class="tail">
       {% endif %}
       <tr>
-        <td class="num">{{ loop.index }}</td>
+        <td class="no">{{ loop.index }}</td>
         <td><strong>{{ item.name }}</strong>{% if item.description %}<br>{{ item.description }}{% endif %}</td>
         <td class="num">{{ item.qty }}</td>
         <td>{{ item.unit }}</td>

@@ -332,6 +332,10 @@ def test_qty_and_unit_are_centred_on_item_and_sub_item_rows(labour):
     rows = [r for r in range(head, ws.max_row + 1) if ws[f"D{r}"].value][:3]
     assert len(rows) == 3, "two items and one sub-item"
     for r in rows:
-        assert ws[f"C{r}"].alignment.horizontal == ws[f"D{r}"].alignment.horizontal == "center"
-        assert ws[f"C{r}"].alignment.vertical == "top"
-    assert ws[f"E{rows[0]}"].alignment.horizontal is None, "price stays right-aligned (number default)"
+        # iteration 39: the No column (1, 2, 1.1 …) is centred too
+        assert ws[f"A{r}"].alignment.horizontal == ws[f"C{r}"].alignment.horizontal == ws[f"D{r}"].alignment.horizontal == "center"
+        assert ws[f"A{r}"].alignment.vertical == ws[f"C{r}"].alignment.vertical == "top"
+        assert ws[f"B{r}"].alignment.horizontal is None and ws[f"B{r}"].alignment.wrap_text, "Item stays left + wrap"
+        for money in ("E", "F"):
+            assert ws[f"{money}{r}"].alignment.horizontal is None, "price/amount stay right-aligned (number default)"
+    assert [ws[f"A{r}"].value for r in rows][::2] == [1, 2] and str(ws[f"A{rows[1]}"].value).endswith(".1"), "item numbers + sub-item label"

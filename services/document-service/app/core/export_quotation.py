@@ -438,7 +438,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             cell.border = BORDER
             money_col = 5 <= col <= (8 if include_labour else 6)
             # shrink-to-fit: a second guard against #### besides the column width
-            cell.alignment = Alignment(horizontal="center" if col in (3, 4) else None, vertical="top", wrap_text=(col in (2, len(values))), shrink_to_fit=money_col)
+            cell.alignment = Alignment(horizontal="center" if col in (1, 3, 4) else None, vertical="top", wrap_text=(col in (2, len(values))), shrink_to_fit=money_col)
             if col in (5, 6) or (include_labour and col == 7):
                 cell.number_format = "#,##0.00"
             if include_labour and col == 8:
@@ -471,7 +471,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
                     if col != 2:
                         cell.font = Font(name="Arial", size=9)
                     cell.border = BORDER
-                    cell.alignment = Alignment(horizontal="center" if col in (3, 4) else None, vertical="top", wrap_text=(col == 2), shrink_to_fit=(col in (5, 6)))
+                    cell.alignment = Alignment(horizontal="center" if col in (1, 3, 4) else None, vertical="top", wrap_text=(col == 2), shrink_to_fit=(col in (5, 6)))
                     if col in (5, 6) and v != "":
                         cell.number_format = "#,##0.00"
                 row += 1
