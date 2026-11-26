@@ -8,6 +8,7 @@ Loop iteration 35 — Excel printing (user's screenshots 3-5):
   breaks while "Fit to 1 page wide" is on, so a row break could not do it).
 """
 import io
+import math
 import zipfile
 
 import pytest
@@ -81,14 +82,14 @@ def test_terms_regards_and_seal_share_one_row(labour):
     assert "Customer is responsible for any bank transaction charges." in terms.value
     regards = ws.cell(terms.row, 9 if labour else 7)
     assert regards.value.endswith("Regards,") and regards.alignment.vertical == "top" == terms.alignment.vertical
-    # "Regards," sits on the line after a blank line under the last Terms line
-    assert regards.value.count("\n") == terms.value.count("\n") + 2
+    # "Regards," on the first 10pt line below the last Terms line (12pt heading + n lines; iteration 38)
+    assert regards.value.count("\n") == math.ceil((15.75 + terms.value.count("\n") * 12.75) / 12.75)
     (seal,) = ws._images
     assert seal.anchor._from.row + 1 == terms.row, "seal anchored in the tail row"
     row_pt = ws.row_dimensions[terms.row].height
     seal_top_pt = EMU_to_pixels(seal.anchor._from.rowOff) * 0.75
     seal_bottom_pt = seal_top_pt + EMU_to_pixels(seal.anchor.ext.height) * 0.75
-    regards_bottom_pt = 15.75 + (terms.value.count("\n") + 2) * 12.75
+    regards_bottom_pt = (regards.value.count("\n") + 1) * 12.75  # one 10pt run
     assert regards_bottom_pt <= seal_top_pt, "seal below the Regards line"
     assert seal_bottom_pt < row_pt <= MAX_ROW_PT, "seal fully inside the row (never cut by a page break)"
 

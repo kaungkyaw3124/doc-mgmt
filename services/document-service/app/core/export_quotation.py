@@ -38,6 +38,8 @@ def _safe_str(value):
     unlike a leading quote, nothing extra shows in the cell ("+9599..." stays
     exactly as typed).
     """
+    if isinstance(value, str) and not value.strip():
+        return None  # Excel repairs a whitespace-only string (no xml:space="preserve" from openpyxl)
     if isinstance(value, str) and value.startswith(_FORMULA_TRIGGER_CHARS):
         return CellRichText(value)
     return value
@@ -51,15 +53,12 @@ def _name_and_description_rich_text(name, description, size=10):
     support instead. A rich-text cell is always stored as text, so a name
     starting with "=" can't become a formula here (no _safe_str needed).
     """
-    name = name or ""
-    bold_font = InlineFont(rFont="Arial", sz=size, b=True)
-    if not description:
-        return CellRichText(TextBlock(bold_font, name))
-    normal_font = InlineFont(rFont="Arial", sz=size)
-    return CellRichText(
-        TextBlock(bold_font, name),
-        TextBlock(normal_font, "\n" + description),
-    )
+    # No whitespace-only runs: openpyxl writes them without xml:space="preserve"
+    # and Excel then shows its repair dialog (docs/coding-standards.md).
+    blocks = [TextBlock(InlineFont(rFont="Arial", sz=size, b=True), name)] if (name or "").strip() else []
+    if (description or "").strip():
+        blocks.append(TextBlock(InlineFont(rFont="Arial", sz=size), ("\n" if blocks else "") + description))
+    return CellRichText(*blocks) if blocks else None
 
 DEFAULT_TERMS = (
     "Price Validity: 30 Days\n"
@@ -565,23 +564,27 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
     before_last = get_column_letter(len(col_widths) - 1)
     ws.merge_cells(f"A{row}:{before_last}{row}")
     heading = [] if head else [TextBlock(InlineFont(rFont="Arial", sz=12, b=True), "Terms and Conditions\n")]
-    ws[f"A{row}"] = CellRichText(*heading, TextBlock(InlineFont(rFont="Arial", sz=10), "\n".join(terms)))  # rich text: never a formula
+    body = [TextBlock(InlineFont(rFont="Arial", sz=10), "\n".join(terms))] if "".join(terms).strip() else []
+    ws[f"A{row}"] = CellRichText(*heading, *body) if heading or body else None  # rich text: never a formula
     ws[f"A{row}"].alignment = Alignment(wrap_text=True, vertical="top")
     ws[f"A{row}"].font = Font(name="Arial", size=10)  # empty lines take the cell font: same pitch in both cells
     heading_pt = 0 if head else HEADING_PT
     height = heading_pt + _line_count(terms, text_width) * LINE_PT + 4
     if director:
         bold = InlineFont(rFont="Arial", sz=10, b=True)
-        # empty lines level with the Terms heading and lines, then one blank line
-        spacer = ([TextBlock(InlineFont(rFont="Arial", sz=12, b=True), "\u00a0\n")] if heading else []) + [TextBlock(InlineFont(rFont="Arial", sz=10), "\n" * (len(terms) + 1))]
-        sign = [TextBlock(bold, "Regards,")]
+        # One empty line per heading/Terms line, folded into the "Regards," run: a
+        # whitespace-only spacer run makes Excel repair the file and drop it.
+        # first 10pt line starting below the Terms block (the 12pt heading is taller than a line)
+        lines_before = math.ceil((heading_pt + _line_count(terms, text_width) * LINE_PT) / LINE_PT - 1e-9)
+        sign = [TextBlock(bold, "\n" * lines_before + "Regards,")]
         if not md_seal:
-            sign += [TextBlock(bold, "\n" + (director.get("name") or "")),
-                     TextBlock(InlineFont(rFont="Arial", sz=9, i=True, color="666666"), "\n" + (director.get("position") or "Managing Director"))]
-        ws[f"{last_col}{row}"] = CellRichText(*spacer, *sign)
+            if (director.get("name") or "").strip():
+                sign.append(TextBlock(bold, "\n" + director["name"]))
+            sign.append(TextBlock(InlineFont(rFont="Arial", sz=9, i=True, color="666666"), "\n" + (director.get("position") or "Managing Director")))
+        ws[f"{last_col}{row}"] = CellRichText(*sign)
         ws[f"{last_col}{row}"].alignment = Alignment(horizontal="center", vertical="top", wrap_text=True)
         ws[f"{last_col}{row}"].font = Font(name="Arial", size=10)
-        regards_end = heading_pt + (len(terms) + 2) * LINE_PT
+        regards_end = (lines_before + 1) * LINE_PT  # every line in this cell is 10pt
         if md_seal:
             # 4 px inside the last column, pulled left only if it would pass the table's right edge
             x = min(sum(col_px[:-1]) + 4, sum(col_px) - seal_w)

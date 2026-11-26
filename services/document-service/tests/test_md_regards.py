@@ -108,14 +108,15 @@ def test_xlsx_regards_is_bold_above_the_seal_and_centered_on_it():
     rich = load_workbook(generate_quotation_xlsx(_document(), CUSTOMER, [(_line_item(1), None, [])], company=COMPANY,
                                                  director=DIRECTOR, director_seal_bytes=_png()), rich_text=True).active
     regards_block = rich[cell.coordinate].value[-1]
-    assert regards_block.text == "Regards," and regards_block.font.b
+    # iteration 38: the empty lines above are folded into this run (Excel drops whitespace-only runs)
+    assert regards_block.text.lstrip("\n") == "Regards," and regards_block.font.b
     # Loop iteration 32: "Regards," is in the last column (G), where the user
     # drew the seal; the seal starts 4 px inside G. G (215 px) is wider than
     # the seal (180), so the centres differ by ~13 px — the text stays over the seal.
     assert cell.column_letter == "G"
     (seal,) = ws._images
     assert cell.row == seal.anchor._from.row + 1, "seal in the 'Regards,' row (anchor rows are 0-based)"
-    regards_bottom_pt = 15.75 + cell.value.count("\n") * 12.75  # 12pt first line, then one 10pt line per break
+    regards_bottom_pt = (cell.value.count("\n") + 1) * 12.75  # one 10pt run, one line per break
     assert regards_bottom_pt <= EMU_to_pixels(seal.anchor._from.rowOff) * 0.75, "'Regards,' must sit above the seal"
     col_px = [int((256 * ws.column_dimensions[c].width + 128 // 7) / 256 * 7) for c in "ABCDEFG"]
     regards_center = sum(col_px[:6]) + col_px[6] / 2

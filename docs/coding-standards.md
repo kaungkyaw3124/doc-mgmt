@@ -69,6 +69,16 @@ when adding to this codebase so new code doesn't stand out.
   spreadsheet formula injection; Jinja2's `autoescape=True` is explicitly
   set in `export_pdf.py` for the same reason on the PDF path. Any new
   export/template code that embeds user data must do the same.
+- **No whitespace-only text in XLSX output** (iteration 38): openpyxl writes
+  `xml:space="preserve"` only when a string or rich-text run also holds
+  visible text. A run that is empty or only whitespace (`"\n\n\n"`,
+  `"\u00a0\n"`) is written without it, and Excel then shows "We found a
+  problem with some content… Repaired Records: String properties" and
+  drops the run. LibreOffice keeps it, so a LibreOffice render will not
+  catch this. Fold spacing newlines into a run that has visible text (e.g.
+  one run `"\n" * k + "Regards,"`), skip blank runs, and let `_safe_str()`
+  turn whitespace-only values into an empty cell.
+  `tests/test_xlsx_excel_safe.py` scans every `<t>` element for these rules.
 - **Comment style**: comments explain *why*, not *what* — a deliberately
   heavy, narrative style is used throughout this codebase (e.g. explaining
   a security fix's rationale, a past incident, or a non-obvious trade-off)
