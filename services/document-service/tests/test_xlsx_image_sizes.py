@@ -153,16 +153,51 @@ def test_md_seal_is_pulled_left_when_the_last_column_is_narrow():
 
 @pytest.mark.parametrize("size, expected", [((1600, 300), (677, 127)), ((1000, 400), (492, 197))])
 @pytest.mark.parametrize("seal", [True, False])
-def test_banner_fits_677x197_from_column_a_with_an_empty_row_above_the_title(size, expected, seal):
-    """Iteration 34: the user's red box; same box with or without the seal. Rows are
-    reserved for the whole box, so a short banner does not pull the title up."""
+def test_banner_fits_677x197_from_column_a(size, expected, seal):
+    """Iteration 34: the user's red box is the banner's maximum; same box with or without the seal."""
     ws = _ws(company=LETTERHEAD_COMPANY, logo_bytes=banner(size), seal_bytes=_png() if seal else None)
     lh = ws._images[0]
     assert _size(lh) == pytest.approx(expected, abs=3)
-    x0, _, _, last = _rect(ws, lh)
-    assert x0 == pytest.approx(3, abs=3)
-    assert last < _title_row(ws) - 1, "at least one empty row between the banner and the title"
-    assert (_title_row(ws) - 1) * 20 >= 197 + 20, "title below the whole 197 px box plus an empty row"
+    assert _rect(ws, lh)[0] == pytest.approx(3, abs=3)
+
+
+def _title_gap(ws):
+    """px between the lowest header image's bottom and the title row's top."""
+    title_top = sum(_row_px(ws, r) for r in range(1, _title_row(ws)))
+    return title_top - max(_ybox(ws, img)[1] for img in ws._images if img.anchor._from.row == 0)
+
+
+# Iteration 37: rows are reserved from the fitted image heights (not the banner box),
+# so the title starts directly under the tallest header image: 0 <= gap <= 20 px (one row).
+GAP_VARIANTS = {
+    "letterhead + seal": dict(company=LETTERHEAD_COMPANY, logo_bytes=banner(), seal_bytes=_png()),
+    "letterhead, no seal": dict(company=LETTERHEAD_COMPANY, logo_bytes=banner((1600, 300))),
+    "tall letterhead, no seal": dict(company=LETTERHEAD_COMPANY, logo_bytes=banner((1000, 400))),
+    "squared logo + seal": dict(logo_bytes=_png(), seal_bytes=_png()),
+    "squared logo only": dict(logo_bytes=_png()),
+    "labour + letterhead + seal": dict(labour=True, company=LETTERHEAD_COMPANY, logo_bytes=banner(), seal_bytes=_png()),
+}
+
+
+@pytest.mark.parametrize("variant", GAP_VARIANTS)
+def test_title_starts_right_under_the_tallest_header_image(variant):
+    gap = _title_gap(_ws(**GAP_VARIANTS[variant]))
+    assert 0 <= gap <= 20, f"{gap} px between the header images and the title"
+
+
+@pytest.mark.parametrize("size, seal, title_row", [
+    # wide banner 677x127 + seal 190 -> the seal decides: ceil(190 / 20) = 10 rows, title in row 11
+    ((1600, 300), True, 11),
+    # wide banner alone: ceil(127 / 20) = 7 rows, title in row 8
+    ((1600, 300), False, 8),
+    # tall banner 492x197 (taller than the seal): ceil(197 / 20) = 10 rows, title in row 11
+    ((1000, 400), True, 11),
+    ((1000, 400), False, 11),
+])
+def test_reserved_rows_follow_the_fitted_heights(size, seal, title_row):
+    """Row-count regression: before iteration 37 the whole box + a row was reserved (title in row 14)."""
+    ws = _ws(company=LETTERHEAD_COMPANY, logo_bytes=banner(size), seal_bytes=_png() if seal else None)
+    assert _title_row(ws) == title_row
 
 
 # ---- A2: nothing covers text ------------------------------------------------------

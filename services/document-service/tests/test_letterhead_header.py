@@ -154,7 +154,8 @@ def test_xlsx_banner_in_the_header_rows_left_of_the_seal(size):
     assert w / h == pytest.approx(size[0] / size[1], rel=0.01)
     assert 3 + w <= 56 + 385 + 56 + 56 + 112 + 112 + 10 - 25, "banner ends 25 px left of the seal (seal centred in G)"
     title_row = next(c.row for row in ws.iter_rows() for c in row if c.value == "QUOTATION")
-    assert (title_row - 1) * 20 >= max(197 + 20, _size(seal)[1]) + 5, "title below the whole box plus an empty row"
+    # iteration 37: rows follow the tallest fitted image, not the whole box
+    assert 0 <= (title_row - 1) * 20 - max(h, _size(seal)[1]) <= 20, "title right under the tallest image"
 
 
 def test_xlsx_logo_style_has_170px_logo_and_190px_seal_in_g():

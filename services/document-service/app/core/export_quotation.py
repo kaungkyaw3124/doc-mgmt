@@ -280,8 +280,7 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
             # fitted inside the box with its own proportions; same box without a seal.
             w, h = fit_inside(logo_img.width, logo_img.height, BANNER_BOX[0] * scale, BANNER_BOX[1] * scale)
             _place(ws, logo_img, col_px, BANNER_X * scale, 0, w, h)
-            # Reserve the whole box (not the fitted image) plus one empty row before the title.
-            header_h = BANNER_BOX[1] * scale + ROW_PX
+            header_h = h  # the fitted (trimmed) banner, not the whole box
         else:
             w, h = fit_inside(logo_img.width, logo_img.height, HEADER_IMAGE_PX * scale, HEADER_IMAGE_PX * scale)
             _place(ws, logo_img, col_px, 0, 0, w, h)
@@ -292,9 +291,9 @@ def generate_quotation_xlsx(document, customer, items_with_product, company=None
         _place(ws, seal_img, col_px, min(sum(col_px[:-1]) + (col_px[-1] - w) / 2, sum(col_px) - w), 0, w, h)
         header_h = max(header_h, h)
     if header_h:
-        # Images float over these rows, so the title starts below the tallest
-        # one with a small gap; explicit 15pt rows so every viewer agrees.
-        reserved = math.ceil((header_h + 10) / ROW_PX)
+        # Images float over these rows, so the title row starts directly under the
+        # tallest one (gap < one row); explicit 15pt rows so every viewer agrees.
+        reserved = math.ceil(round(header_h) / ROW_PX)
         for r in range(row, row + reserved):
             ws.row_dimensions[r].height = 15
         row += reserved
